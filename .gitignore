@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+.env
+.python-version
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Data (large, local-only)
+SPX_IV_fixed_grid.csv
+SPX_std_option.csv
+SPX_surfaces.csv
+
+# Generated outputs
+results/*
+!results/metrics/
+!results/metrics/**
+
+# Misc
+*.log
+*.tmp

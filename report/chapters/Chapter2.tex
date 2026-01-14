@@ -1,0 +1,52 @@
+\doublespacing % Do not change - required
+
+\chapter{Background}
+\label{ch2}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% IMPORTANT
+\begin{spacing}{1} %THESE FOUR
+\minitoc % LINES MUST APPEAR IN
+\end{spacing} % EVERY
+\thesisspacing % CHAPTER
+% COPY THEM IN ANY NEW CHAPTER
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Option Pricing and Implied Volatility Surfaces}
+
+Let $S_0$ denote the spot price of an underlying asset and consider a European call option with strike $K$ and time to maturity $\tau$. In the Black--Scholes framework, under standard assumptions (frictionless markets, continuous trading, lognormal dynamics with constant volatility), the call price can be expressed in closed form as
+\begin{equation}
+C_{\text{BS}}(S_0,K,\tau,r,q,\sigma)=S_0 e^{-q\tau}\Phi(d_1)-K e^{-r\tau}\Phi(d_2),
+\end{equation}
+where $\Phi(\cdot)$ is the standard normal CDF,
+\begin{equation}
+d_1=\frac{\ln(S_0/K)+(r-q+\tfrac{1}{2}\sigma^2)\tau}{\sigma\sqrt{\tau}},
+\qquad
+d_2=d_1-\sigma\sqrt{\tau}.
+\end{equation}
+Here $r$ is the continuously-compounded risk-free rate, $q$ is a continuous dividend yield, and $\sigma$ is the volatility parameter \cite{BlaSch:73,Mer:73,Hul:18}.
+
+Given an observed market price $C_{\text{mkt}}(K,\tau)$, the \emph{implied volatility} $\sigma_{\text{imp}}(K,\tau)$ is defined as the value of $\sigma$ that matches the model price to the market price:
+\begin{equation}
+\sigma_{\text{imp}}(K,\tau)
+=
+C_{\text{BS}}^{-1}\!\left(C_{\text{mkt}}(K,\tau); S_0,K,\tau,r,q\right),
+\end{equation}
+where $C_{\text{BS}}^{-1}$ denotes the numerical inversion of the Black--Scholes pricing map with respect to $\sigma$ \cite{Hul:18,Gat:06}. Quoting implied volatility rather than option prices provides a convenient normalisation across strikes and maturities, and empirical option markets exhibit systematic departures from the Black--Scholes constant-volatility assumption. In particular, implied volatility varies with strike (the ``smile'' or ``skew'') and with maturity (term-structure effects), leading naturally to the concept of an implied volatility surface (IVS) $\sigma_{\text{imp}}(K,\tau)$ \cite{Gat:06,Fen:05}.
+
+From a financial standpoint, an implied volatility surface cannot be arbitrary: it must correspond to a set of option prices free of static arbitrage. For fixed maturity $\tau$, the call price as a function of strike must be non-increasing and convex:
+\begin{equation}
+\frac{\partial C(K,\tau)}{\partial K}\le 0,
+\qquad
+\frac{\partial^2 C(K,\tau)}{\partial K^2}\ge 0.
+\end{equation}
+Moreover, for fixed strike $K$, call prices must be non-decreasing in maturity (no calendar spread arbitrage):
+\begin{equation}
+\frac{\partial C(K,\tau)}{\partial \tau}\ge 0.
+\end{equation}
+These conditions have a probabilistic interpretation under the risk-neutral measure: convexity implies a non-negative risk-neutral density via the Breeden--Litzenberger identity
+\begin{equation}
+\frac{\partial^2 C(K,\tau)}{\partial K^2}=e^{-r\tau} f_{\tau}(K)\ge 0,
+\end{equation}
+where $f_{\tau}(\cdot)$ is the risk-neutral density of the terminal asset price at maturity $\tau$ \cite{BreLit:78}. In practice, ensuring that estimated and forecast surfaces satisfy these constraints is crucial: violations may imply economically meaningless prices and unstable hedges, motivating arbitrage-aware parameterisations and forecasting methods \cite{Gat:06,Fen:05}.
+

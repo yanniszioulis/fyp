@@ -1,0 +1,31 @@
+This file reports the changes between versions
+
+*v1.3.0
+- Added the ``Plain Language Summary''. Added a description of this and of the abstract, with examples.
+- Reformulated Chapter 3 into ``Reflections'' adding all the sections required by IET for the various streams.
+- Updated the copyright to make it compliant with Imperial guidelines.
+
+*v1.2.1
+- Added a last chapter with the section ``Enviromental and social impact'' which is now compulsory for MSc students.
+- Updated the text in the acknolegement and conlusion.
+
+*v1.2.0
+- New IC Logo (2024).
+- Updated ImperialBlue color to new standard.
+- Fixed a bug that ignored the fontsize specified in the class. It always applied 10pt even though the class specified 12pt. Changed the default to 10pt, which is what was intended. 12pt (and 11pt) now will work if one wishes to change it.
+- Implemented the possibility of changing from doublespacing to singlespacing.
+- Given the possibility of removing second marker if unkown.
+- Given the possibility to change the title of the conclusions.
+
+*v1.1.1
+- Replaced an .eps image with a .pdf image to decrease the "from-scratch" compilation time by 2 seconds.
+
+*v1.1.0
+- Major change to add the MEng and BEng degrees and options. The MEng/BEng template has slightly different settings than MSc. No change made to the MSc template besides making the edge labels optional.
+
+*v1.0.3
+- In v1.0.1 had a bug for which all bookmarks were under the frontmatter. Issue fixed.
+
+*v1.0.2
+- In v1.0.1 the minitoc of chapter 2 was showing the minitoc of chapter 1. Chapter 1 minitoc was missing. Issue fixed.
+- In v1.0.1 minitocs had inconstinstent spacing. Issue fixed.

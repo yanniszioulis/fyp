@@ -47,7 +47,12 @@ def _default_transformer_grid():
 def main():
     parser = argparse.ArgumentParser(description="Tune a model on validation splits.")
     parser.add_argument("--model", dest="model_id", required=True, help="Model id (e.g. transformer)")
-    parser.add_argument("--data", dest="data_file", default="SPX_IV_fixed_grid.csv")
+    parser.add_argument(
+        "--data",
+        dest="data_file",
+        default="SPX_IV_fixed_grid.csv",
+        help="Path to fixed-grid IV data CSV (defaults to env FYP_DATA_PATH or ./SPX_IV_fixed_grid.csv)"
+    )
     parser.add_argument("--results", dest="results_dir", default="results")
     parser.add_argument("--window-ids", dest="window_ids", default="0",
                         help="Comma-separated window ids (e.g. 0 or 0,1,2)")
@@ -74,8 +79,9 @@ def main():
     else:
         grid_spec = _default_transformer_grid()
 
+    data_file = args.data_file or os.environ.get("FYP_DATA_PATH") or "SPX_IV_fixed_grid.csv"
     pipeline = ForecastingPipeline(
-        data_file=args.data_file,
+        data_file=data_file,
         results_dir=args.results_dir
     )
     pipeline.load_data()

@@ -25,7 +25,7 @@ def main():
         "--data",
         dest="data_file",
         default="SPX_IV_fixed_grid.csv",
-        help="Path to fixed-grid IV data CSV"
+        help="Path to fixed-grid IV data CSV (defaults to env FYP_DATA_PATH or ./SPX_IV_fixed_grid.csv)"
     )
     parser.add_argument(
         "--results",
@@ -151,8 +151,9 @@ def main():
     context_lengths = [int(x) for x in args.context_lengths.split(",") if x.strip()]
     horizons = [int(x) for x in args.horizons.split(",") if x.strip()]
 
+    data_file = args.data_file or os.environ.get("FYP_DATA_PATH") or "SPX_IV_fixed_grid.csv"
     pipeline = ForecastingPipeline(
-        data_file=args.data_file,
+        data_file=data_file,
         results_dir=args.results_dir
     )
 

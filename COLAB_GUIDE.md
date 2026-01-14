@@ -36,7 +36,8 @@ data_path = "SPX_IV_fixed_grid.csv"
 ### 4) Run tuning
 
 ```
-!python tune_model.py --model transformer --data "$data_path" --amp
+%env FYP_DATA_PATH=$data_path
+!python run_model.py --model transformer --amp --save-ckpt --contexts 5,21,63 --horizons 1,5,21
 ```
 
 Defaults are: window 0, context 21, horizon 5, and grid loaded from

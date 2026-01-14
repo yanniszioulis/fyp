@@ -1,0 +1,14 @@
+{
+  "d_model": [64, 128, 256],
+  "n_heads": [4, 8],
+  "n_layers": [2, 4],
+  "dropout": [0.1, 0.2],
+  "learning_rate": [0.001, 0.0005],
+  "weight_decay": [0.0001, 0.001],
+  "batch_size": [32],
+  "num_epochs": [30],
+  "pool": ["last"],
+  "normalize": [true],
+  "patience": [5],
+  "min_delta": [0.0]
+}

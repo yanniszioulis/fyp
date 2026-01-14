@@ -25,6 +25,8 @@ SPX_surfaces.csv
 results/*
 !results/metrics/
 !results/metrics/**
+!results/tuning/
+!results/tuning/**
 
 # Misc
 *.log

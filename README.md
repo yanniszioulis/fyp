@@ -49,6 +49,10 @@ Add a new model by implementing `models/base_model.py` and using
   Baseline that predicts the last observed surface.
   Run via `run_model.py --model persistence`.
 
+- `TransformerSurfaceModel` (`models/transformer/`):
+  Temporal transformer that forecasts surfaces directly.
+  Run via `run_model.py --model transformer`.
+
 ### Pipeline Overview
 
 The pipeline lives in `forecasting/`:
@@ -108,6 +112,14 @@ from `--model` and writes outputs to `results/`:
 
 ```
 python run_model.py --model persistence
+python run_model.py --model transformer --save-ckpt
+```
+
+`tune_model.py` is the tuning CLI. It runs a parameter grid on validation
+splits for a given window/context/horizon and writes to `results/tuning/`:
+
+```
+python tune_model.py --model transformer --window-ids 0 --context 21 --horizon 21
 ```
 
 ### File Structure
@@ -116,9 +128,13 @@ python run_model.py --model persistence
 data_prep/         Raw data prep and grid construction
 forecasting/       Data loading, splits, main pipeline
 models/            Model implementations
+models/transformer/checkpoints/  Best checkpoints per window/config
 evaluation/        Metrics and plotting utilities
 results/           Forecasts, metrics, plots, tuning outputs
 report/            Thesis report and references
 plot_results.py    Generic plotting CLI
 run_model.py       Generic model runner CLI
+tune_model.py      Generic tuning CLI
+ADDING_MODEL.md    Guide for adding new models
+COLAB_GUIDE.md     Colab setup and tuning instructions
 ```

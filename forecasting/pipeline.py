@@ -75,7 +75,10 @@ class ForecastingPipeline:
     def _build_sequences_for_window(self, window: WindowSplit,
                                     context_length: int,
                                     horizon: int,
-                                    train_on_val: bool = True) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                                    train_on_val: bool = True,
+                                    use_val: bool = False
+                                    ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray],
+                                               np.ndarray, np.ndarray, np.ndarray]:
         if train_on_val:
             train_indices = np.concatenate([window.train_indices, window.val_indices])
         else:
@@ -91,6 +94,23 @@ class ForecastingPipeline:
             verbose=False
         )
         
+        X_val = None
+        y_val = None
+        if use_val:
+            train_val_indices = np.concatenate([window.train_indices, window.val_indices])
+            train_val_data = self.data[train_val_indices]
+            train_val_dates = self.dates[train_val_indices]
+            X_val_all, y_val_all, val_dates = create_sequences(
+                train_val_data, train_val_dates,
+                context_length=context_length,
+                horizon=horizon,
+                verbose=False
+            )
+            if len(val_dates) > 0:
+                val_mask = (val_dates >= window.val_start) & (val_dates <= window.val_end)
+                X_val = X_val_all[val_mask]
+                y_val = y_val_all[val_mask]
+        
         combined_indices = np.concatenate([window.val_indices, window.test_indices])
         combined_data = self.data[combined_indices]
         combined_dates = self.dates[combined_indices]
@@ -103,10 +123,10 @@ class ForecastingPipeline:
         )
         
         if len(sample_dates) == 0:
-            return X_train, y_train, X_test, y_test, sample_dates
+            return X_train, y_train, X_val, y_val, X_test, y_test, sample_dates
         
         test_mask = (sample_dates >= window.test_start) & (sample_dates <= window.test_end)
-        return X_train, y_train, X_test[test_mask], y_test[test_mask], sample_dates[test_mask]
+        return X_train, y_train, X_val, y_val, X_test[test_mask], y_test[test_mask], sample_dates[test_mask]
     
     def _evaluate_and_package(self, window: WindowSplit, context_length: int, horizon: int,
                               predictions: np.ndarray, y_test: np.ndarray,
@@ -150,6 +170,8 @@ class ForecastingPipeline:
                   fit_kwargs: Optional[Dict[str, Any]] = None,
                   predict_kwargs: Optional[Dict[str, Any]] = None,
                   extra_result_fields: Optional[Dict[str, Any]] = None,
+                  use_val: bool = False,
+                  save_checkpoints: bool = False,
                   min_train_samples: int = 1,
                   save_results: bool = True) -> List[Dict[str, Any]]:
         """
@@ -174,11 +196,12 @@ class ForecastingPipeline:
                     print(f"\n  Context: {context_length} days, Horizon: {horizon} days")
                     
                     try:
-                        X_train, y_train, X_test, y_test, sample_dates = self._build_sequences_for_window(
+                        X_train, y_train, X_val, y_val, X_test, y_test, sample_dates = self._build_sequences_for_window(
                             window=window,
                             context_length=context_length,
                             horizon=horizon,
-                            train_on_val=train_on_val
+                            train_on_val=train_on_val,
+                            use_val=use_val
                         )
                         
                         if len(X_test) == 0:
@@ -193,11 +216,36 @@ class ForecastingPipeline:
                         model_name = f"{model_id}_w{window.window_id}_c{context_length}_h{horizon}"
                         model = model_factory(name=model_name, **model_kwargs)
                         
-                        model.fit(X_train if len(X_train) > 0 else None,
-                                  y_train if len(X_train) > 0 else None,
-                                  context_length=context_length,
-                                  horizon=horizon,
-                                  **fit_kwargs)
+                        fit_params = dict(
+                            context_length=context_length,
+                            horizon=horizon
+                        )
+                        if fit_kwargs:
+                            fit_params.update(fit_kwargs)
+                        if X_val is not None and y_val is not None:
+                            fit_params["X_val"] = X_val
+                            fit_params["y_val"] = y_val
+                        model.fit(
+                            X_train if len(X_train) > 0 else None,
+                            y_train if len(X_train) > 0 else None,
+                            **fit_params
+                        )
+
+                        if save_checkpoints and hasattr(model, "save_checkpoint"):
+                            checkpoint_dir = os.path.join(
+                                os.path.dirname(__file__),
+                                "..",
+                                "models",
+                                model_id,
+                                "checkpoints"
+                            )
+                            checkpoint_dir = os.path.abspath(checkpoint_dir)
+                            os.makedirs(checkpoint_dir, exist_ok=True)
+                            checkpoint_path = os.path.join(
+                                checkpoint_dir,
+                                f"{model_id}_w{window.window_id}_c{context_length}_h{horizon}.pt"
+                            )
+                            model.save_checkpoint(checkpoint_path)
                         
                         predictions = model.predict_horizon(X_test, horizon=horizon, **predict_kwargs)
                         

@@ -10,6 +10,7 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from forecasting.pipeline import ForecastingPipeline
+from models.transformer.transformer_model import TransformerSurfaceModel
 
 
 def main():
@@ -50,6 +51,95 @@ def main():
         action="store_false",
         help="Disable saving forecasts/metrics"
     )
+    parser.add_argument(
+        "--d-model",
+        dest="d_model",
+        type=int,
+        default=256,
+        help="Transformer d_model"
+    )
+    parser.add_argument(
+        "--n-heads",
+        dest="n_heads",
+        type=int,
+        default=8,
+        help="Transformer number of heads"
+    )
+    parser.add_argument(
+        "--n-layers",
+        dest="n_layers",
+        type=int,
+        default=4,
+        help="Transformer number of layers"
+    )
+    parser.add_argument(
+        "--dropout",
+        dest="dropout",
+        type=float,
+        default=0.1,
+        help="Transformer dropout"
+    )
+    parser.add_argument(
+        "--lr",
+        dest="learning_rate",
+        type=float,
+        default=1e-3,
+        help="Transformer learning rate"
+    )
+    parser.add_argument(
+        "--weight-decay",
+        dest="weight_decay",
+        type=float,
+        default=1e-4,
+        help="Transformer weight decay"
+    )
+    parser.add_argument(
+        "--batch-size",
+        dest="batch_size",
+        type=int,
+        default=32,
+        help="Transformer batch size"
+    )
+    parser.add_argument(
+        "--epochs",
+        dest="num_epochs",
+        type=int,
+        default=50,
+        help="Transformer epochs"
+    )
+    parser.add_argument(
+        "--pool",
+        dest="pool",
+        default="last",
+        choices=["last", "mean"],
+        help="Transformer pooling: last or mean"
+    )
+    parser.add_argument(
+        "--no-normalize",
+        dest="normalize",
+        action="store_false",
+        help="Disable transformer normalization"
+    )
+    parser.add_argument(
+        "--patience",
+        dest="patience",
+        type=int,
+        default=10,
+        help="Early stopping patience (transformer)"
+    )
+    parser.add_argument(
+        "--min-delta",
+        dest="min_delta",
+        type=float,
+        default=0.0,
+        help="Minimum validation improvement for early stopping"
+    )
+    parser.add_argument(
+        "--save-ckpt",
+        dest="save_checkpoint",
+        action="store_true",
+        help="Save best checkpoint per window/context/horizon (transformer)"
+    )
     args = parser.parse_args()
 
     context_lengths = [int(x) for x in args.context_lengths.split(",") if x.strip()]
@@ -83,10 +173,36 @@ def main():
             horizons=horizons,
             save_results=args.save_results
         )
+    elif args.model_id == "transformer":
+        results = pipeline.run_model(
+            model_factory=lambda name, **kwargs: TransformerSurfaceModel(
+                name=name,
+                d_model=args.d_model,
+                n_heads=args.n_heads,
+                n_layers=args.n_layers,
+                dropout=args.dropout,
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
+                batch_size=args.batch_size,
+                num_epochs=args.num_epochs,
+                pool=args.pool,
+                normalize=args.normalize,
+                patience=args.patience,
+                min_delta=args.min_delta
+            ),
+            model_id="transformer",
+            context_lengths=context_lengths,
+            horizons=horizons,
+            train_on_val=False,
+            use_val=True,
+            save_checkpoints=args.save_checkpoint,
+            min_train_samples=1,
+            save_results=args.save_results
+        )
     else:
         raise SystemExit(
             f"Unknown model '{args.model_id}'. "
-            "Supported: persistence."
+            "Supported: persistence, transformer."
         )
 
     print("\n" + "=" * 60)

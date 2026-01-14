@@ -100,7 +100,18 @@ def main():
             print(f"Skipping window {window_id}: no validation samples")
             continue
 
-        for config in _build_grid(grid_spec):
+        grid_list = list(_build_grid(grid_spec))
+        total_configs = len(grid_list)
+        print(
+            f"Tuning {args.model_id} | window={window_id} | "
+            f"context={args.context_length} | horizon={args.horizon}"
+        )
+        print(f"Grid size: {total_configs} configs")
+
+        best_val = float("inf")
+        best_result = None
+
+        for idx, config in enumerate(grid_list, start=1):
             model = TransformerSurfaceModel(
                 name=f"transformer_w{window_id}_c{args.context_length}_h{args.horizon}",
                 d_model=config["d_model"],
@@ -126,20 +137,38 @@ def main():
                 y_val=y_val
             )
 
-            preds = model.predict_horizon(X_val, horizon=args.horizon)
-            metrics = compute_all_metrics(y_val, preds)
+            train_preds = model.predict_horizon(X_train, horizon=args.horizon)
+            train_metrics = compute_all_metrics(y_train, train_preds)
+
+            val_preds = model.predict_horizon(X_val, horizon=args.horizon)
+            val_metrics = compute_all_metrics(y_val, val_preds)
 
             result = {
                 "window_id": window_id,
                 "context_length": args.context_length,
                 "horizon": args.horizon,
-                "metrics": metrics,
+                "train_metrics": train_metrics,
+                "val_metrics": val_metrics,
                 "config": config
             }
             all_results.append(result)
+
+            print(f"[{idx}/{total_configs}] cfg={config}")
             print(
-                f"W{window_id} cfg={config} iv_rmse={metrics['iv_rmse']:.6f}"
+                f"  train_iv_rmse={train_metrics['iv_rmse']:.6f}  "
+                f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
             )
+
+            if val_metrics["iv_rmse"] < best_val:
+                best_val = val_metrics["iv_rmse"]
+                best_result = result
+                print(f"  best_so_far: val_iv_rmse={best_val:.6f}")
+
+        if best_result:
+            print("\nBest config:")
+            print(f"  val_iv_rmse={best_result['val_metrics']['iv_rmse']:.6f}")
+            print(f"  train_iv_rmse={best_result['train_metrics']['iv_rmse']:.6f}")
+            print(f"  cfg={best_result['config']}")
 
     os.makedirs(os.path.join(args.results_dir, "tuning"), exist_ok=True)
     out_file = os.path.join(

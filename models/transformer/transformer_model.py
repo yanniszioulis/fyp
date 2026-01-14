@@ -13,6 +13,7 @@ try:
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
+    from torch.cuda.amp import autocast, GradScaler
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -84,6 +85,7 @@ class TransformerSurfaceModel(BaseModel):
                  normalize: bool = True,
                  patience: int = 10,
                  min_delta: float = 0.0,
+                 use_amp: bool = False,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -104,6 +106,7 @@ class TransformerSurfaceModel(BaseModel):
         self.normalize = normalize
         self.patience = patience
         self.min_delta = min_delta
+        self.use_amp = use_amp
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -199,6 +202,7 @@ class TransformerSurfaceModel(BaseModel):
             weight_decay=self.weight_decay
         )
         loss_fn = nn.MSELoss()
+        scaler = GradScaler(enabled=self.use_amp and self.device.startswith("cuda"))
 
         best_state = None
         best_val = float("inf")
@@ -210,13 +214,16 @@ class TransformerSurfaceModel(BaseModel):
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
                 optimizer.zero_grad(set_to_none=True)
-                preds = self.model(batch_x)
-                loss = loss_fn(preds, batch_y)
+                with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
+                    preds = self.model(batch_x)
+                    loss = loss_fn(preds, batch_y)
                 if not torch.isfinite(loss):
                     raise ValueError("Non-finite loss encountered during training")
-                loss.backward()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
 
             if val_loader is None:
                 continue
@@ -227,8 +234,9 @@ class TransformerSurfaceModel(BaseModel):
                 for batch_x, batch_y in val_loader:
                     batch_x = batch_x.to(self.device)
                     batch_y = batch_y.to(self.device)
-                    preds = self.model(batch_x)
-                    val_loss = loss_fn(preds, batch_y).item()
+                    with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
+                        preds = self.model(batch_x)
+                        val_loss = loss_fn(preds, batch_y).item()
                     val_losses.append(val_loss)
             self.model.train()
 
@@ -274,7 +282,8 @@ class TransformerSurfaceModel(BaseModel):
 
         self.model.eval()
         with torch.no_grad():
-            preds = self.model(torch.tensor(X_flat, dtype=torch.float32).to(self.device))
+            with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
+                preds = self.model(torch.tensor(X_flat, dtype=torch.float32).to(self.device))
             preds = preds.cpu().numpy()
 
         if self.normalize:
@@ -298,6 +307,7 @@ class TransformerSurfaceModel(BaseModel):
             "dropout": self.dropout,
             "pool": self.pool,
             "normalize": self.normalize,
+            "use_amp": self.use_amp,
             "mean": self.mean,
             "std": self.std
         }, path)

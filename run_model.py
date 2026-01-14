@@ -135,6 +135,12 @@ def main():
         help="Minimum validation improvement for early stopping"
     )
     parser.add_argument(
+        "--amp",
+        dest="use_amp",
+        action="store_true",
+        help="Enable automatic mixed precision (transformer)"
+    )
+    parser.add_argument(
         "--save-ckpt",
         dest="save_checkpoint",
         action="store_true",
@@ -188,7 +194,8 @@ def main():
                 pool=args.pool,
                 normalize=args.normalize,
                 patience=args.patience,
-                min_delta=args.min_delta
+                min_delta=args.min_delta,
+                use_amp=args.use_amp
             ),
             model_id="transformer",
             context_lengths=context_lengths,

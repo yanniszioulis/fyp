@@ -55,6 +55,8 @@ def main():
     parser.add_argument("--horizon", dest="horizon", type=int, default=5)
     parser.add_argument("--grid-file", dest="grid_file", default=None,
                         help="Path to JSON grid spec (dict of param -> list)")
+    parser.add_argument("--amp", dest="use_amp", action="store_true",
+                        help="Enable automatic mixed precision (transformer)")
     args = parser.parse_args()
 
     window_ids = _parse_csv_list(args.window_ids, int)
@@ -112,7 +114,8 @@ def main():
                 pool=config["pool"],
                 normalize=config["normalize"],
                 patience=config["patience"],
-                min_delta=config["min_delta"]
+                min_delta=config["min_delta"],
+                use_amp=args.use_amp
             )
 
             model.fit(

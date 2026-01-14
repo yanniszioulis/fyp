@@ -12,3 +12,9 @@ To enable checkpoint saving, run:
 ```
 python run_model.py --model transformer --save-ckpt
 ```
+
+For faster GPU training, enable automatic mixed precision:
+
+```
+python run_model.py --model transformer --save-ckpt --amp
+```

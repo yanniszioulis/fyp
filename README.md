@@ -112,7 +112,7 @@ from `--model` and writes outputs to `results/`:
 
 ```
 python run_model.py --model persistence
-python run_model.py --model transformer --save-ckpt
+python run_model.py --model transformer --save-ckpt --amp
 ```
 
 `tune_model.py` is the tuning CLI. It runs a parameter grid on validation
@@ -120,6 +120,7 @@ splits for a given window/context/horizon and writes to `results/tuning/`:
 
 ```
 python tune_model.py --model transformer --window-ids 0 --context 21 --horizon 21
+python tune_model.py --model transformer --amp
 ```
 
 ### File Structure

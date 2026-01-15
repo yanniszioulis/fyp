@@ -166,6 +166,26 @@ def main():
         action="store_true",
         help="Save best checkpoint per window/context/horizon (transformer)"
     )
+    parser.add_argument(
+        "--delta-use-anchor-token",
+        dest="delta_use_anchor_token",
+        action="store_true",
+        help="Use level anchor token for delta transformer"
+    )
+    parser.add_argument(
+        "--delta-scale-factor",
+        dest="delta_scale_factor",
+        type=float,
+        default=10.0,
+        help="Scale delta targets by this factor (delta transformer)"
+    )
+    parser.add_argument(
+        "--delta-max-grad-norm",
+        dest="delta_max_grad_norm",
+        type=float,
+        default=1.0,
+        help="Gradient clipping norm for delta transformer"
+    )
     args = parser.parse_args()
 
     context_lengths = [int(x) for x in args.context_lengths.split(",") if x.strip()]
@@ -252,6 +272,9 @@ def main():
                 min_delta=args.min_delta,
                 use_amp=args.use_amp,
                 use_causal=args.use_causal,
+                use_anchor_token=args.delta_use_anchor_token,
+                delta_scale_factor=args.delta_scale_factor,
+                max_grad_norm=args.delta_max_grad_norm,
             ),
             model_id="delta_transformer",
             context_lengths=context_lengths,

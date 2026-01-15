@@ -12,6 +12,6 @@
   "normalize_mode": ["per_point", "global"],
   "use_causal": [true],
   "delta_mode": [false, true],
-  "patience": [5, 10],
-  "min_delta": [0.0, 0.0001]
+  "patience": [5],
+  "min_delta": [0.0]
 }

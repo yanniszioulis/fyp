@@ -78,6 +78,8 @@ def _load_transformer_checkpoint(path: str, device: str) -> Tuple[DeltaTransform
     model.std = ckpt.get("std")
     model.delta_mean = ckpt.get("delta_mean")
     model.delta_std = ckpt.get("delta_std")
+    model.delta_target_mean = ckpt.get("delta_target_mean")
+    model.delta_target_std = ckpt.get("delta_target_std")
     model.anchor_mean = ckpt.get("anchor_mean")
     model.anchor_std = ckpt.get("anchor_std")
 

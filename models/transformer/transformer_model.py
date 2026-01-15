@@ -152,6 +152,8 @@ class TransformerSurfaceModel(BaseModel):
         self.std = None
         self.delta_mean = None
         self.delta_std = None
+        self.delta_target_mean = None
+        self.delta_target_std = None
         self.anchor_mean = None
         self.anchor_std = None
         self.epochs_trained = 0
@@ -305,8 +307,11 @@ class TransformerSurfaceModel(BaseModel):
                         X_tokens[:, :, :], mean=self.delta_mean, std=self.delta_std
                     )
                 X_flat = X_tokens.reshape(n_samples, self.context_length, self.n_features)
-                # Normalize delta targets with delta stats
-                y_flat = self._normalize_array(y_flat, mean=self.delta_mean, std=self.delta_std)
+                # Normalize delta targets with target-specific stats to avoid horizon mismatch
+                self.delta_target_mean, self.delta_target_std = self._compute_stats(y_flat)
+                y_flat = self._normalize_array(
+                    y_flat, mean=self.delta_target_mean, std=self.delta_target_std
+                )
             else:
                 flat_for_stats = X_flat.reshape(-1, self.n_features)
                 self.mean, self.std = self._compute_stats(flat_for_stats)
@@ -356,7 +361,11 @@ class TransformerSurfaceModel(BaseModel):
                             X_tokens[:, :, :], mean=self.delta_mean, std=self.delta_std
                         )
                     X_val_flat = X_tokens.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
-                    y_val_flat = self._normalize_array(y_val_flat, mean=self.delta_mean, std=self.delta_std)
+                    target_mean = self.delta_target_mean or self.delta_mean
+                    target_std = self.delta_target_std or self.delta_std
+                    y_val_flat = self._normalize_array(
+                        y_val_flat, mean=target_mean, std=target_std
+                    )
                 else:
                     X_val_flat = self._normalize_array(X_val_flat)
                     y_val_flat = self._normalize_array(y_val_flat)
@@ -607,8 +616,13 @@ class TransformerSurfaceModel(BaseModel):
             preds = preds.cpu().numpy()
 
         if self.normalize:
-            if self.delta_mode and self.delta_mean is not None:
-                preds = self._denormalize_array(preds, mean=self.delta_mean, std=self.delta_std)
+            if self.delta_mode:
+                target_mean = self.delta_target_mean or self.delta_mean
+                target_std = self.delta_target_std or self.delta_std
+                if target_mean is not None and target_std is not None:
+                    preds = self._denormalize_array(preds, mean=target_mean, std=target_std)
+                else:
+                    preds = self._denormalize_array(preds, mean=self.delta_mean, std=self.delta_std)
             else:
                 preds = self._denormalize_array(preds)
 
@@ -658,6 +672,8 @@ class TransformerSurfaceModel(BaseModel):
             "std": self.std,
             "delta_mean": self.delta_mean,
             "delta_std": self.delta_std,
+            "delta_target_mean": self.delta_target_mean,
+            "delta_target_std": self.delta_target_std,
             "anchor_mean": self.anchor_mean,
             "anchor_std": self.anchor_std
         }, path)

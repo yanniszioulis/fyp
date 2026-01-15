@@ -1,10 +1,10 @@
 ## Models
 
-This folder holds model implementations. The transformer model optionally
-saves the best checkpoint per window/context/horizon under:
+This folder holds model implementations. Models that support checkpointing
+save the best checkpoint per window/context/horizon under:
 
 ```
-models/transformer/checkpoints/
+models/checkpoints/<model_id>/
 ```
 
 To enable checkpoint saving, run:

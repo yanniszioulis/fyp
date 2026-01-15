@@ -236,8 +236,8 @@ class ForecastingPipeline:
                                 os.path.dirname(__file__),
                                 "..",
                                 "models",
-                                model_id,
-                                "checkpoints"
+                                "checkpoints",
+                                model_id
                             )
                             checkpoint_dir = os.path.abspath(checkpoint_dir)
                             os.makedirs(checkpoint_dir, exist_ok=True)

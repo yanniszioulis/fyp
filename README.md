@@ -129,7 +129,7 @@ python tune_model.py --model transformer --amp
 data_prep/         Raw data prep and grid construction
 forecasting/       Data loading, splits, main pipeline
 models/            Model implementations
-models/transformer/checkpoints/  Best checkpoints per window/config
+models/checkpoints/<model_id>/  Best checkpoints per window/config
 evaluation/        Metrics and plotting utilities
 results/           Forecasts, metrics, plots, tuning outputs
 report/            Thesis report and references

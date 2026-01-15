@@ -154,6 +154,12 @@ def main():
         help="Enable causal attention mask (transformer)"
     )
     parser.add_argument(
+        "--delta",
+        dest="delta_mode",
+        action="store_true",
+        help="Predict deltas relative to last surface (transformer)"
+    )
+    parser.add_argument(
         "--save-ckpt",
         dest="save_checkpoint",
         action="store_true",
@@ -211,7 +217,8 @@ def main():
                 patience=args.patience,
                 min_delta=args.min_delta,
                 use_amp=args.use_amp,
-                use_causal=args.use_causal
+                use_causal=args.use_causal,
+                delta_mode=args.delta_mode
             ),
             model_id="transformer",
             context_lengths=context_lengths,

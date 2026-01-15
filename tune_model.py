@@ -41,6 +41,7 @@ def _default_transformer_grid():
         "normalize": [True],
         "normalize_mode": ["per_point", "global"],
         "use_causal": [True],
+        "delta_mode": [False],
         "patience": [5],
         "min_delta": [0.0],
     }
@@ -136,7 +137,8 @@ def main():
                 patience=config["patience"],
                 min_delta=config["min_delta"],
                 use_amp=args.use_amp,
-                use_causal=config.get("use_causal", True)
+                use_causal=config.get("use_causal", True),
+                delta_mode=config.get("delta_mode", False)
             )
 
             model.fit(

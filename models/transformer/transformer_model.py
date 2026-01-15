@@ -97,6 +97,7 @@ class TransformerSurfaceModel(BaseModel):
                  min_delta: float = 0.0,
                  use_amp: bool = False,
                  use_causal: bool = True,
+                 delta_mode: bool = False,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -120,6 +121,7 @@ class TransformerSurfaceModel(BaseModel):
         self.min_delta = min_delta
         self.use_amp = use_amp
         self.use_causal = use_causal
+        self.delta_mode = delta_mode
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -170,6 +172,10 @@ class TransformerSurfaceModel(BaseModel):
 
         X_flat = self._flatten(X_train).astype(np.float32, copy=False)
         y_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
+
+        if self.delta_mode:
+            last_surface = X_train[:, -1, :, :].reshape(n_samples, self.n_features)
+            y_flat = y_flat - last_surface
 
         if self.normalize:
             flat_for_stats = X_flat.reshape(-1, self.n_features)
@@ -313,6 +319,12 @@ class TransformerSurfaceModel(BaseModel):
         if self.normalize:
             preds = self._denormalize_array(preds)
 
+        if self.delta_mode:
+            last_surface = X[:, -1, :, :].reshape(n_samples, n_tau, n_logm)
+            preds = preds.reshape(n_samples, n_tau, n_logm)
+            preds = preds + last_surface
+            return preds
+
         return preds.reshape(n_samples, n_tau, n_logm)
 
     def save_checkpoint(self, path: str):
@@ -334,6 +346,7 @@ class TransformerSurfaceModel(BaseModel):
             "normalize_mode": self.normalize_mode,
             "use_amp": self.use_amp,
             "use_causal": self.use_causal,
+            "delta_mode": self.delta_mode,
             "mean": self.mean,
             "std": self.std
         }, path)

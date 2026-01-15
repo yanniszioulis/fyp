@@ -255,6 +255,73 @@ def plot_summary_comparison(df: pd.DataFrame,
     plt.close()  # Close figure instead of showing
 
 
+def plot_model_comparison_summary(model_dfs: Dict[str, pd.DataFrame],
+                                  model_labels: Dict[str, str],
+                                  save_path: Optional[str] = None,
+                                  figsize: tuple = (15, 10)):
+    """
+    Plot IV RMSE comparisons across models in a context/horizon grid.
+    """
+    # Determine grid from first model
+    first_df = next(iter(model_dfs.values()))
+    context_lengths = sorted(first_df['context_length'].unique())
+    horizons = sorted(first_df['horizon'].unique())
+    
+    n_cols = len(horizons)
+    n_rows = len(context_lengths)
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+    if n_cols == 1:
+        axes = axes.reshape(-1, 1)
+    
+    sns.set_style("whitegrid")
+    
+    for i, context_length in enumerate(context_lengths):
+        for j, horizon in enumerate(horizons):
+            ax = axes[i, j]
+            
+            for model_id, df in model_dfs.items():
+                plot_df = df[
+                    (df['context_length'] == context_length) &
+                    (df['horizon'] == horizon)
+                ].copy()
+                
+                if len(plot_df) == 0:
+                    continue
+                
+                plot_df = plot_df.groupby('window_id').agg({
+                    'iv_rmse': 'mean'
+                }).reset_index().sort_values('window_id')
+                
+                x = plot_df['window_id']
+                label = model_labels.get(model_id, model_id)
+                ax.plot(x, plot_df['iv_rmse'], marker='o', linewidth=2, markersize=5, label=label)
+            
+            ax.set_title(f'Context: {context_length}d, Horizon: {horizon}d', fontsize=10, fontweight='bold')
+            ax.set_xlabel('Window ID', fontsize=9)
+            if j == 0:
+                ax.set_ylabel('IV RMSE', fontsize=9)
+            ax.set_xticks(x)
+            ax.set_xticklabels([f'W{w}' for w in x], fontsize=8)
+            ax.grid(True, alpha=0.3)
+    
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc='upper right', ncol=1)
+    
+    fig.suptitle('Model Comparison: IV RMSE Across All Configurations',
+                 fontsize=14, fontweight='bold', y=0.995)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Comparison plot saved to {save_path}")
+    
+    plt.close()
+
+
 def visualize_results(results_file: str,
                       model_id: str,
                       model_label: Optional[str] = None,

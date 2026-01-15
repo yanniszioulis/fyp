@@ -175,7 +175,7 @@ def main():
                 delta_mode=(args.model_id == "delta_transformer"),
                 input_delta=(args.model_id == "delta_transformer"),
                 use_anchor_token=not (args.model_id == "delta_transformer"),
-                scale_deltas=(args.model_id == "delta_transformer")
+                scale_deltas=False
             )
 
             fit_kwargs = dict(

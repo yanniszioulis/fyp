@@ -254,7 +254,7 @@ def main():
                 delta_mode=True,
                 input_delta=True,
                 use_anchor_token=False,
-                scale_deltas=True
+                scale_deltas=False
             ),
             model_id="delta_transformer",
             context_lengths=context_lengths,

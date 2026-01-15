@@ -426,19 +426,55 @@ class TransformerSurfaceModel(BaseModel):
             return
         from evaluation.metrics import compute_all_metrics
 
+        def _top_delta_rmse(X, y_true, y_pred, top_pct: float = 20.0):
+            if X is None or y_true is None or y_pred is None:
+                return None
+            if self.delta_mode:
+                baseline = X[:, -1, :, :]
+                delta_true = y_true - baseline
+                delta_pred = y_pred - baseline
+                target = delta_true
+                errors = delta_pred - delta_true
+            else:
+                target = y_true
+                errors = y_pred - y_true
+            threshold = np.percentile(np.abs(target), 100.0 - top_pct)
+            mask = np.abs(target) >= threshold
+            if not np.any(mask):
+                return None
+            mse = np.mean((errors[mask]) ** 2)
+            return float(np.sqrt(mse))
+
         train_preds = self.predict_horizon(X_train, horizon=horizon)
         train_metrics = compute_all_metrics(y_train, train_preds)
+        train_top_rmse = _top_delta_rmse(X_train, y_train, train_preds)
         val_metrics = None
+        val_top_rmse = None
         if X_val is not None and y_val is not None and len(X_val) > 0:
             val_preds = self.predict_horizon(X_val, horizon=horizon)
             val_metrics = compute_all_metrics(y_val, val_preds)
+            val_top_rmse = _top_delta_rmse(X_val, y_val, val_preds)
         if val_metrics is None:
-            print(f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f}")
+            if train_top_rmse is None:
+                print(f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f}")
+            else:
+                print(
+                    f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
+                    f"train_top20_rmse={train_top_rmse:.6f}"
+                )
         else:
-            print(
-                f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
-                f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
-            )
+            if train_top_rmse is None or val_top_rmse is None:
+                print(
+                    f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
+                    f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
+                )
+            else:
+                print(
+                    f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
+                    f"train_top20_rmse={train_top_rmse:.6f} "
+                    f"val_iv_rmse={val_metrics['iv_rmse']:.6f} "
+                    f"val_top20_rmse={val_top_rmse:.6f}"
+                )
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.predict_horizon(X, horizon=1)

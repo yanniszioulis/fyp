@@ -897,8 +897,8 @@ class DeltaTransformerSurfaceModel(BaseModel):
                             X_tokens[:, :, :], mean=self.delta_mean, std=self.delta_std
                         )
                     X_val_flat = X_tokens.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
-                    target_mean = self.delta_target_mean or self.delta_mean
-                    target_std = self.delta_target_std or self.delta_std
+                    target_mean = self.delta_target_mean if self.delta_target_mean is not None else self.delta_mean
+                    target_std = self.delta_target_std if self.delta_target_std is not None else self.delta_std
                     y_val_flat = self._normalize_array(
                         y_val_flat, mean=target_mean, std=target_std
                     )
@@ -1150,8 +1150,8 @@ class DeltaTransformerSurfaceModel(BaseModel):
             preds = preds.cpu().numpy()
 
         if self.normalize:
-            target_mean = self.delta_target_mean or self.delta_mean
-            target_std = self.delta_target_std or self.delta_std
+            target_mean = self.delta_target_mean if self.delta_target_mean is not None else self.delta_mean
+            target_std = self.delta_target_std if self.delta_target_std is not None else self.delta_std
             if target_mean is not None and target_std is not None:
                 preds = self._denormalize_array(preds, mean=target_mean, std=target_std)
             else:

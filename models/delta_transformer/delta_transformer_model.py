@@ -96,7 +96,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
                  normalize_mode: str = "per_point",
                  patience: int = 10,
                  min_delta: float = 0.0,
-                 baseline_mode: str = "last",
+                 baseline_mode: str = "mean",
                  use_amp: bool = False,
                  use_causal: bool = True,
                  delta_loss_weighting: bool = False,
@@ -124,7 +124,9 @@ class DeltaTransformerSurfaceModel(BaseModel):
         self.normalize_mode = normalize_mode
         self.patience = patience
         self.min_delta = min_delta
-        self.baseline_mode = baseline_mode
+        if baseline_mode != "mean":
+            raise ValueError("DeltaTransformerSurfaceModel uses mean baseline only")
+        self.baseline_mode = "mean"
         self.use_amp = use_amp
         self.use_causal = use_causal
         self.delta_loss_weighting = delta_loss_weighting
@@ -170,11 +172,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
         return deltas
 
     def _compute_baseline(self, X: np.ndarray) -> np.ndarray:
-        if self.baseline_mode == "last":
-            return X[:, -1, :, :]
-        if self.baseline_mode == "mean":
-            return X.mean(axis=1)
-        raise ValueError(f"Unknown baseline_mode: {self.baseline_mode}")
+        return X.mean(axis=1)
 
     def _normalize_array(self, X: np.ndarray, mean: Optional[np.ndarray] = None,
                          std: Optional[np.ndarray] = None) -> np.ndarray:

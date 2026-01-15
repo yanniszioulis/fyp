@@ -252,7 +252,6 @@ def main():
                 min_delta=args.min_delta,
                 use_amp=args.use_amp,
                 use_causal=args.use_causal,
-                baseline_mode="mean",
             ),
             model_id="delta_transformer",
             context_lengths=context_lengths,

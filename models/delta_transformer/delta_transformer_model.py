@@ -557,7 +557,6 @@ class DeltaTransformerSurfaceModel(BaseModel):
             "normalize_mode": self.normalize_mode,
             "use_amp": self.use_amp,
             "use_causal": self.use_causal,
-            "baseline_mode": self.baseline_mode,
             "delta_loss_weighting": self.delta_loss_weighting,
             "delta_loss_alpha": self.delta_loss_alpha,
             "loss_scale": self.loss_scale,

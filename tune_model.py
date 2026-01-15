@@ -190,7 +190,6 @@ def main():
                 min_delta=min_delta,
                 use_amp=args.use_amp,
                 use_causal=config.get("use_causal", True),
-                baseline_mode="mean" if args.model_id == "delta_transformer" else "last",
                 delta_loss_weighting=delta_loss_weighting,
                 delta_loss_alpha=delta_loss_alpha,
                 loss_scale=loss_scale,

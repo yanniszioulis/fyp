@@ -59,6 +59,7 @@ def _load_transformer_checkpoint(path: str, device: str) -> Tuple[TransformerSur
         use_causal=ckpt.get("use_causal", True),
         delta_mode=ckpt.get("delta_mode", False),
         input_delta=ckpt.get("input_delta", False),
+        use_anchor_token=ckpt.get("use_anchor_token", True),
         scale_deltas=ckpt.get("scale_deltas", False),
         delta_scale_eps=ckpt.get("delta_scale_eps", 1e-6),
         device=device,
@@ -114,8 +115,17 @@ def main():
     parser.add_argument("--context", type=int, default=21)
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--max-samples", type=int, default=0, help="Limit test samples (0 = all)")
+    parser.add_argument("--train-samples", type=int, default=0, help="Limit train samples (0 = all)")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--save-debug", action="store_true", help="Write debug arrays to results/debug")
+    parser.add_argument("--overfit-check", action="store_true", help="Train on a tiny subset to test fit")
+    parser.add_argument("--overfit-samples", type=int, default=256)
+    parser.add_argument("--overfit-epochs", type=int, default=200)
+    parser.add_argument(
+        "--overfit-no-regularization",
+        action="store_true",
+        help="Disable dropout and weight decay for overfit check",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.checkpoint):
@@ -157,6 +167,10 @@ def main():
         y_test = y_test[:args.max_samples]
         sample_dates = sample_dates[:args.max_samples]
 
+    if args.train_samples and args.train_samples < len(X_train):
+        X_train = X_train[:args.train_samples]
+        y_train = y_train[:args.train_samples]
+
     preds = model.predict_horizon(X_test, horizon=args.horizon)
     metrics = compute_all_metrics(y_test, preds)
     print("\nDelta transformer metrics:")
@@ -177,6 +191,15 @@ def main():
         delta_scale = model._compute_delta_scale(X_test)
         _summarize_array("delta_scale", delta_scale)
         print(f"delta_scale zeros: {(delta_scale <= model.delta_scale_eps).sum()}")
+
+    print("\nTrain vs test delta std (checkpoint model):")
+    train_preds = model.predict_horizon(X_train, horizon=args.horizon)
+    train_delta_true = y_train - X_train[:, -1, :, :]
+    train_delta_pred = train_preds - X_train[:, -1, :, :]
+    _summarize_array("train_true_delta", train_delta_true)
+    _summarize_array("train_pred_delta", train_delta_pred)
+    _summarize_array("test_true_delta", deltas_true)
+    _summarize_array("test_pred_delta", deltas_pred)
 
     mse_grid = np.mean((preds - y_test) ** 2, axis=0)
     rmse_grid = np.sqrt(mse_grid)
@@ -199,6 +222,52 @@ def main():
         np.save(os.path.join(out_dir, "delta_transformer_true.npy"), y_test)
         np.save(os.path.join(out_dir, "delta_transformer_baseline.npy"), baseline)
         print(f"\nSaved debug arrays to {out_dir}")
+
+    if args.overfit_check:
+        print("\nOverfit check on a small subset...")
+        n_overfit = min(args.overfit_samples, len(X_train))
+        X_small = X_train[:n_overfit]
+        y_small = y_train[:n_overfit]
+        overfit_dropout = 0.0 if args.overfit_no_regularization else ckpt.get("dropout", 0.0)
+        overfit_weight_decay = 0.0 if args.overfit_no_regularization else ckpt.get("weight_decay", 0.0)
+        overfit_model = TransformerSurfaceModel(
+            name="overfit_check",
+            d_model=ckpt["d_model"],
+            n_heads=ckpt["n_heads"],
+            n_layers=ckpt["n_layers"],
+            dropout=overfit_dropout,
+            learning_rate=ckpt.get("learning_rate", 1e-3),
+            weight_decay=overfit_weight_decay,
+            batch_size=min(32, n_overfit),
+            num_epochs=args.overfit_epochs,
+            pool=ckpt.get("pool", "last"),
+            normalize=ckpt.get("normalize", True),
+            normalize_mode=ckpt.get("normalize_mode", "per_point"),
+            patience=0,
+            min_delta=0.0,
+            use_amp=False,
+            use_causal=ckpt.get("use_causal", True),
+            delta_mode=ckpt.get("delta_mode", False),
+            input_delta=ckpt.get("input_delta", False),
+            use_anchor_token=ckpt.get("use_anchor_token", True),
+            scale_deltas=ckpt.get("scale_deltas", False),
+            delta_scale_eps=ckpt.get("delta_scale_eps", 1e-6),
+            device=args.device,
+        )
+        overfit_model.fit(
+            X_small,
+            y_small,
+            context_length=args.context,
+            horizon=args.horizon,
+        )
+        overfit_preds = overfit_model.predict_horizon(X_small, horizon=args.horizon)
+        overfit_metrics = compute_all_metrics(y_small, overfit_preds)
+        print("Overfit metrics:")
+        print(overfit_metrics)
+        overfit_delta_true = y_small - X_small[:, -1, :, :]
+        overfit_delta_pred = overfit_preds - X_small[:, -1, :, :]
+        _summarize_array("overfit_true_delta", overfit_delta_true)
+        _summarize_array("overfit_pred_delta", overfit_delta_pred)
 
 
 if __name__ == "__main__":

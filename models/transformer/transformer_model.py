@@ -222,6 +222,10 @@ class TransformerSurfaceModel(BaseModel):
 
     def fit(self, X_train, y_train=None, context_length: Optional[int] = None,
             X_val=None, y_val=None, **kwargs):
+        log_interval = kwargs.pop("log_interval", None)
+        log_train_val = kwargs.pop("log_train_val", False)
+        use_val_for_early_stopping = kwargs.pop("use_val_for_early_stopping", True)
+        horizon = kwargs.get("horizon", 1)
         if X_train is None or y_train is None:
             raise ValueError("X_train and y_train are required for TransformerSurfaceModel")
 
@@ -297,7 +301,7 @@ class TransformerSurfaceModel(BaseModel):
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
         val_loader = None
-        if X_val is not None and y_val is not None:
+        if use_val_for_early_stopping and X_val is not None and y_val is not None:
             if X_val.ndim != 4:
                 raise ValueError(f"Expected X_val shape (n_samples, context, n_tau, n_logm), got {X_val.shape}")
             if self.input_delta and X_val.shape[1] < 2:
@@ -360,6 +364,7 @@ class TransformerSurfaceModel(BaseModel):
         epochs_no_improve = 0
         self.epochs_trained = 0
 
+        self.is_fitted = True
         self.model.train()
         for epoch in range(self.num_epochs):
             for batch_x, batch_y in loader:
@@ -379,6 +384,8 @@ class TransformerSurfaceModel(BaseModel):
 
             if val_loader is None:
                 self.epochs_trained = epoch + 1
+                if log_train_val and log_interval and (epoch + 1) % log_interval == 0:
+                    self._log_epoch_metrics(X_train, y_train, X_val, y_val, horizon, epoch + 1)
                 continue
 
             self.model.eval()
@@ -405,12 +412,33 @@ class TransformerSurfaceModel(BaseModel):
                         self.epochs_trained = epoch + 1
                         break
             self.epochs_trained = epoch + 1
+            if log_train_val and log_interval and (epoch + 1) % log_interval == 0:
+                self._log_epoch_metrics(X_train, y_train, X_val, y_val, horizon, epoch + 1)
 
         if best_state is not None:
             self.model.load_state_dict(best_state)
 
         self.is_fitted = True
         return self
+
+    def _log_epoch_metrics(self, X_train, y_train, X_val, y_val, horizon: int, epoch: int):
+        if X_train is None or y_train is None:
+            return
+        from evaluation.metrics import compute_all_metrics
+
+        train_preds = self.predict_horizon(X_train, horizon=horizon)
+        train_metrics = compute_all_metrics(y_train, train_preds)
+        val_metrics = None
+        if X_val is not None and y_val is not None and len(X_val) > 0:
+            val_preds = self.predict_horizon(X_val, horizon=horizon)
+            val_metrics = compute_all_metrics(y_val, val_preds)
+        if val_metrics is None:
+            print(f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f}")
+        else:
+            print(
+                f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
+                f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
+            )
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.predict_horizon(X, horizon=1)

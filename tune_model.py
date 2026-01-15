@@ -137,8 +137,8 @@ def main():
                 else:
                     X_train_use = X_train
                     y_train_use = y_train
-                X_val_use = None
-                y_val_use = None
+                X_val_use = X_val
+                y_val_use = y_val
                 num_epochs = args.overfit_epochs
                 dropout = 0.0 if args.overfit_no_regularization else config["dropout"]
                 weight_decay = 0.0 if args.overfit_no_regularization else config["weight_decay"]
@@ -185,6 +185,10 @@ def main():
             if X_val_use is not None and y_val_use is not None:
                 fit_kwargs["X_val"] = X_val_use
                 fit_kwargs["y_val"] = y_val_use
+            if args.overfit:
+                fit_kwargs["log_interval"] = 5
+                fit_kwargs["log_train_val"] = True
+                fit_kwargs["use_val_for_early_stopping"] = False
             model.fit(
                 X_train_use, y_train_use,
                 **fit_kwargs

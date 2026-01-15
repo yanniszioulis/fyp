@@ -142,6 +142,7 @@ def main():
                 num_epochs = args.overfit_epochs
                 dropout = 0.0 if args.overfit_no_regularization else config["dropout"]
                 weight_decay = 0.0 if args.overfit_no_regularization else config["weight_decay"]
+                normalize = False if args.model_id == "delta_transformer" else config["normalize"]
                 patience = 0
                 min_delta = 0.0
             else:
@@ -152,6 +153,7 @@ def main():
                 num_epochs = config["num_epochs"]
                 dropout = config["dropout"]
                 weight_decay = config["weight_decay"]
+                normalize = config["normalize"]
                 patience = config["patience"]
                 min_delta = config["min_delta"]
 
@@ -166,7 +168,7 @@ def main():
                 batch_size=config["batch_size"],
                 num_epochs=num_epochs,
                 pool=config["pool"],
-                normalize=config["normalize"],
+                normalize=normalize,
                 normalize_mode=config.get("normalize_mode", "per_point"),
                 patience=patience,
                 min_delta=min_delta,

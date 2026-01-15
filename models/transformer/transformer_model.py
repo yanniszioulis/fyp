@@ -102,6 +102,7 @@ class TransformerSurfaceModel(BaseModel):
                  use_anchor_token: bool = True,
                  scale_deltas: bool = False,
                  delta_scale_eps: float = 1e-6,
+                 delta_scale_factor: float = 1.0,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -130,6 +131,7 @@ class TransformerSurfaceModel(BaseModel):
         self.use_anchor_token = use_anchor_token
         self.scale_deltas = scale_deltas
         self.delta_scale_eps = delta_scale_eps
+        self.delta_scale_factor = delta_scale_factor
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -294,6 +296,9 @@ class TransformerSurfaceModel(BaseModel):
                 X_flat = self._normalize_array(X_flat)
                 y_flat = self._normalize_array(y_flat)
 
+        if self.delta_mode and self.delta_scale_factor != 1.0:
+            y_flat = y_flat * self.delta_scale_factor
+
         dataset = TensorDataset(
             torch.tensor(X_flat, dtype=torch.float32),
             torch.tensor(y_flat, dtype=torch.float32)
@@ -334,6 +339,8 @@ class TransformerSurfaceModel(BaseModel):
                 else:
                     X_val_flat = self._normalize_array(X_val_flat)
                     y_val_flat = self._normalize_array(y_val_flat)
+            if self.delta_mode and self.delta_scale_factor != 1.0:
+                y_val_flat = y_val_flat * self.delta_scale_factor
             val_dataset = TensorDataset(
                 torch.tensor(X_val_flat, dtype=torch.float32),
                 torch.tensor(y_val_flat, dtype=torch.float32)
@@ -560,6 +567,8 @@ class TransformerSurfaceModel(BaseModel):
                 preds = self._denormalize_array(preds)
 
         if self.delta_mode:
+            if self.delta_scale_factor != 1.0:
+                preds = preds / self.delta_scale_factor
             if self.scale_deltas and delta_scale is not None:
                 preds = preds * delta_scale.reshape(n_samples, 1)
             last_surface = X[:, -1, :, :].reshape(n_samples, n_tau, n_logm)
@@ -593,6 +602,7 @@ class TransformerSurfaceModel(BaseModel):
             "use_anchor_token": self.use_anchor_token,
             "scale_deltas": self.scale_deltas,
             "delta_scale_eps": self.delta_scale_eps,
+            "delta_scale_factor": self.delta_scale_factor,
             "mean": self.mean,
             "std": self.std,
             "delta_mean": self.delta_mean,

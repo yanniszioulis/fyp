@@ -367,6 +367,8 @@ class TransformerSurfaceModel(BaseModel):
         self.is_fitted = True
         self.model.train()
         for epoch in range(self.num_epochs):
+            epoch_losses = []
+            epoch_grad_norms = []
             for batch_x, batch_y in loader:
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
@@ -378,14 +380,21 @@ class TransformerSurfaceModel(BaseModel):
                     raise ValueError("Non-finite loss encountered during training")
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
+                epoch_losses.append(loss.item())
+                if torch.isfinite(grad_norm):
+                    epoch_grad_norms.append(float(grad_norm))
 
             if val_loader is None:
                 self.epochs_trained = epoch + 1
                 if log_train_val and log_interval and (epoch + 1) % log_interval == 0:
-                    self._log_epoch_metrics(X_train, y_train, X_val, y_val, horizon, epoch + 1)
+                    self._log_epoch_metrics(
+                        X_train, y_train, X_val, y_val, horizon, epoch + 1,
+                        epoch_losses=epoch_losses,
+                        epoch_grad_norms=epoch_grad_norms
+                    )
                 continue
 
             self.model.eval()
@@ -413,7 +422,11 @@ class TransformerSurfaceModel(BaseModel):
                         break
             self.epochs_trained = epoch + 1
             if log_train_val and log_interval and (epoch + 1) % log_interval == 0:
-                self._log_epoch_metrics(X_train, y_train, X_val, y_val, horizon, epoch + 1)
+                self._log_epoch_metrics(
+                    X_train, y_train, X_val, y_val, horizon, epoch + 1,
+                    epoch_losses=epoch_losses,
+                    epoch_grad_norms=epoch_grad_norms
+                )
 
         if best_state is not None:
             self.model.load_state_dict(best_state)
@@ -421,7 +434,8 @@ class TransformerSurfaceModel(BaseModel):
         self.is_fitted = True
         return self
 
-    def _log_epoch_metrics(self, X_train, y_train, X_val, y_val, horizon: int, epoch: int):
+    def _log_epoch_metrics(self, X_train, y_train, X_val, y_val, horizon: int, epoch: int,
+                           epoch_losses=None, epoch_grad_norms=None):
         if X_train is None or y_train is None:
             return
         from evaluation.metrics import compute_all_metrics
@@ -454,26 +468,42 @@ class TransformerSurfaceModel(BaseModel):
             val_preds = self.predict_horizon(X_val, horizon=horizon)
             val_metrics = compute_all_metrics(y_val, val_preds)
             val_top_rmse = _top_delta_rmse(X_val, y_val, val_preds)
+        avg_loss = None
+        if epoch_losses:
+            avg_loss = float(np.mean(epoch_losses))
+        avg_grad_norm = None
+        if epoch_grad_norms:
+            avg_grad_norm = float(np.mean(epoch_grad_norms))
+
+        extra_bits = []
+        if avg_loss is not None:
+            extra_bits.append(f"loss={avg_loss:.6f}")
+        if avg_grad_norm is not None:
+            extra_bits.append(f"grad_norm={avg_grad_norm:.6f}")
+        extra = ""
+        if extra_bits:
+            extra = " " + " ".join(extra_bits)
+
         if val_metrics is None:
             if train_top_rmse is None:
-                print(f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f}")
+                print(f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f}{extra}")
             else:
                 print(
                     f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
-                    f"train_top20_rmse={train_top_rmse:.6f}"
+                    f"train_top20_rmse={train_top_rmse:.6f}{extra}"
                 )
         else:
             if train_top_rmse is None or val_top_rmse is None:
                 print(
                     f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
-                    f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
+                    f"val_iv_rmse={val_metrics['iv_rmse']:.6f}{extra}"
                 )
             else:
                 print(
                     f"  epoch={epoch} train_iv_rmse={train_metrics['iv_rmse']:.6f} "
                     f"train_top20_rmse={train_top_rmse:.6f} "
                     f"val_iv_rmse={val_metrics['iv_rmse']:.6f} "
-                    f"val_top20_rmse={val_top_rmse:.6f}"
+                    f"val_top20_rmse={val_top_rmse:.6f}{extra}"
                 )
 
     def predict(self, X: np.ndarray) -> np.ndarray:

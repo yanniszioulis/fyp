@@ -105,6 +105,7 @@ class TransformerSurfaceModel(BaseModel):
                  delta_scale_factor: float = 1.0,
                  delta_loss_weighting: bool = False,
                  delta_loss_alpha: float = 0.0,
+                 loss_scale: float = 1.0,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -136,6 +137,7 @@ class TransformerSurfaceModel(BaseModel):
         self.delta_scale_factor = delta_scale_factor
         self.delta_loss_weighting = delta_loss_weighting
         self.delta_loss_alpha = delta_loss_alpha
+        self.loss_scale = loss_scale
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -370,8 +372,10 @@ class TransformerSurfaceModel(BaseModel):
         def _loss_fn(preds, targets):
             if self.delta_mode and self.delta_loss_weighting and self.delta_loss_alpha > 0.0:
                 weights = 1.0 + self.delta_loss_alpha * torch.abs(targets)
-                return (weights * (preds - targets) ** 2).mean()
-            return nn.functional.mse_loss(preds, targets)
+                loss = (weights * (preds - targets) ** 2).mean()
+            else:
+                loss = nn.functional.mse_loss(preds, targets)
+            return loss * self.loss_scale
         scaler = GradScaler(enabled=self.use_amp and self.device.startswith("cuda"))
 
         best_state = None
@@ -613,6 +617,7 @@ class TransformerSurfaceModel(BaseModel):
             "delta_scale_factor": self.delta_scale_factor,
             "delta_loss_weighting": self.delta_loss_weighting,
             "delta_loss_alpha": self.delta_loss_alpha,
+            "loss_scale": self.loss_scale,
             "mean": self.mean,
             "std": self.std,
             "delta_mean": self.delta_mean,

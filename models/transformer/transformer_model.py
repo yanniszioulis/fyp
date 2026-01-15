@@ -99,6 +99,8 @@ class TransformerSurfaceModel(BaseModel):
                  use_causal: bool = True,
                  delta_mode: bool = False,
                  input_delta: bool = False,
+                 scale_deltas: bool = False,
+                 delta_scale_eps: float = 1e-6,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -124,6 +126,8 @@ class TransformerSurfaceModel(BaseModel):
         self.use_causal = use_causal
         self.delta_mode = delta_mode
         self.input_delta = input_delta
+        self.scale_deltas = scale_deltas
+        self.delta_scale_eps = delta_scale_eps
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -144,6 +148,29 @@ class TransformerSurfaceModel(BaseModel):
         n_samples, context_length, n_tau, n_logm = X.shape
         return X.reshape(n_samples, context_length, n_tau * n_logm)
 
+    def _compute_deltas(self, X: np.ndarray) -> Optional[np.ndarray]:
+        # X: (n_samples, context, n_tau, n_logm)
+        if X.shape[1] < 2:
+            return None
+        return X[:, 1:, :, :] - X[:, :-1, :, :]
+
+    def _validate_delta_context(self, context_length: int):
+        if (self.input_delta or self.scale_deltas) and context_length < 2:
+            raise ValueError("input_delta requires context_length >= 2")
+
+    def _compute_delta_scale(self, X: np.ndarray) -> np.ndarray:
+        deltas = self._compute_deltas(X)
+        if deltas is None:
+            raise ValueError("input_delta requires context_length >= 2")
+        scale = deltas.std(axis=(1, 2, 3), keepdims=True)
+        return scale + self.delta_scale_eps
+
+    def _apply_delta_scale_to_tokens(self, X_tokens: np.ndarray, delta_scale: np.ndarray) -> np.ndarray:
+        # X_tokens shape: (n_samples, context, n_tau, n_logm)
+        X_tokens = X_tokens.copy()
+        X_tokens[:, :-1, :, :] = X_tokens[:, :-1, :, :] / delta_scale
+        return X_tokens
+
     def _build_input_sequence(self, X: np.ndarray) -> np.ndarray:
         """
         Build model input sequence.
@@ -153,10 +180,10 @@ class TransformerSurfaceModel(BaseModel):
             return X
         # X shape: (n_samples, context, n_tau, n_logm)
         n_samples, context_length, n_tau, n_logm = X.shape
-        if context_length < 2:
+        deltas = self._compute_deltas(X)
+        if deltas is None:
             return X
         # Consecutive deltas for first context_length-1 tokens
-        deltas = X[:, 1:, :, :] - X[:, :-1, :, :]
         # Last token is the level anchor (last surface)
         last_surface = X[:, -1:, :, :]
         return np.concatenate([deltas, last_surface], axis=1)
@@ -206,22 +233,34 @@ class TransformerSurfaceModel(BaseModel):
             )
 
         self.context_length = context_length
+        self._validate_delta_context(context_length)
         self.n_tau = n_tau
         self.n_logm = n_logm
         self.n_features = n_tau * n_logm
 
         X_input = self._build_input_sequence(X_train)
+        delta_scale = None
+        if self.scale_deltas:
+            delta_scale = self._compute_delta_scale(X_train)
+            if self.input_delta:
+                X_input = self._apply_delta_scale_to_tokens(X_input, delta_scale)
         X_flat = self._flatten(X_input).astype(np.float32, copy=False)
         y_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
 
         if self.delta_mode:
             last_surface = X_train[:, -1, :, :].reshape(n_samples, self.n_features)
             y_flat = y_flat - last_surface
+            if self.scale_deltas and delta_scale is not None:
+                y_flat = y_flat / delta_scale.reshape(n_samples, 1)
 
         if self.normalize:
             if self.input_delta:
                 # Stats for delta tokens/targets
-                delta_tokens = X_train[:, 1:, :, :] - X_train[:, :-1, :, :]
+                delta_tokens = self._compute_deltas(X_train)
+                if delta_tokens is None:
+                    raise ValueError("input_delta requires context_length >= 2")
+                if self.scale_deltas and delta_scale is not None:
+                    delta_tokens = delta_tokens / delta_scale
                 delta_flat = delta_tokens.reshape(-1, self.n_features)
                 self.delta_mean, self.delta_std = self._compute_stats(delta_flat)
                 # Stats for anchor token (last surface)
@@ -254,12 +293,21 @@ class TransformerSurfaceModel(BaseModel):
         if X_val is not None and y_val is not None:
             if X_val.ndim != 4:
                 raise ValueError(f"Expected X_val shape (n_samples, context, n_tau, n_logm), got {X_val.shape}")
+            if self.input_delta and X_val.shape[1] < 2:
+                raise ValueError("input_delta requires context_length >= 2")
             X_val_input = self._build_input_sequence(X_val)
+            delta_scale_val = None
+            if self.scale_deltas:
+                delta_scale_val = self._compute_delta_scale(X_val)
+                if self.input_delta:
+                    X_val_input = self._apply_delta_scale_to_tokens(X_val_input, delta_scale_val)
             X_val_flat = self._flatten(X_val_input).astype(np.float32, copy=False)
             y_val_flat = y_val.reshape(X_val_flat.shape[0], self.n_features).astype(np.float32, copy=False)
             if self.delta_mode:
                 last_surface_val = X_val[:, -1, :, :].reshape(X_val_flat.shape[0], self.n_features)
                 y_val_flat = y_val_flat - last_surface_val
+                if self.scale_deltas and delta_scale_val is not None:
+                    y_val_flat = y_val_flat / delta_scale_val.reshape(X_val_flat.shape[0], 1)
             if self.normalize:
                 if self.input_delta and self.delta_mean is not None and self.anchor_mean is not None:
                     X_tokens = X_val_flat.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
@@ -366,6 +414,7 @@ class TransformerSurfaceModel(BaseModel):
             raise ValueError(f"Expected X shape (n_samples, context, n_tau, n_logm), got {X.shape}")
 
         n_samples, context_length, n_tau, n_logm = X.shape
+        self._validate_delta_context(context_length)
         if context_length != self.context_length:
             raise ValueError(
                 f"context_length mismatch: model expects {self.context_length}, got {context_length}"
@@ -376,6 +425,11 @@ class TransformerSurfaceModel(BaseModel):
             )
 
         X_input = self._build_input_sequence(X)
+        delta_scale = None
+        if self.scale_deltas:
+            delta_scale = self._compute_delta_scale(X)
+            if self.input_delta:
+                X_input = self._apply_delta_scale_to_tokens(X_input, delta_scale)
         X_flat = self._flatten(X_input).astype(np.float32, copy=False)
         if self.normalize:
             if self.input_delta and self.delta_mean is not None and self.anchor_mean is not None:
@@ -403,6 +457,8 @@ class TransformerSurfaceModel(BaseModel):
                 preds = self._denormalize_array(preds)
 
         if self.delta_mode:
+            if self.scale_deltas and delta_scale is not None:
+                preds = preds * delta_scale.reshape(n_samples, 1)
             last_surface = X[:, -1, :, :].reshape(n_samples, n_tau, n_logm)
             preds = preds.reshape(n_samples, n_tau, n_logm)
             preds = preds + last_surface
@@ -431,6 +487,8 @@ class TransformerSurfaceModel(BaseModel):
             "use_causal": self.use_causal,
             "delta_mode": self.delta_mode,
             "input_delta": self.input_delta,
+            "scale_deltas": self.scale_deltas,
+            "delta_scale_eps": self.delta_scale_eps,
             "mean": self.mean,
             "std": self.std,
             "delta_mean": self.delta_mean,

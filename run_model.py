@@ -219,7 +219,8 @@ def main():
                 use_amp=args.use_amp,
                 use_causal=args.use_causal,
                 delta_mode=False,
-                input_delta=False
+                input_delta=False,
+                scale_deltas=False
             ),
             model_id="transformer",
             context_lengths=context_lengths,
@@ -250,7 +251,8 @@ def main():
                 use_amp=args.use_amp,
                 use_causal=args.use_causal,
                 delta_mode=True,
-                input_delta=True
+                input_delta=True,
+                scale_deltas=True
             ),
             model_id="delta_transformer",
             context_lengths=context_lengths,

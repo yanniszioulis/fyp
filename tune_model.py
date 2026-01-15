@@ -139,7 +139,8 @@ def main():
                 use_amp=args.use_amp,
                 use_causal=config.get("use_causal", True),
                 delta_mode=(args.model_id == "delta_transformer"),
-                input_delta=(args.model_id == "delta_transformer")
+                input_delta=(args.model_id == "delta_transformer"),
+                scale_deltas=(args.model_id == "delta_transformer")
             )
 
             model.fit(

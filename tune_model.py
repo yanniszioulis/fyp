@@ -140,6 +140,7 @@ def main():
                 use_causal=config.get("use_causal", True),
                 delta_mode=(args.model_id == "delta_transformer"),
                 input_delta=(args.model_id == "delta_transformer"),
+                use_anchor_token=not (args.model_id == "delta_transformer"),
                 scale_deltas=(args.model_id == "delta_transformer")
             )
 

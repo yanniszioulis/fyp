@@ -220,6 +220,7 @@ def main():
                 use_causal=args.use_causal,
                 delta_mode=False,
                 input_delta=False,
+                use_anchor_token=True,
                 scale_deltas=False
             ),
             model_id="transformer",
@@ -252,6 +253,7 @@ def main():
                 use_causal=args.use_causal,
                 delta_mode=True,
                 input_delta=True,
+                use_anchor_token=False,
                 scale_deltas=True
             ),
             model_id="delta_transformer",

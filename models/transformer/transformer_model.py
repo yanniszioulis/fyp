@@ -99,6 +99,7 @@ class TransformerSurfaceModel(BaseModel):
                  use_causal: bool = True,
                  delta_mode: bool = False,
                  input_delta: bool = False,
+                 use_anchor_token: bool = True,
                  scale_deltas: bool = False,
                  delta_scale_eps: float = 1e-6,
                  device: Optional[str] = None):
@@ -126,6 +127,7 @@ class TransformerSurfaceModel(BaseModel):
         self.use_causal = use_causal
         self.delta_mode = delta_mode
         self.input_delta = input_delta
+        self.use_anchor_token = use_anchor_token
         self.scale_deltas = scale_deltas
         self.delta_scale_eps = delta_scale_eps
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -184,9 +186,12 @@ class TransformerSurfaceModel(BaseModel):
         if deltas is None:
             return X
         # Consecutive deltas for first context_length-1 tokens
-        # Last token is the level anchor (last surface)
-        last_surface = X[:, -1:, :, :]
-        return np.concatenate([deltas, last_surface], axis=1)
+        # Last token is either the level anchor or zeros (anchor removed)
+        if self.use_anchor_token:
+            last_token = X[:, -1:, :, :]
+        else:
+            last_token = np.zeros((n_samples, 1, n_tau, n_logm), dtype=X.dtype)
+        return np.concatenate([deltas, last_token], axis=1)
 
     def _normalize_array(self, X: np.ndarray, mean: Optional[np.ndarray] = None,
                          std: Optional[np.ndarray] = None) -> np.ndarray:
@@ -263,17 +268,19 @@ class TransformerSurfaceModel(BaseModel):
                     delta_tokens = delta_tokens / delta_scale
                 delta_flat = delta_tokens.reshape(-1, self.n_features)
                 self.delta_mean, self.delta_std = self._compute_stats(delta_flat)
-                # Stats for anchor token (last surface)
-                anchor_flat = X_train[:, -1, :, :].reshape(-1, self.n_features)
-                self.anchor_mean, self.anchor_std = self._compute_stats(anchor_flat)
+                if self.use_anchor_token:
+                    # Stats for anchor token (last surface)
+                    anchor_flat = X_train[:, -1, :, :].reshape(-1, self.n_features)
+                    self.anchor_mean, self.anchor_std = self._compute_stats(anchor_flat)
                 # Normalize input tokens
                 X_tokens = X_input.reshape(n_samples, self.context_length, self.n_features)
                 X_tokens[:, :-1, :] = self._normalize_array(
                     X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
                 )
-                X_tokens[:, -1, :] = self._normalize_array(
-                    X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
-                )
+                if self.use_anchor_token:
+                    X_tokens[:, -1, :] = self._normalize_array(
+                        X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                    )
                 X_flat = X_tokens.reshape(n_samples, self.context_length, self.n_features)
                 # Normalize delta targets with delta stats
                 y_flat = self._normalize_array(y_flat, mean=self.delta_mean, std=self.delta_std)
@@ -309,14 +316,15 @@ class TransformerSurfaceModel(BaseModel):
                 if self.scale_deltas and delta_scale_val is not None:
                     y_val_flat = y_val_flat / delta_scale_val.reshape(X_val_flat.shape[0], 1)
             if self.normalize:
-                if self.input_delta and self.delta_mean is not None and self.anchor_mean is not None:
+                if self.input_delta and self.delta_mean is not None:
                     X_tokens = X_val_flat.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
                     X_tokens[:, :-1, :] = self._normalize_array(
                         X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
                     )
-                    X_tokens[:, -1, :] = self._normalize_array(
-                        X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
-                    )
+                    if self.use_anchor_token and self.anchor_mean is not None:
+                        X_tokens[:, -1, :] = self._normalize_array(
+                            X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                        )
                     X_val_flat = X_tokens.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
                     y_val_flat = self._normalize_array(y_val_flat, mean=self.delta_mean, std=self.delta_std)
                 else:
@@ -432,14 +440,15 @@ class TransformerSurfaceModel(BaseModel):
                 X_input = self._apply_delta_scale_to_tokens(X_input, delta_scale)
         X_flat = self._flatten(X_input).astype(np.float32, copy=False)
         if self.normalize:
-            if self.input_delta and self.delta_mean is not None and self.anchor_mean is not None:
+            if self.input_delta and self.delta_mean is not None:
                 X_tokens = X_flat.reshape(n_samples, self.context_length, self.n_features)
                 X_tokens[:, :-1, :] = self._normalize_array(
                     X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
                 )
-                X_tokens[:, -1, :] = self._normalize_array(
-                    X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
-                )
+                if self.use_anchor_token and self.anchor_mean is not None:
+                    X_tokens[:, -1, :] = self._normalize_array(
+                        X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                    )
                 X_flat = X_tokens.reshape(n_samples, self.context_length, self.n_features)
             else:
                 X_flat = self._normalize_array(X_flat)
@@ -487,6 +496,7 @@ class TransformerSurfaceModel(BaseModel):
             "use_causal": self.use_causal,
             "delta_mode": self.delta_mode,
             "input_delta": self.input_delta,
+            "use_anchor_token": self.use_anchor_token,
             "scale_deltas": self.scale_deltas,
             "delta_scale_eps": self.delta_scale_eps,
             "mean": self.mean,

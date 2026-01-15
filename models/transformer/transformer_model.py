@@ -156,7 +156,7 @@ class TransformerSurfaceModel(BaseModel):
         if context_length < 2:
             return X
         # Consecutive deltas for first context_length-1 tokens
-        deltas = X[:, :-1, :, :] - X[:, 1:, :, :]
+        deltas = X[:, 1:, :, :] - X[:, :-1, :, :]
         # Last token is the level anchor (last surface)
         last_surface = X[:, -1:, :, :]
         return np.concatenate([deltas, last_surface], axis=1)
@@ -221,7 +221,7 @@ class TransformerSurfaceModel(BaseModel):
         if self.normalize:
             if self.input_delta:
                 # Stats for delta tokens/targets
-                delta_tokens = X_train[:, :-1, :, :] - X_train[:, 1:, :, :]
+                delta_tokens = X_train[:, 1:, :, :] - X_train[:, :-1, :, :]
                 delta_flat = delta_tokens.reshape(-1, self.n_features)
                 self.delta_mean, self.delta_std = self._compute_stats(delta_flat)
                 # Stats for anchor token (last surface)

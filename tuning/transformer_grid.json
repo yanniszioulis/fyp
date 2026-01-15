@@ -9,6 +9,7 @@
   "num_epochs": [30],
   "pool": ["last"],
   "normalize": [true],
+  "normalize_mode": ["per_point", "global"],
   "patience": [5],
   "min_delta": [0.0]
 }

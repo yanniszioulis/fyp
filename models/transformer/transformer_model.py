@@ -83,6 +83,7 @@ class TransformerSurfaceModel(BaseModel):
                  num_epochs: int = 50,
                  pool: str = "last",
                  normalize: bool = True,
+                 normalize_mode: str = "per_point",
                  patience: int = 10,
                  min_delta: float = 0.0,
                  use_amp: bool = False,
@@ -104,6 +105,7 @@ class TransformerSurfaceModel(BaseModel):
         self.num_epochs = num_epochs
         self.pool = pool
         self.normalize = normalize
+        self.normalize_mode = normalize_mode
         self.patience = patience
         self.min_delta = min_delta
         self.use_amp = use_amp
@@ -158,10 +160,15 @@ class TransformerSurfaceModel(BaseModel):
         y_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
 
         if self.normalize:
-            # Per-feature normalization across all samples and time steps
             flat_for_stats = X_flat.reshape(-1, self.n_features)
-            self.mean = flat_for_stats.mean(axis=0, keepdims=True)
-            self.std = flat_for_stats.std(axis=0, keepdims=True)
+            if self.normalize_mode == "per_point":
+                self.mean = flat_for_stats.mean(axis=0, keepdims=True)
+                self.std = flat_for_stats.std(axis=0, keepdims=True)
+            elif self.normalize_mode == "global":
+                self.mean = flat_for_stats.mean()
+                self.std = flat_for_stats.std()
+            else:
+                raise ValueError(f"Unknown normalize_mode: {self.normalize_mode}")
             X_flat = self._normalize_array(X_flat)
             y_flat = self._normalize_array(y_flat)
 
@@ -307,6 +314,7 @@ class TransformerSurfaceModel(BaseModel):
             "dropout": self.dropout,
             "pool": self.pool,
             "normalize": self.normalize,
+            "normalize_mode": self.normalize_mode,
             "use_amp": self.use_amp,
             "mean": self.mean,
             "std": self.std

@@ -39,6 +39,7 @@ def _default_transformer_grid():
         "num_epochs": [30],
         "pool": ["last"],
         "normalize": [True],
+        "normalize_mode": ["per_point", "global"],
         "patience": [5],
         "min_delta": [0.0],
     }
@@ -130,6 +131,7 @@ def main():
                 num_epochs=config["num_epochs"],
                 pool=config["pool"],
                 normalize=config["normalize"],
+                normalize_mode=config.get("normalize_mode", "per_point"),
                 patience=config["patience"],
                 min_delta=config["min_delta"],
                 use_amp=args.use_amp

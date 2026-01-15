@@ -65,6 +65,14 @@ def main():
                         help="Path to JSON grid spec (dict of param -> list)")
     parser.add_argument("--amp", dest="use_amp", action="store_true",
                         help="Enable automatic mixed precision (transformer)")
+    parser.add_argument("--overfit", action="store_true",
+                        help="Overfit mode: train on a small subset with no early stopping")
+    parser.add_argument("--overfit-samples", type=int, default=0,
+                        help="Number of training samples to use in overfit mode (0 = all)")
+    parser.add_argument("--overfit-epochs", type=int, default=200,
+                        help="Epochs to run in overfit mode (overrides grid)")
+    parser.add_argument("--overfit-no-regularization", action="store_true",
+                        help="Set dropout/weight decay to 0 in overfit mode")
     args = parser.parse_args()
 
     window_ids = _parse_csv_list(args.window_ids, int)
@@ -121,21 +129,47 @@ def main():
         best_result = None
 
         for idx, config in enumerate(grid_list, start=1):
+            if args.overfit:
+                if args.overfit_samples and args.overfit_samples > 0:
+                    n_overfit = min(args.overfit_samples, len(X_train))
+                    X_train_use = X_train[:n_overfit]
+                    y_train_use = y_train[:n_overfit]
+                else:
+                    X_train_use = X_train
+                    y_train_use = y_train
+                X_val_use = None
+                y_val_use = None
+                num_epochs = args.overfit_epochs
+                dropout = 0.0 if args.overfit_no_regularization else config["dropout"]
+                weight_decay = 0.0 if args.overfit_no_regularization else config["weight_decay"]
+                patience = 0
+                min_delta = 0.0
+            else:
+                X_train_use = X_train
+                y_train_use = y_train
+                X_val_use = X_val
+                y_val_use = y_val
+                num_epochs = config["num_epochs"]
+                dropout = config["dropout"]
+                weight_decay = config["weight_decay"]
+                patience = config["patience"]
+                min_delta = config["min_delta"]
+
             model = TransformerSurfaceModel(
                 name=f"transformer_w{window_id}_c{args.context_length}_h{args.horizon}",
                 d_model=config["d_model"],
                 n_heads=config["n_heads"],
                 n_layers=config["n_layers"],
-                dropout=config["dropout"],
+                dropout=dropout,
                 learning_rate=config["learning_rate"],
-                weight_decay=config["weight_decay"],
+                weight_decay=weight_decay,
                 batch_size=config["batch_size"],
-                num_epochs=config["num_epochs"],
+                num_epochs=num_epochs,
                 pool=config["pool"],
                 normalize=config["normalize"],
                 normalize_mode=config.get("normalize_mode", "per_point"),
-                patience=config["patience"],
-                min_delta=config["min_delta"],
+                patience=patience,
+                min_delta=min_delta,
                 use_amp=args.use_amp,
                 use_causal=config.get("use_causal", True),
                 delta_mode=(args.model_id == "delta_transformer"),
@@ -144,19 +178,25 @@ def main():
                 scale_deltas=(args.model_id == "delta_transformer")
             )
 
-            model.fit(
-                X_train, y_train,
+            fit_kwargs = dict(
                 context_length=args.context_length,
                 horizon=args.horizon,
-                X_val=X_val,
-                y_val=y_val
+            )
+            if X_val_use is not None and y_val_use is not None:
+                fit_kwargs["X_val"] = X_val_use
+                fit_kwargs["y_val"] = y_val_use
+            model.fit(
+                X_train_use, y_train_use,
+                **fit_kwargs
             )
 
-            train_preds = model.predict_horizon(X_train, horizon=args.horizon)
-            train_metrics = compute_all_metrics(y_train, train_preds)
+            train_preds = model.predict_horizon(X_train_use, horizon=args.horizon)
+            train_metrics = compute_all_metrics(y_train_use, train_preds)
 
-            val_preds = model.predict_horizon(X_val, horizon=args.horizon)
-            val_metrics = compute_all_metrics(y_val, val_preds)
+            val_metrics = None
+            if X_val is not None and y_val is not None and len(X_val) > 0:
+                val_preds = model.predict_horizon(X_val, horizon=args.horizon)
+                val_metrics = compute_all_metrics(y_val, val_preds)
 
             result = {
                 "window_id": window_id,
@@ -172,11 +212,11 @@ def main():
             print(f"[{idx}/{total_configs}] cfg={config}")
             print(
                 f"  train_iv_rmse={train_metrics['iv_rmse']:.6f}  "
-                f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
+                f"val_iv_rmse={(val_metrics or {}).get('iv_rmse', float('nan')):.6f}"
             )
             print(f"  epochs_trained={model.epochs_trained}")
 
-            if val_metrics["iv_rmse"] < best_val:
+            if val_metrics is not None and val_metrics["iv_rmse"] < best_val:
                 best_val = val_metrics["iv_rmse"]
                 best_result = result
                 print(f"  best_so_far: val_iv_rmse={best_val:.6f}")

@@ -246,8 +246,6 @@ def main():
                 batch_size=args.batch_size,
                 num_epochs=args.num_epochs,
                 pool=args.pool,
-                normalize=args.normalize,
-                normalize_mode=args.normalize_mode,
                 patience=args.patience,
                 min_delta=args.min_delta,
                 use_amp=args.use_amp,

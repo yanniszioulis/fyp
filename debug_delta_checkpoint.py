@@ -56,14 +56,8 @@ def _load_transformer_checkpoint(path: str, device: str) -> Tuple[DeltaTransform
         batch_size=ckpt.get("batch_size", 32),
         num_epochs=ckpt.get("num_epochs", 50),
         pool=ckpt.get("pool", "last"),
-        normalize=ckpt.get("normalize", True),
-        normalize_mode=ckpt.get("normalize_mode", "per_point"),
         use_amp=ckpt.get("use_amp", False),
         use_causal=ckpt.get("use_causal", True),
-        delta_loss_weighting=ckpt.get("delta_loss_weighting", False),
-        delta_loss_alpha=ckpt.get("delta_loss_alpha", 0.0),
-        loss_scale=ckpt.get("loss_scale", 1.0),
-        max_grad_norm=ckpt.get("max_grad_norm", 1.0),
         device=device,
     )
 

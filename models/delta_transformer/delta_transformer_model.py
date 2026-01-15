@@ -92,17 +92,10 @@ class DeltaTransformerSurfaceModel(BaseModel):
                  batch_size: int = 32,
                  num_epochs: int = 50,
                  pool: str = "last",
-                 normalize: bool = True,
-                 normalize_mode: str = "per_point",
                  patience: int = 10,
                  min_delta: float = 0.0,
-                 baseline_mode: str = "mean",
                  use_amp: bool = False,
                  use_causal: bool = True,
-                 delta_loss_weighting: bool = False,
-                 delta_loss_alpha: float = 0.0,
-                 loss_scale: float = 1.0,
-                 max_grad_norm: float = 1.0,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -120,19 +113,13 @@ class DeltaTransformerSurfaceModel(BaseModel):
         self.batch_size = batch_size
         self.num_epochs = num_epochs
         self.pool = pool
-        self.normalize = normalize
-        self.normalize_mode = normalize_mode
+        self.normalize = True
+        self.normalize_mode = "per_point"
         self.patience = patience
         self.min_delta = min_delta
-        if baseline_mode != "mean":
-            raise ValueError("DeltaTransformerSurfaceModel uses mean baseline only")
-        self.baseline_mode = "mean"
         self.use_amp = use_amp
         self.use_causal = use_causal
-        self.delta_loss_weighting = delta_loss_weighting
-        self.delta_loss_alpha = delta_loss_alpha
-        self.loss_scale = loss_scale
-        self.max_grad_norm = max_grad_norm
+        self.max_grad_norm = 1.0
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -245,7 +232,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
             torch.tensor(X_flat, dtype=torch.float32),
             torch.tensor(y_flat, dtype=torch.float32)
         )
-        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False)
 
         val_loader = None
         if use_val_for_early_stopping and X_val is not None and y_val is not None:
@@ -288,12 +275,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
         )
 
         def _loss_fn(preds, targets):
-            if self.delta_loss_weighting and self.delta_loss_alpha > 0.0:
-                weights = 1.0 + self.delta_loss_alpha * torch.abs(targets)
-                loss = (weights * (preds - targets) ** 2).mean()
-            else:
-                loss = nn.functional.mse_loss(preds, targets)
-            return loss * self.loss_scale
+            return nn.functional.mse_loss(preds, targets)
 
         scaler = GradScaler(enabled=self.use_amp and self.device.startswith("cuda"))
 
@@ -557,9 +539,6 @@ class DeltaTransformerSurfaceModel(BaseModel):
             "normalize_mode": self.normalize_mode,
             "use_amp": self.use_amp,
             "use_causal": self.use_causal,
-            "delta_loss_weighting": self.delta_loss_weighting,
-            "delta_loss_alpha": self.delta_loss_alpha,
-            "loss_scale": self.loss_scale,
             "max_grad_norm": self.max_grad_norm,
             "delta_token_mean": self.delta_token_mean,
             "delta_token_std": self.delta_token_std,

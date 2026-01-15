@@ -145,11 +145,8 @@ def main():
                 num_epochs = args.overfit_epochs
                 dropout = 0.0 if args.overfit_no_regularization else config["dropout"]
                 weight_decay = 0.0 if args.overfit_no_regularization else config["weight_decay"]
-                normalize = False if args.model_id == "delta_transformer" else config["normalize"]
-                delta_loss_weighting = args.model_id == "delta_transformer"
-                delta_loss_alpha = 5.0 if args.model_id == "delta_transformer" else 0.0
-                loss_scale = 420.0 if args.model_id == "delta_transformer" else 1.0
-                max_grad_norm = 100.0 if args.model_id == "delta_transformer" else 1.0
+                normalize = config["normalize"]
+                max_grad_norm = 1.0
                 patience = 0
                 min_delta = 0.0
             else:
@@ -161,9 +158,6 @@ def main():
                 dropout = config["dropout"]
                 weight_decay = config["weight_decay"]
                 normalize = config["normalize"]
-                delta_loss_weighting = False
-                delta_loss_alpha = 0.0
-                loss_scale = 1.0
                 max_grad_norm = 1.0
                 patience = config["patience"]
                 min_delta = config["min_delta"]
@@ -173,7 +167,7 @@ def main():
                 if args.model_id == "delta_transformer"
                 else TransformerSurfaceModel
             )
-            model = ModelClass(
+            model_kwargs = dict(
                 name=f"{args.model_id}_w{window_id}_c{args.context_length}_h{args.horizon}",
                 d_model=config["d_model"],
                 n_heads=config["n_heads"],
@@ -184,17 +178,19 @@ def main():
                 batch_size=config["batch_size"],
                 num_epochs=num_epochs,
                 pool=config["pool"],
-                normalize=normalize,
-                normalize_mode=config.get("normalize_mode", "per_point"),
                 patience=patience,
                 min_delta=min_delta,
                 use_amp=args.use_amp,
                 use_causal=config.get("use_causal", True),
-                delta_loss_weighting=delta_loss_weighting,
-                delta_loss_alpha=delta_loss_alpha,
-                loss_scale=loss_scale,
-                max_grad_norm=max_grad_norm,
             )
+            if args.model_id != "delta_transformer":
+                model_kwargs["normalize"] = normalize
+                model_kwargs["normalize_mode"] = config.get("normalize_mode", "per_point")
+                model_kwargs["max_grad_norm"] = max_grad_norm
+                model_kwargs["delta_loss_weighting"] = False
+                model_kwargs["delta_loss_alpha"] = 0.0
+                model_kwargs["loss_scale"] = 1.0
+            model = ModelClass(**model_kwargs)
 
             fit_kwargs = dict(
                 context_length=args.context_length,

@@ -106,6 +106,7 @@ class TransformerSurfaceModel(BaseModel):
                  delta_loss_weighting: bool = False,
                  delta_loss_alpha: float = 0.0,
                  loss_scale: float = 1.0,
+                 max_grad_norm: float = 1.0,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -138,6 +139,7 @@ class TransformerSurfaceModel(BaseModel):
         self.delta_loss_weighting = delta_loss_weighting
         self.delta_loss_alpha = delta_loss_alpha
         self.loss_scale = loss_scale
+        self.max_grad_norm = max_grad_norm
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -411,7 +413,10 @@ class TransformerSurfaceModel(BaseModel):
                     raise ValueError("Non-finite loss encountered during training")
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    max_norm=self.max_grad_norm
+                )
                 scaler.step(optimizer)
                 scaler.update()
                 epoch_losses.append(loss.item())
@@ -635,6 +640,7 @@ class TransformerSurfaceModel(BaseModel):
             "delta_loss_weighting": self.delta_loss_weighting,
             "delta_loss_alpha": self.delta_loss_alpha,
             "loss_scale": self.loss_scale,
+            "max_grad_norm": self.max_grad_norm,
             "mean": self.mean,
             "std": self.std,
             "delta_mean": self.delta_mean,

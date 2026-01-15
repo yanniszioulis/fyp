@@ -148,6 +148,12 @@ def main():
         help="Enable automatic mixed precision (transformer)"
     )
     parser.add_argument(
+        "--causal",
+        dest="use_causal",
+        action="store_true",
+        help="Enable causal attention mask (transformer)"
+    )
+    parser.add_argument(
         "--save-ckpt",
         dest="save_checkpoint",
         action="store_true",
@@ -204,7 +210,8 @@ def main():
                 normalize_mode=args.normalize_mode,
                 patience=args.patience,
                 min_delta=args.min_delta,
-                use_amp=args.use_amp
+                use_amp=args.use_amp,
+                use_causal=args.use_causal
             ),
             model_id="transformer",
             context_lengths=context_lengths,

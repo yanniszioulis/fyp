@@ -37,9 +37,10 @@ def _default_transformer_grid():
         "weight_decay": [1e-4],
         "batch_size": [32],
         "num_epochs": [30],
-        "pool": ["last"],
+        "pool": ["last", "mean"],
         "normalize": [True],
         "normalize_mode": ["per_point", "global"],
+        "use_causal": [True],
         "patience": [5],
         "min_delta": [0.0],
     }
@@ -134,7 +135,8 @@ def main():
                 normalize_mode=config.get("normalize_mode", "per_point"),
                 patience=config["patience"],
                 min_delta=config["min_delta"],
-                use_amp=args.use_amp
+                use_amp=args.use_amp,
+                use_causal=config.get("use_causal", True)
             )
 
             model.fit(

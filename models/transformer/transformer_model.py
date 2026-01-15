@@ -29,10 +29,12 @@ class _SurfaceTransformer(nn.Module):
                  n_heads: int,
                  n_layers: int,
                  dropout: float,
-                 pool: str):
+                 pool: str,
+                 use_causal: bool):
         super().__init__()
         self.context_length = context_length
         self.pool = pool
+        self.use_causal = use_causal
 
         self.input_proj = nn.Linear(n_features, d_model)
         self.positional = nn.Parameter(torch.zeros(context_length, d_model))
@@ -58,7 +60,14 @@ class _SurfaceTransformer(nn.Module):
         # x: (batch, context_length, n_features)
         x = self.input_proj(x)
         x = x + self.positional.unsqueeze(0)
-        x = self.encoder(x)
+        if self.use_causal:
+            mask = torch.triu(
+                torch.ones(self.context_length, self.context_length, device=x.device),
+                diagonal=1
+            ).bool()
+            x = self.encoder(x, mask=mask)
+        else:
+            x = self.encoder(x)
         if self.pool == "mean":
             x = x.mean(dim=1)
         else:
@@ -87,6 +96,7 @@ class TransformerSurfaceModel(BaseModel):
                  patience: int = 10,
                  min_delta: float = 0.0,
                  use_amp: bool = False,
+                 use_causal: bool = True,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -109,6 +119,7 @@ class TransformerSurfaceModel(BaseModel):
         self.patience = patience
         self.min_delta = min_delta
         self.use_amp = use_amp
+        self.use_causal = use_causal
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -201,7 +212,8 @@ class TransformerSurfaceModel(BaseModel):
             n_heads=self.n_heads,
             n_layers=self.n_layers,
             dropout=self.dropout,
-            pool=self.pool
+            pool=self.pool,
+            use_causal=self.use_causal
         ).to(self.device)
 
         optimizer = torch.optim.AdamW(
@@ -321,6 +333,7 @@ class TransformerSurfaceModel(BaseModel):
             "normalize": self.normalize,
             "normalize_mode": self.normalize_mode,
             "use_amp": self.use_amp,
+            "use_causal": self.use_causal,
             "mean": self.mean,
             "std": self.std
         }, path)

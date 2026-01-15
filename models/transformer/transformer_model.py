@@ -254,11 +254,26 @@ class TransformerSurfaceModel(BaseModel):
         if X_val is not None and y_val is not None:
             if X_val.ndim != 4:
                 raise ValueError(f"Expected X_val shape (n_samples, context, n_tau, n_logm), got {X_val.shape}")
-            X_val_flat = self._flatten(X_val).astype(np.float32, copy=False)
+            X_val_input = self._build_input_sequence(X_val)
+            X_val_flat = self._flatten(X_val_input).astype(np.float32, copy=False)
             y_val_flat = y_val.reshape(X_val_flat.shape[0], self.n_features).astype(np.float32, copy=False)
+            if self.delta_mode:
+                last_surface_val = X_val[:, -1, :, :].reshape(X_val_flat.shape[0], self.n_features)
+                y_val_flat = y_val_flat - last_surface_val
             if self.normalize:
-                X_val_flat = self._normalize_array(X_val_flat)
-                y_val_flat = self._normalize_array(y_val_flat)
+                if self.input_delta and self.delta_mean is not None and self.anchor_mean is not None:
+                    X_tokens = X_val_flat.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
+                    X_tokens[:, :-1, :] = self._normalize_array(
+                        X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
+                    )
+                    X_tokens[:, -1, :] = self._normalize_array(
+                        X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                    )
+                    X_val_flat = X_tokens.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
+                    y_val_flat = self._normalize_array(y_val_flat, mean=self.delta_mean, std=self.delta_std)
+                else:
+                    X_val_flat = self._normalize_array(X_val_flat)
+                    y_val_flat = self._normalize_array(y_val_flat)
             val_dataset = TensorDataset(
                 torch.tensor(X_val_flat, dtype=torch.float32),
                 torch.tensor(y_val_flat, dtype=torch.float32)

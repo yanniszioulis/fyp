@@ -76,12 +76,6 @@ def main():
                         help="Epoch interval for loss logging in overfit mode (0 = disable)")
     parser.add_argument("--overfit-no-regularization", action="store_true",
                         help="Set dropout/weight decay to 0 in overfit mode")
-    parser.add_argument("--delta-use-anchor-token", action="store_true",
-                        help="Use level anchor token for delta transformer")
-    parser.add_argument("--delta-scale-factor", type=float, default=None,
-                        help="Scale delta targets by this factor (delta transformer)")
-    parser.add_argument("--delta-max-grad-norm", type=float, default=None,
-                        help="Gradient clipping norm for delta transformer")
     args = parser.parse_args()
 
     window_ids = _parse_csv_list(args.window_ids, int)
@@ -156,8 +150,6 @@ def main():
                 delta_loss_alpha = 5.0 if args.model_id == "delta_transformer" else 0.0
                 loss_scale = 420.0 if args.model_id == "delta_transformer" else 1.0
                 max_grad_norm = 100.0 if args.model_id == "delta_transformer" else 1.0
-                if args.delta_max_grad_norm is not None:
-                    max_grad_norm = args.delta_max_grad_norm
                 patience = 0
                 min_delta = 0.0
             else:
@@ -173,8 +165,6 @@ def main():
                 delta_loss_alpha = 0.0
                 loss_scale = 1.0
                 max_grad_norm = 1.0
-                if args.delta_max_grad_norm is not None:
-                    max_grad_norm = args.delta_max_grad_norm
                 patience = config["patience"]
                 min_delta = config["min_delta"]
 
@@ -204,12 +194,6 @@ def main():
                 delta_loss_alpha=delta_loss_alpha,
                 loss_scale=loss_scale,
                 max_grad_norm=max_grad_norm,
-                use_anchor_token=args.delta_use_anchor_token if args.model_id == "delta_transformer" else True,
-                delta_scale_factor=(
-                    args.delta_scale_factor if args.delta_scale_factor is not None
-                    else 10.0 if args.model_id == "delta_transformer"
-                    else 1.0
-                )
             )
 
             fit_kwargs = dict(

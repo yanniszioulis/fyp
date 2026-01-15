@@ -15,8 +15,10 @@ from evaluation.metrics import (
     compute_metrics_by_maturity,
     compute_metrics_by_moneyness,
 )
-from models.delta_transformer.delta_transformer_model import DeltaTransformerSurfaceModel
-from models.transformer.transformer_model import _SurfaceTransformer
+from models.delta_transformer.delta_transformer_model import (
+    DeltaTransformerSurfaceModel,
+    _SurfaceTransformer,
+)
 
 
 def _summarize_array(name: str, arr: np.ndarray):
@@ -58,11 +60,6 @@ def _load_transformer_checkpoint(path: str, device: str) -> Tuple[DeltaTransform
         normalize_mode=ckpt.get("normalize_mode", "per_point"),
         use_amp=ckpt.get("use_amp", False),
         use_causal=ckpt.get("use_causal", True),
-        input_delta=ckpt.get("input_delta", True),
-        use_anchor_token=ckpt.get("use_anchor_token", False),
-        scale_deltas=ckpt.get("scale_deltas", False),
-        delta_scale_eps=ckpt.get("delta_scale_eps", 1e-6),
-        delta_scale_factor=ckpt.get("delta_scale_factor", 10.0),
         delta_loss_weighting=ckpt.get("delta_loss_weighting", False),
         delta_loss_alpha=ckpt.get("delta_loss_alpha", 0.0),
         loss_scale=ckpt.get("loss_scale", 1.0),
@@ -76,12 +73,10 @@ def _load_transformer_checkpoint(path: str, device: str) -> Tuple[DeltaTransform
     model.context_length = ckpt["context_length"]
     model.mean = ckpt.get("mean")
     model.std = ckpt.get("std")
-    model.delta_mean = ckpt.get("delta_mean")
-    model.delta_std = ckpt.get("delta_std")
+    model.delta_token_mean = ckpt.get("delta_token_mean")
+    model.delta_token_std = ckpt.get("delta_token_std")
     model.delta_target_mean = ckpt.get("delta_target_mean")
     model.delta_target_std = ckpt.get("delta_target_std")
-    model.anchor_mean = ckpt.get("anchor_mean")
-    model.anchor_std = ckpt.get("anchor_std")
 
     model.model = _SurfaceTransformer(
         n_features=model.n_features,
@@ -144,8 +139,7 @@ def main():
         "Checkpoint config:",
         f"c{ckpt.get('context_length')} h{ckpt.get('horizon', 'n/a')} "
         f"d_model={ckpt.get('d_model')} layers={ckpt.get('n_layers')} "
-        f"heads={ckpt.get('n_heads')} delta_mode={ckpt.get('delta_mode')} "
-        f"input_delta={ckpt.get('input_delta')} scale_deltas={ckpt.get('scale_deltas')}"
+        f"heads={ckpt.get('n_heads')} normalize={ckpt.get('normalize')}"
     )
 
     pipeline = ForecastingPipeline()
@@ -237,7 +231,7 @@ def main():
         y_small = y_train[:n_overfit]
         overfit_dropout = 0.0 if args.overfit_no_regularization else ckpt.get("dropout", 0.0)
         overfit_weight_decay = 0.0 if args.overfit_no_regularization else ckpt.get("weight_decay", 0.0)
-        overfit_model = TransformerSurfaceModel(
+        overfit_model = DeltaTransformerSurfaceModel(
             name="overfit_check",
             d_model=ckpt["d_model"],
             n_heads=ckpt["n_heads"],
@@ -254,11 +248,10 @@ def main():
             min_delta=0.0,
             use_amp=False,
             use_causal=ckpt.get("use_causal", True),
-            delta_mode=ckpt.get("delta_mode", False),
-            input_delta=ckpt.get("input_delta", False),
-            use_anchor_token=ckpt.get("use_anchor_token", True),
-            scale_deltas=ckpt.get("scale_deltas", False),
-            delta_scale_eps=ckpt.get("delta_scale_eps", 1e-6),
+            delta_loss_weighting=ckpt.get("delta_loss_weighting", False),
+            delta_loss_alpha=ckpt.get("delta_loss_alpha", 0.0),
+            loss_scale=ckpt.get("loss_scale", 1.0),
+            max_grad_norm=ckpt.get("max_grad_norm", 1.0),
             device=args.device,
         )
         overfit_model.fit(

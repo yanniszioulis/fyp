@@ -145,6 +145,7 @@ class TransformerSurfaceModel(BaseModel):
         self.n_logm = None
         self.n_features = None
         self.context_length = None
+        self.input_context_length = None
         self.mean = None
         self.std = None
         self.delta_mean = None
@@ -178,7 +179,10 @@ class TransformerSurfaceModel(BaseModel):
     def _apply_delta_scale_to_tokens(self, X_tokens: np.ndarray, delta_scale: np.ndarray) -> np.ndarray:
         # X_tokens shape: (n_samples, context, n_tau, n_logm)
         X_tokens = X_tokens.copy()
-        X_tokens[:, :-1, :, :] = X_tokens[:, :-1, :, :] / delta_scale
+        if self.use_anchor_token:
+            X_tokens[:, :-1, :, :] = X_tokens[:, :-1, :, :] / delta_scale
+        else:
+            X_tokens[:, :, :, :] = X_tokens[:, :, :, :] / delta_scale
         return X_tokens
 
     def _build_input_sequence(self, X: np.ndarray) -> np.ndarray:
@@ -197,9 +201,8 @@ class TransformerSurfaceModel(BaseModel):
         # Last token is either the level anchor or zeros (anchor removed)
         if self.use_anchor_token:
             last_token = X[:, -1:, :, :]
-        else:
-            last_token = np.zeros((n_samples, 1, n_tau, n_logm), dtype=X.dtype)
-        return np.concatenate([deltas, last_token], axis=1)
+            return np.concatenate([deltas, last_token], axis=1)
+        return deltas
 
     def _normalize_array(self, X: np.ndarray, mean: Optional[np.ndarray] = None,
                          std: Optional[np.ndarray] = None) -> np.ndarray:
@@ -249,7 +252,8 @@ class TransformerSurfaceModel(BaseModel):
                 f"but X_train has {context_length_inferred}"
             )
 
-        self.context_length = context_length
+        self.input_context_length = context_length
+        self.context_length = context_length if self.use_anchor_token else context_length - 1
         self._validate_delta_context(context_length)
         self.n_tau = n_tau
         self.n_logm = n_logm
@@ -286,12 +290,16 @@ class TransformerSurfaceModel(BaseModel):
                     self.anchor_mean, self.anchor_std = self._compute_stats(anchor_flat)
                 # Normalize input tokens
                 X_tokens = X_input.reshape(n_samples, self.context_length, self.n_features)
-                X_tokens[:, :-1, :] = self._normalize_array(
-                    X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
-                )
                 if self.use_anchor_token:
+                    X_tokens[:, :-1, :] = self._normalize_array(
+                        X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
+                    )
                     X_tokens[:, -1, :] = self._normalize_array(
                         X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                    )
+                else:
+                    X_tokens[:, :, :] = self._normalize_array(
+                        X_tokens[:, :, :], mean=self.delta_mean, std=self.delta_std
                     )
                 X_flat = X_tokens.reshape(n_samples, self.context_length, self.n_features)
                 # Normalize delta targets with delta stats
@@ -333,12 +341,16 @@ class TransformerSurfaceModel(BaseModel):
             if self.normalize:
                 if self.input_delta and self.delta_mean is not None:
                     X_tokens = X_val_flat.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
-                    X_tokens[:, :-1, :] = self._normalize_array(
-                        X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
-                    )
                     if self.use_anchor_token and self.anchor_mean is not None:
+                        X_tokens[:, :-1, :] = self._normalize_array(
+                            X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
+                        )
                         X_tokens[:, -1, :] = self._normalize_array(
                             X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                        )
+                    else:
+                        X_tokens[:, :, :] = self._normalize_array(
+                            X_tokens[:, :, :], mean=self.delta_mean, std=self.delta_std
                         )
                     X_val_flat = X_tokens.reshape(X_val_flat.shape[0], self.context_length, self.n_features)
                     y_val_flat = self._normalize_array(y_val_flat, mean=self.delta_mean, std=self.delta_std)
@@ -536,9 +548,9 @@ class TransformerSurfaceModel(BaseModel):
 
         n_samples, context_length, n_tau, n_logm = X.shape
         self._validate_delta_context(context_length)
-        if context_length != self.context_length:
+        if self.input_context_length is not None and context_length != self.input_context_length:
             raise ValueError(
-                f"context_length mismatch: model expects {self.context_length}, got {context_length}"
+                f"context_length mismatch: model expects {self.input_context_length}, got {context_length}"
             )
         if n_tau != self.n_tau or n_logm != self.n_logm:
             raise ValueError(
@@ -555,12 +567,16 @@ class TransformerSurfaceModel(BaseModel):
         if self.normalize:
             if self.input_delta and self.delta_mean is not None:
                 X_tokens = X_flat.reshape(n_samples, self.context_length, self.n_features)
-                X_tokens[:, :-1, :] = self._normalize_array(
-                    X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
-                )
                 if self.use_anchor_token and self.anchor_mean is not None:
+                    X_tokens[:, :-1, :] = self._normalize_array(
+                        X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
+                    )
                     X_tokens[:, -1, :] = self._normalize_array(
                         X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                    )
+                else:
+                    X_tokens[:, :, :] = self._normalize_array(
+                        X_tokens[:, :, :], mean=self.delta_mean, std=self.delta_std
                     )
                 X_flat = X_tokens.reshape(n_samples, self.context_length, self.n_features)
             else:
@@ -600,6 +616,7 @@ class TransformerSurfaceModel(BaseModel):
             "n_logm": self.n_logm,
             "n_features": self.n_features,
             "context_length": self.context_length,
+            "input_context_length": self.input_context_length,
             "d_model": self.d_model,
             "n_heads": self.n_heads,
             "n_layers": self.n_layers,

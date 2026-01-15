@@ -118,6 +118,7 @@ class TransformerSurfaceModel(BaseModel):
         self.context_length = None
         self.mean = None
         self.std = None
+        self.epochs_trained = 0
 
     def _flatten(self, X: np.ndarray) -> np.ndarray:
         # X: (n_samples, context, n_tau, n_logm)
@@ -214,9 +215,10 @@ class TransformerSurfaceModel(BaseModel):
         best_state = None
         best_val = float("inf")
         epochs_no_improve = 0
+        self.epochs_trained = 0
 
         self.model.train()
-        for _ in range(self.num_epochs):
+        for epoch in range(self.num_epochs):
             for batch_x, batch_y in loader:
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
@@ -233,6 +235,7 @@ class TransformerSurfaceModel(BaseModel):
                 scaler.update()
 
             if val_loader is None:
+                self.epochs_trained = epoch + 1
                 continue
 
             self.model.eval()
@@ -256,7 +259,9 @@ class TransformerSurfaceModel(BaseModel):
                 else:
                     epochs_no_improve += 1
                     if self.patience > 0 and epochs_no_improve >= self.patience:
+                        self.epochs_trained = epoch + 1
                         break
+            self.epochs_trained = epoch + 1
 
         if best_state is not None:
             self.model.load_state_dict(best_state)

@@ -157,6 +157,7 @@ def main():
                 "horizon": args.horizon,
                 "train_metrics": train_metrics,
                 "val_metrics": val_metrics,
+                "epochs_trained": model.epochs_trained,
                 "config": config
             }
             all_results.append(result)
@@ -166,6 +167,7 @@ def main():
                 f"  train_iv_rmse={train_metrics['iv_rmse']:.6f}  "
                 f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
             )
+            print(f"  epochs_trained={model.epochs_trained}")
 
             if val_metrics["iv_rmse"] < best_val:
                 best_val = val_metrics["iv_rmse"]
@@ -176,6 +178,7 @@ def main():
             print("\nBest config:")
             print(f"  val_iv_rmse={best_result['val_metrics']['iv_rmse']:.6f}")
             print(f"  train_iv_rmse={best_result['train_metrics']['iv_rmse']:.6f}")
+            print(f"  epochs_trained={best_result['epochs_trained']}")
             print(f"  cfg={best_result['config']}")
 
     os.makedirs(os.path.join(args.results_dir, "tuning"), exist_ok=True)

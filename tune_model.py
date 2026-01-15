@@ -143,6 +143,8 @@ def main():
                 dropout = 0.0 if args.overfit_no_regularization else config["dropout"]
                 weight_decay = 0.0 if args.overfit_no_regularization else config["weight_decay"]
                 normalize = False if args.model_id == "delta_transformer" else config["normalize"]
+                delta_loss_weighting = args.model_id == "delta_transformer"
+                delta_loss_alpha = 5.0 if args.model_id == "delta_transformer" else 0.0
                 patience = 0
                 min_delta = 0.0
             else:
@@ -154,6 +156,8 @@ def main():
                 dropout = config["dropout"]
                 weight_decay = config["weight_decay"]
                 normalize = config["normalize"]
+                delta_loss_weighting = False
+                delta_loss_alpha = 0.0
                 patience = config["patience"]
                 min_delta = config["min_delta"]
 
@@ -178,7 +182,9 @@ def main():
                 input_delta=(args.model_id == "delta_transformer"),
                 use_anchor_token=not (args.model_id == "delta_transformer"),
                 scale_deltas=False,
-                delta_scale_factor=10.0 if args.model_id == "delta_transformer" else 1.0
+                delta_scale_factor=10.0 if args.model_id == "delta_transformer" else 1.0,
+                delta_loss_weighting=delta_loss_weighting,
+                delta_loss_alpha=delta_loss_alpha
             )
 
             fit_kwargs = dict(

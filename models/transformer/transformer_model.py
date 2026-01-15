@@ -103,6 +103,8 @@ class TransformerSurfaceModel(BaseModel):
                  scale_deltas: bool = False,
                  delta_scale_eps: float = 1e-6,
                  delta_scale_factor: float = 1.0,
+                 delta_loss_weighting: bool = False,
+                 delta_loss_alpha: float = 0.0,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -132,6 +134,8 @@ class TransformerSurfaceModel(BaseModel):
         self.scale_deltas = scale_deltas
         self.delta_scale_eps = delta_scale_eps
         self.delta_scale_factor = delta_scale_factor
+        self.delta_loss_weighting = delta_loss_weighting
+        self.delta_loss_alpha = delta_loss_alpha
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -363,7 +367,11 @@ class TransformerSurfaceModel(BaseModel):
             lr=self.learning_rate,
             weight_decay=self.weight_decay
         )
-        loss_fn = nn.MSELoss()
+        def _loss_fn(preds, targets):
+            if self.delta_mode and self.delta_loss_weighting and self.delta_loss_alpha > 0.0:
+                weights = 1.0 + self.delta_loss_alpha * torch.abs(targets)
+                return (weights * (preds - targets) ** 2).mean()
+            return nn.functional.mse_loss(preds, targets)
         scaler = GradScaler(enabled=self.use_amp and self.device.startswith("cuda"))
 
         best_state = None
@@ -382,7 +390,7 @@ class TransformerSurfaceModel(BaseModel):
                 optimizer.zero_grad(set_to_none=True)
                 with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
                     preds = self.model(batch_x)
-                    loss = loss_fn(preds, batch_y)
+                    loss = _loss_fn(preds, batch_y)
                 if not torch.isfinite(loss):
                     raise ValueError("Non-finite loss encountered during training")
                 scaler.scale(loss).backward()
@@ -412,7 +420,7 @@ class TransformerSurfaceModel(BaseModel):
                     batch_y = batch_y.to(self.device)
                     with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
                         preds = self.model(batch_x)
-                        val_loss = loss_fn(preds, batch_y).item()
+                        val_loss = _loss_fn(preds, batch_y).item()
                     val_losses.append(val_loss)
             self.model.train()
 
@@ -603,6 +611,8 @@ class TransformerSurfaceModel(BaseModel):
             "scale_deltas": self.scale_deltas,
             "delta_scale_eps": self.delta_scale_eps,
             "delta_scale_factor": self.delta_scale_factor,
+            "delta_loss_weighting": self.delta_loss_weighting,
+            "delta_loss_alpha": self.delta_loss_alpha,
             "mean": self.mean,
             "std": self.std,
             "delta_mean": self.delta_mean,

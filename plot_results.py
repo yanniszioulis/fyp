@@ -43,6 +43,7 @@ def main():
     label_map = {
         "persistence": "Persistence",
         "transformer": "Transformer",
+        "delta_transformer": "Delta Transformer",
     }
     model_label = None
     if args.model_id:
@@ -51,6 +52,7 @@ def main():
     results_map = {
         "persistence": "results/metrics/persistence_results.json",
         "transformer": "results/metrics/transformer_results.json",
+        "delta_transformer": "results/metrics/delta_transformer_results.json",
     }
 
     if args.compare_models:

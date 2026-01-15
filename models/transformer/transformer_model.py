@@ -140,6 +140,23 @@ class TransformerSurfaceModel(BaseModel):
         n_samples, context_length, n_tau, n_logm = X.shape
         return X.reshape(n_samples, context_length, n_tau * n_logm)
 
+    def _build_input_sequence(self, X: np.ndarray) -> np.ndarray:
+        """
+        Build model input sequence.
+        If input_delta is True, use consecutive deltas plus last surface as anchor.
+        """
+        if not self.input_delta:
+            return X
+        # X shape: (n_samples, context, n_tau, n_logm)
+        n_samples, context_length, n_tau, n_logm = X.shape
+        if context_length < 2:
+            return X
+        # Consecutive deltas for first context_length-1 tokens
+        deltas = X[:, :-1, :, :] - X[:, 1:, :, :]
+        # Last token is the level anchor (last surface)
+        last_surface = X[:, -1:, :, :]
+        return np.concatenate([deltas, last_surface], axis=1)
+
     def _normalize_array(self, X: np.ndarray) -> np.ndarray:
         if self.mean is None or self.std is None:
             raise ValueError("Model must be fitted before normalization")
@@ -172,12 +189,9 @@ class TransformerSurfaceModel(BaseModel):
         self.n_logm = n_logm
         self.n_features = n_tau * n_logm
 
-        X_flat = self._flatten(X_train).astype(np.float32, copy=False)
+        X_input = self._build_input_sequence(X_train)
+        X_flat = self._flatten(X_input).astype(np.float32, copy=False)
         y_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
-
-        if self.input_delta:
-            last_surface = X_train[:, -1, :, :].reshape(n_samples, self.n_features)
-            X_flat = X_flat - last_surface[:, None, :]
 
         if self.delta_mode:
             last_surface = X_train[:, -1, :, :].reshape(n_samples, self.n_features)
@@ -312,10 +326,8 @@ class TransformerSurfaceModel(BaseModel):
                 f"Surface shape mismatch: expected ({self.n_tau}, {self.n_logm}), got ({n_tau}, {n_logm})"
             )
 
-        X_flat = self._flatten(X).astype(np.float32, copy=False)
-        if self.input_delta:
-            last_surface = X[:, -1, :, :].reshape(n_samples, self.n_features)
-            X_flat = X_flat - last_surface[:, None, :]
+        X_input = self._build_input_sequence(X)
+        X_flat = self._flatten(X_input).astype(np.float32, copy=False)
         if self.normalize:
             X_flat = self._normalize_array(X_flat)
 

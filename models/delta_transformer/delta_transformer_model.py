@@ -195,6 +195,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
         log_interval = kwargs.pop("log_interval", None)
         log_train_val = kwargs.pop("log_train_val", False)
         log_loss_only = kwargs.pop("log_loss_only", False)
+        debug_delta_stats = kwargs.pop("debug_delta_stats", False)
         use_val_for_early_stopping = kwargs.pop("use_val_for_early_stopping", True)
         horizon = kwargs.get("horizon", 1)
         if X_train is None or y_train is None:
@@ -377,6 +378,45 @@ class DeltaTransformerSurfaceModel(BaseModel):
             self.model.load_state_dict(best_state)
 
         self.is_fitted = True
+
+        if debug_delta_stats:
+            token_std = self.delta_token_std
+            target_std = self.delta_target_std
+            if token_std is not None:
+                print(
+                    "delta_token_std:",
+                    f"mean={float(np.mean(token_std)):.6f} std={float(np.std(token_std)):.6f} "
+                    f"min={float(np.min(token_std)):.6f} max={float(np.max(token_std)):.6f}"
+                )
+            if target_std is not None:
+                print(
+                    "delta_target_std:",
+                    f"mean={float(np.mean(target_std)):.6f} std={float(np.std(target_std)):.6f} "
+                    f"min={float(np.min(target_std)):.6f} max={float(np.max(target_std)):.6f}"
+                )
+
+            n_eval = min(256, X_flat.shape[0])
+            if n_eval > 0:
+                X_eval = torch.tensor(X_flat[:n_eval], dtype=torch.float32).to(self.device)
+                y_eval = y_flat[:n_eval]
+                self.model.eval()
+                with torch.no_grad():
+                    with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
+                        preds_eval = self.model(X_eval).cpu().numpy()
+                mse_norm = float(np.mean((preds_eval - y_eval[:n_eval]) ** 2))
+                if self.normalize and self.delta_target_mean is not None and self.delta_target_std is not None:
+                    preds_denorm = self._denormalize_array(
+                        preds_eval, mean=self.delta_target_mean, std=self.delta_target_std
+                    )
+                    y_denorm = self._denormalize_array(
+                        y_eval[:n_eval], mean=self.delta_target_mean, std=self.delta_target_std
+                    )
+                    mse_denorm = float(np.mean((preds_denorm - y_denorm) ** 2))
+                else:
+                    mse_denorm = mse_norm
+                print(
+                    f"delta_mse normalized={mse_norm:.6f} denormalized={mse_denorm:.6f}"
+                )
         return self
 
     def _log_epoch_metrics(self, X_train, y_train, X_val, y_val, horizon: int, epoch: int,

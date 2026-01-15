@@ -209,6 +209,7 @@ def main():
                     fit_kwargs["log_loss_only"] = True
                 fit_kwargs["log_train_val"] = False
                 fit_kwargs["use_val_for_early_stopping"] = False
+                fit_kwargs["debug_delta_stats"] = args.model_id == "delta_transformer"
             model.fit(
                 X_train_use, y_train_use,
                 **fit_kwargs

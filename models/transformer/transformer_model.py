@@ -237,6 +237,7 @@ class TransformerSurfaceModel(BaseModel):
             X_val=None, y_val=None, **kwargs):
         log_interval = kwargs.pop("log_interval", None)
         log_train_val = kwargs.pop("log_train_val", False)
+        log_loss_only = kwargs.pop("log_loss_only", False)
         use_val_for_early_stopping = kwargs.pop("use_val_for_early_stopping", True)
         horizon = kwargs.get("horizon", 1)
         if X_train is None or y_train is None:
@@ -425,6 +426,18 @@ class TransformerSurfaceModel(BaseModel):
 
             if val_loader is None:
                 self.epochs_trained = epoch + 1
+                if log_loss_only and log_interval and (epoch + 1) % log_interval == 0:
+                    avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float("nan")
+                    avg_grad_norm = None
+                    if epoch_grad_norms:
+                        avg_grad_norm = float(np.mean(epoch_grad_norms))
+                    if avg_grad_norm is None:
+                        print(f"  epoch={epoch + 1} loss={avg_loss:.6f}")
+                    else:
+                        print(
+                            f"  epoch={epoch + 1} loss={avg_loss:.6f} "
+                            f"grad_norm={avg_grad_norm:.6f}"
+                        )
                 if log_train_val and log_interval and (epoch + 1) % log_interval == 0:
                     self._log_epoch_metrics(
                         X_train, y_train, X_val, y_val, horizon, epoch + 1,

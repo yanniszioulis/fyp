@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from forecasting.pipeline import ForecastingPipeline
 from evaluation.metrics import compute_all_metrics
 from models.transformer.transformer_model import TransformerSurfaceModel
+from models.delta_transformer.delta_transformer_model import DeltaTransformerSurfaceModel
 
 
 def _parse_csv_list(value, cast_fn=int):
@@ -71,6 +72,8 @@ def main():
                         help="Number of training samples to use in overfit mode (0 = all)")
     parser.add_argument("--overfit-epochs", type=int, default=200,
                         help="Epochs to run in overfit mode (overrides grid)")
+    parser.add_argument("--overfit-log-interval", type=int, default=1,
+                        help="Epoch interval for loss logging in overfit mode (0 = disable)")
     parser.add_argument("--overfit-no-regularization", action="store_true",
                         help="Set dropout/weight decay to 0 in overfit mode")
     args = parser.parse_args()
@@ -165,8 +168,13 @@ def main():
                 patience = config["patience"]
                 min_delta = config["min_delta"]
 
-            model = TransformerSurfaceModel(
-                name=f"transformer_w{window_id}_c{args.context_length}_h{args.horizon}",
+            ModelClass = (
+                DeltaTransformerSurfaceModel
+                if args.model_id == "delta_transformer"
+                else TransformerSurfaceModel
+            )
+            model = ModelClass(
+                name=f"{args.model_id}_w{window_id}_c{args.context_length}_h{args.horizon}",
                 d_model=config["d_model"],
                 n_heads=config["n_heads"],
                 n_layers=config["n_layers"],
@@ -182,11 +190,6 @@ def main():
                 min_delta=min_delta,
                 use_amp=args.use_amp,
                 use_causal=config.get("use_causal", True),
-                delta_mode=(args.model_id == "delta_transformer"),
-                input_delta=(args.model_id == "delta_transformer"),
-                use_anchor_token=not (args.model_id == "delta_transformer"),
-                scale_deltas=False,
-                delta_scale_factor=10.0 if args.model_id == "delta_transformer" else 1.0,
                 delta_loss_weighting=delta_loss_weighting,
                 delta_loss_alpha=delta_loss_alpha,
                 loss_scale=loss_scale,
@@ -201,8 +204,10 @@ def main():
                 fit_kwargs["X_val"] = X_val_use
                 fit_kwargs["y_val"] = y_val_use
             if args.overfit:
-                fit_kwargs["log_interval"] = 5
-                fit_kwargs["log_train_val"] = True
+                if args.overfit_log_interval and args.overfit_log_interval > 0:
+                    fit_kwargs["log_interval"] = args.overfit_log_interval
+                    fit_kwargs["log_loss_only"] = True
+                fit_kwargs["log_train_val"] = False
                 fit_kwargs["use_val_for_early_stopping"] = False
             model.fit(
                 X_train_use, y_train_use,

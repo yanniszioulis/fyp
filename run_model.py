@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from forecasting.pipeline import ForecastingPipeline
 from models.transformer.transformer_model import TransformerSurfaceModel
+from models.delta_transformer.delta_transformer_model import DeltaTransformerSurfaceModel
 
 
 def main():
@@ -234,7 +235,7 @@ def main():
         )
     elif args.model_id == "delta_transformer":
         results = pipeline.run_model(
-            model_factory=lambda name, **kwargs: TransformerSurfaceModel(
+            model_factory=lambda name, **kwargs: DeltaTransformerSurfaceModel(
                 name=name,
                 d_model=args.d_model,
                 n_heads=args.n_heads,
@@ -251,11 +252,6 @@ def main():
                 min_delta=args.min_delta,
                 use_amp=args.use_amp,
                 use_causal=args.use_causal,
-                delta_mode=True,
-                input_delta=True,
-                use_anchor_token=False,
-                scale_deltas=False,
-                delta_scale_factor=10.0
             ),
             model_id="delta_transformer",
             context_lengths=context_lengths,

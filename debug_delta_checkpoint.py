@@ -15,7 +15,8 @@ from evaluation.metrics import (
     compute_metrics_by_maturity,
     compute_metrics_by_moneyness,
 )
-from models.transformer.transformer_model import TransformerSurfaceModel, _SurfaceTransformer
+from models.delta_transformer.delta_transformer_model import DeltaTransformerSurfaceModel
+from models.transformer.transformer_model import _SurfaceTransformer
 
 
 def _summarize_array(name: str, arr: np.ndarray):
@@ -32,7 +33,7 @@ def _summarize_array(name: str, arr: np.ndarray):
     )
 
 
-def _load_transformer_checkpoint(path: str, device: str) -> Tuple[TransformerSurfaceModel, Dict[str, Any]]:
+def _load_transformer_checkpoint(path: str, device: str) -> Tuple[DeltaTransformerSurfaceModel, Dict[str, Any]]:
     import torch
     import sys
     import numpy.core as npcore
@@ -42,7 +43,7 @@ def _load_transformer_checkpoint(path: str, device: str) -> Tuple[TransformerSur
     sys.modules.setdefault("numpy._core.multiarray", npcore.multiarray)
 
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    model = TransformerSurfaceModel(
+    model = DeltaTransformerSurfaceModel(
         name=os.path.basename(path),
         d_model=ckpt["d_model"],
         n_heads=ckpt["n_heads"],
@@ -57,11 +58,15 @@ def _load_transformer_checkpoint(path: str, device: str) -> Tuple[TransformerSur
         normalize_mode=ckpt.get("normalize_mode", "per_point"),
         use_amp=ckpt.get("use_amp", False),
         use_causal=ckpt.get("use_causal", True),
-        delta_mode=ckpt.get("delta_mode", False),
-        input_delta=ckpt.get("input_delta", False),
-        use_anchor_token=ckpt.get("use_anchor_token", True),
+        input_delta=ckpt.get("input_delta", True),
+        use_anchor_token=ckpt.get("use_anchor_token", False),
         scale_deltas=ckpt.get("scale_deltas", False),
         delta_scale_eps=ckpt.get("delta_scale_eps", 1e-6),
+        delta_scale_factor=ckpt.get("delta_scale_factor", 10.0),
+        delta_loss_weighting=ckpt.get("delta_loss_weighting", False),
+        delta_loss_alpha=ckpt.get("delta_loss_alpha", 0.0),
+        loss_scale=ckpt.get("loss_scale", 1.0),
+        max_grad_norm=ckpt.get("max_grad_norm", 1.0),
         device=device,
     )
 

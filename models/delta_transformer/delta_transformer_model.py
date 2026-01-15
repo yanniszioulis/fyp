@@ -96,6 +96,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
                  normalize_mode: str = "per_point",
                  patience: int = 10,
                  min_delta: float = 0.0,
+                 baseline_mode: str = "last",
                  use_amp: bool = False,
                  use_causal: bool = True,
                  delta_loss_weighting: bool = False,
@@ -123,6 +124,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
         self.normalize_mode = normalize_mode
         self.patience = patience
         self.min_delta = min_delta
+        self.baseline_mode = baseline_mode
         self.use_amp = use_amp
         self.use_causal = use_causal
         self.delta_loss_weighting = delta_loss_weighting
@@ -166,6 +168,13 @@ class DeltaTransformerSurfaceModel(BaseModel):
         if deltas is None:
             raise ValueError("Delta transformer requires context_length >= 2")
         return deltas
+
+    def _compute_baseline(self, X: np.ndarray) -> np.ndarray:
+        if self.baseline_mode == "last":
+            return X[:, -1, :, :]
+        if self.baseline_mode == "mean":
+            return X.mean(axis=1)
+        raise ValueError(f"Unknown baseline_mode: {self.baseline_mode}")
 
     def _normalize_array(self, X: np.ndarray, mean: Optional[np.ndarray] = None,
                          std: Optional[np.ndarray] = None) -> np.ndarray:
@@ -224,8 +233,8 @@ class DeltaTransformerSurfaceModel(BaseModel):
         X_flat = self._flatten(X_input).astype(np.float32, copy=False)
         y_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
 
-        last_surface = X_train[:, -1, :, :].reshape(n_samples, self.n_features)
-        y_flat = y_flat - last_surface
+        baseline = self._compute_baseline(X_train).reshape(n_samples, self.n_features)
+        y_flat = y_flat - baseline
 
         if self.normalize:
             delta_flat = X_input.reshape(-1, self.n_features)
@@ -248,8 +257,8 @@ class DeltaTransformerSurfaceModel(BaseModel):
             X_val_input = self._build_input_sequence(X_val)
             X_val_flat = self._flatten(X_val_input).astype(np.float32, copy=False)
             y_val_flat = y_val.reshape(X_val_flat.shape[0], self.n_features).astype(np.float32, copy=False)
-            last_surface_val = X_val[:, -1, :, :].reshape(X_val_flat.shape[0], self.n_features)
-            y_val_flat = y_val_flat - last_surface_val
+            baseline_val = self._compute_baseline(X_val).reshape(X_val_flat.shape[0], self.n_features)
+            y_val_flat = y_val_flat - baseline_val
             if self.normalize:
                 X_val_flat = self._normalize_array(
                     X_val_flat, mean=self.delta_token_mean, std=self.delta_token_std
@@ -428,7 +437,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
         def _top_delta_rmse(X, y_true, y_pred, top_pct: float = 20.0):
             if X is None or y_true is None or y_pred is None:
                 return None
-            baseline = X[:, -1, :, :]
+            baseline = self._compute_baseline(X)
             delta_true = y_true - baseline
             delta_pred = y_pred - baseline
             target = delta_true
@@ -525,9 +534,9 @@ class DeltaTransformerSurfaceModel(BaseModel):
                 preds, mean=self.delta_target_mean, std=self.delta_target_std
             )
 
-        last_surface = X[:, -1, :, :].reshape(n_samples, n_tau, n_logm)
+        baseline = self._compute_baseline(X).reshape(n_samples, n_tau, n_logm)
         preds = preds.reshape(n_samples, n_tau, n_logm)
-        preds = preds + last_surface
+        preds = preds + baseline
         return preds
 
     def save_checkpoint(self, path: str):
@@ -550,6 +559,7 @@ class DeltaTransformerSurfaceModel(BaseModel):
             "normalize_mode": self.normalize_mode,
             "use_amp": self.use_amp,
             "use_causal": self.use_causal,
+            "baseline_mode": self.baseline_mode,
             "delta_loss_weighting": self.delta_loss_weighting,
             "delta_loss_alpha": self.delta_loss_alpha,
             "loss_scale": self.loss_scale,

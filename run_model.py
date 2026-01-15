@@ -166,6 +166,13 @@ def main():
         action="store_true",
         help="Save best checkpoint per window/context/horizon (transformer)"
     )
+    parser.add_argument(
+        "--delta-baseline",
+        dest="delta_baseline",
+        default="last",
+        choices=["last", "mean"],
+        help="Baseline for delta targets (delta transformer)"
+    )
     args = parser.parse_args()
 
     context_lengths = [int(x) for x in args.context_lengths.split(",") if x.strip()]
@@ -252,6 +259,7 @@ def main():
                 min_delta=args.min_delta,
                 use_amp=args.use_amp,
                 use_causal=args.use_causal,
+                baseline_mode=args.delta_baseline,
             ),
             model_id="delta_transformer",
             context_lengths=context_lengths,

@@ -76,6 +76,9 @@ def main():
                         help="Epoch interval for loss logging in overfit mode (0 = disable)")
     parser.add_argument("--overfit-no-regularization", action="store_true",
                         help="Set dropout/weight decay to 0 in overfit mode")
+    parser.add_argument("--delta-baseline", dest="delta_baseline", default="last",
+                        choices=["last", "mean"],
+                        help="Baseline for delta targets (delta transformer)")
     args = parser.parse_args()
 
     window_ids = _parse_csv_list(args.window_ids, int)
@@ -190,6 +193,11 @@ def main():
                 min_delta=min_delta,
                 use_amp=args.use_amp,
                 use_causal=config.get("use_causal", True),
+                baseline_mode=(
+                    config.get("baseline_mode", args.delta_baseline)
+                    if args.model_id == "delta_transformer"
+                    else "last"
+                ),
                 delta_loss_weighting=delta_loss_weighting,
                 delta_loss_alpha=delta_loss_alpha,
                 loss_scale=loss_scale,

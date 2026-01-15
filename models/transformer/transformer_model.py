@@ -133,6 +133,10 @@ class TransformerSurfaceModel(BaseModel):
         self.context_length = None
         self.mean = None
         self.std = None
+        self.delta_mean = None
+        self.delta_std = None
+        self.anchor_mean = None
+        self.anchor_std = None
         self.epochs_trained = 0
 
     def _flatten(self, X: np.ndarray) -> np.ndarray:
@@ -157,15 +161,32 @@ class TransformerSurfaceModel(BaseModel):
         last_surface = X[:, -1:, :, :]
         return np.concatenate([deltas, last_surface], axis=1)
 
-    def _normalize_array(self, X: np.ndarray) -> np.ndarray:
-        if self.mean is None or self.std is None:
+    def _normalize_array(self, X: np.ndarray, mean: Optional[np.ndarray] = None,
+                         std: Optional[np.ndarray] = None) -> np.ndarray:
+        mean = self.mean if mean is None else mean
+        std = self.std if std is None else std
+        if mean is None or std is None:
             raise ValueError("Model must be fitted before normalization")
-        return (X - self.mean) / (self.std + 1e-8)
+        return (X - mean) / (std + 1e-8)
 
-    def _denormalize_array(self, X: np.ndarray) -> np.ndarray:
-        if self.mean is None or self.std is None:
+    def _denormalize_array(self, X: np.ndarray, mean: Optional[np.ndarray] = None,
+                           std: Optional[np.ndarray] = None) -> np.ndarray:
+        mean = self.mean if mean is None else mean
+        std = self.std if std is None else std
+        if mean is None or std is None:
             raise ValueError("Model must be fitted before denormalization")
-        return X * (self.std + 1e-8) + self.mean
+        return X * (std + 1e-8) + mean
+
+    def _compute_stats(self, data_flat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if self.normalize_mode == "per_point":
+            mean = data_flat.mean(axis=0, keepdims=True)
+            std = data_flat.std(axis=0, keepdims=True)
+        elif self.normalize_mode == "global":
+            mean = data_flat.mean()
+            std = data_flat.std()
+        else:
+            raise ValueError(f"Unknown normalize_mode: {self.normalize_mode}")
+        return mean, std
 
     def fit(self, X_train, y_train=None, context_length: Optional[int] = None,
             X_val=None, y_val=None, **kwargs):
@@ -198,17 +219,30 @@ class TransformerSurfaceModel(BaseModel):
             y_flat = y_flat - last_surface
 
         if self.normalize:
-            flat_for_stats = X_flat.reshape(-1, self.n_features)
-            if self.normalize_mode == "per_point":
-                self.mean = flat_for_stats.mean(axis=0, keepdims=True)
-                self.std = flat_for_stats.std(axis=0, keepdims=True)
-            elif self.normalize_mode == "global":
-                self.mean = flat_for_stats.mean()
-                self.std = flat_for_stats.std()
+            if self.input_delta:
+                # Stats for delta tokens/targets
+                delta_tokens = X_train[:, :-1, :, :] - X_train[:, 1:, :, :]
+                delta_flat = delta_tokens.reshape(-1, self.n_features)
+                self.delta_mean, self.delta_std = self._compute_stats(delta_flat)
+                # Stats for anchor token (last surface)
+                anchor_flat = X_train[:, -1, :, :].reshape(-1, self.n_features)
+                self.anchor_mean, self.anchor_std = self._compute_stats(anchor_flat)
+                # Normalize input tokens
+                X_tokens = X_input.reshape(n_samples, self.context_length, self.n_features)
+                X_tokens[:, :-1, :] = self._normalize_array(
+                    X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
+                )
+                X_tokens[:, -1, :] = self._normalize_array(
+                    X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                )
+                X_flat = X_tokens.reshape(n_samples, self.context_length, self.n_features)
+                # Normalize delta targets with delta stats
+                y_flat = self._normalize_array(y_flat, mean=self.delta_mean, std=self.delta_std)
             else:
-                raise ValueError(f"Unknown normalize_mode: {self.normalize_mode}")
-            X_flat = self._normalize_array(X_flat)
-            y_flat = self._normalize_array(y_flat)
+                flat_for_stats = X_flat.reshape(-1, self.n_features)
+                self.mean, self.std = self._compute_stats(flat_for_stats)
+                X_flat = self._normalize_array(X_flat)
+                y_flat = self._normalize_array(y_flat)
 
         dataset = TensorDataset(
             torch.tensor(X_flat, dtype=torch.float32),
@@ -329,7 +363,17 @@ class TransformerSurfaceModel(BaseModel):
         X_input = self._build_input_sequence(X)
         X_flat = self._flatten(X_input).astype(np.float32, copy=False)
         if self.normalize:
-            X_flat = self._normalize_array(X_flat)
+            if self.input_delta and self.delta_mean is not None and self.anchor_mean is not None:
+                X_tokens = X_flat.reshape(n_samples, self.context_length, self.n_features)
+                X_tokens[:, :-1, :] = self._normalize_array(
+                    X_tokens[:, :-1, :], mean=self.delta_mean, std=self.delta_std
+                )
+                X_tokens[:, -1, :] = self._normalize_array(
+                    X_tokens[:, -1, :], mean=self.anchor_mean, std=self.anchor_std
+                )
+                X_flat = X_tokens.reshape(n_samples, self.context_length, self.n_features)
+            else:
+                X_flat = self._normalize_array(X_flat)
 
         self.model.eval()
         with torch.no_grad():
@@ -338,7 +382,10 @@ class TransformerSurfaceModel(BaseModel):
             preds = preds.cpu().numpy()
 
         if self.normalize:
-            preds = self._denormalize_array(preds)
+            if self.delta_mode and self.delta_mean is not None:
+                preds = self._denormalize_array(preds, mean=self.delta_mean, std=self.delta_std)
+            else:
+                preds = self._denormalize_array(preds)
 
         if self.delta_mode:
             last_surface = X[:, -1, :, :].reshape(n_samples, n_tau, n_logm)
@@ -370,5 +417,9 @@ class TransformerSurfaceModel(BaseModel):
             "delta_mode": self.delta_mode,
             "input_delta": self.input_delta,
             "mean": self.mean,
-            "std": self.std
+            "std": self.std,
+            "delta_mean": self.delta_mean,
+            "delta_std": self.delta_std,
+            "anchor_mean": self.anchor_mean,
+            "anchor_std": self.anchor_std
         }, path)

@@ -218,9 +218,41 @@ def main():
                 min_delta=args.min_delta,
                 use_amp=args.use_amp,
                 use_causal=args.use_causal,
-                delta_mode=args.delta_mode
+                delta_mode=False,
+                input_delta=False
             ),
             model_id="transformer",
+            context_lengths=context_lengths,
+            horizons=horizons,
+            train_on_val=False,
+            use_val=True,
+            save_checkpoints=args.save_checkpoint,
+            min_train_samples=1,
+            save_results=args.save_results
+        )
+    elif args.model_id == "delta_transformer":
+        results = pipeline.run_model(
+            model_factory=lambda name, **kwargs: TransformerSurfaceModel(
+                name=name,
+                d_model=args.d_model,
+                n_heads=args.n_heads,
+                n_layers=args.n_layers,
+                dropout=args.dropout,
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
+                batch_size=args.batch_size,
+                num_epochs=args.num_epochs,
+                pool=args.pool,
+                normalize=args.normalize,
+                normalize_mode=args.normalize_mode,
+                patience=args.patience,
+                min_delta=args.min_delta,
+                use_amp=args.use_amp,
+                use_causal=args.use_causal,
+                delta_mode=True,
+                input_delta=True
+            ),
+            model_id="delta_transformer",
             context_lengths=context_lengths,
             horizons=horizons,
             train_on_val=False,
@@ -232,7 +264,7 @@ def main():
     else:
         raise SystemExit(
             f"Unknown model '{args.model_id}'. "
-            "Supported: persistence, transformer."
+            "Supported: persistence, transformer, delta_transformer."
         )
 
     print("\n" + "=" * 60)

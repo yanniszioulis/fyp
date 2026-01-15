@@ -98,6 +98,7 @@ class TransformerSurfaceModel(BaseModel):
                  use_amp: bool = False,
                  use_causal: bool = True,
                  delta_mode: bool = False,
+                 input_delta: bool = False,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -122,6 +123,7 @@ class TransformerSurfaceModel(BaseModel):
         self.use_amp = use_amp
         self.use_causal = use_causal
         self.delta_mode = delta_mode
+        self.input_delta = input_delta
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -172,6 +174,10 @@ class TransformerSurfaceModel(BaseModel):
 
         X_flat = self._flatten(X_train).astype(np.float32, copy=False)
         y_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
+
+        if self.input_delta:
+            last_surface = X_train[:, -1, :, :].reshape(n_samples, self.n_features)
+            X_flat = X_flat - last_surface[:, None, :]
 
         if self.delta_mode:
             last_surface = X_train[:, -1, :, :].reshape(n_samples, self.n_features)
@@ -307,6 +313,9 @@ class TransformerSurfaceModel(BaseModel):
             )
 
         X_flat = self._flatten(X).astype(np.float32, copy=False)
+        if self.input_delta:
+            last_surface = X[:, -1, :, :].reshape(n_samples, self.n_features)
+            X_flat = X_flat - last_surface[:, None, :]
         if self.normalize:
             X_flat = self._normalize_array(X_flat)
 
@@ -347,6 +356,7 @@ class TransformerSurfaceModel(BaseModel):
             "use_amp": self.use_amp,
             "use_causal": self.use_causal,
             "delta_mode": self.delta_mode,
+            "input_delta": self.input_delta,
             "mean": self.mean,
             "std": self.std
         }, path)

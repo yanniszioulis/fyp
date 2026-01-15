@@ -69,8 +69,8 @@ def main():
 
     window_ids = _parse_csv_list(args.window_ids, int)
 
-    if args.model_id != "transformer":
-        raise SystemExit("Only transformer tuning is supported right now.")
+    if args.model_id not in {"transformer", "delta_transformer"}:
+        raise SystemExit("Only transformer and delta_transformer tuning are supported right now.")
 
     grid_file = args.grid_file
     if grid_file is None:
@@ -138,7 +138,8 @@ def main():
                 min_delta=config["min_delta"],
                 use_amp=args.use_amp,
                 use_causal=config.get("use_causal", True),
-                delta_mode=config.get("delta_mode", False)
+                delta_mode=(args.model_id == "delta_transformer"),
+                input_delta=(args.model_id == "delta_transformer")
             )
 
             model.fit(

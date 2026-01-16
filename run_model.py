@@ -141,6 +141,13 @@ def main():
         help="Enable automatic mixed precision (transformer)"
     )
     parser.add_argument(
+        "--baseline-decay",
+        dest="baseline_decay",
+        type=float,
+        default=1.0,
+        help="Baseline decay parameter: -1 for persistence, 0.0-1.0 for exponential-weighted (default: 1.0 = mean)"
+    )
+    parser.add_argument(
         "--save-ckpt",
         dest="save_checkpoint",
         action="store_true",
@@ -196,7 +203,8 @@ def main():
                 normalize=args.normalize,
                 patience=args.patience,
                 min_delta=args.min_delta,
-                use_amp=args.use_amp
+                use_amp=args.use_amp,
+                baseline_decay=args.baseline_decay
             ),
             model_id="transformer",
             context_lengths=context_lengths,

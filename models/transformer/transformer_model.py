@@ -38,6 +38,8 @@ class _SurfaceTransformer(nn.Module):
 
         self.input_proj = nn.Linear(n_features, d_model)
         self.positional = nn.Parameter(torch.zeros(context_length, d_model))
+        # Add layer norm before encoder to stabilize inputs
+        self.pre_encoder_norm = nn.LayerNorm(d_model)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -68,10 +70,21 @@ class _SurfaceTransformer(nn.Module):
         if torch.any(torch.isnan(x)) or torch.any(torch.isinf(x)):
             raise ValueError(f"NaN/Inf after positional encoding")
         
+        # Normalize before encoder to stabilize
+        x = self.pre_encoder_norm(x)
+        # Check for NaN after pre-encoder norm
+        if torch.any(torch.isnan(x)) or torch.any(torch.isinf(x)):
+            print(f"Error: NaN/Inf after pre_encoder_norm")
+            print(f"  Input stats: min={x.min().item():.6f}, max={x.max().item():.6f}, mean={x.mean().item():.6f}, std={x.std().item():.6f}")
+            raise ValueError(f"NaN/Inf after pre_encoder_norm")
+        
         x = self.encoder(x)
         # Check for NaN after encoder
         if torch.any(torch.isnan(x)) or torch.any(torch.isinf(x)):
-            raise ValueError(f"NaN/Inf after encoder")
+            print(f"Error: NaN/Inf after encoder")
+            print(f"  Input to encoder stats: min={x.min().item():.6f}, max={x.max().item():.6f}, mean={x.mean().item():.6f}, std={x.std().item():.6f}")
+            # Try to get more info about encoder layers
+            raise ValueError(f"NaN/Inf after encoder - check attention mechanism or feedforward network")
         
         if self.pool == "mean":
             x = x.mean(dim=1)
@@ -146,14 +159,20 @@ class TransformerSurfaceModel(BaseModel):
         """Initialize model weights to prevent NaN outputs."""
         for name, module in self.model.named_modules():
             if isinstance(module, torch.nn.Linear):
-                # Use Xavier uniform initialization
-                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
+                # Use smaller initialization to prevent overflow
+                torch.nn.init.xavier_uniform_(module.weight, gain=0.5)
                 if module.bias is not None:
+                    torch.nn.init.constant_(module.bias, 0.0)
+            elif isinstance(module, torch.nn.LayerNorm):
+                # LayerNorm should be initialized to 1 and 0
+                if hasattr(module, 'weight') and module.weight is not None:
+                    torch.nn.init.constant_(module.weight, 1.0)
+                if hasattr(module, 'bias') and module.bias is not None:
                     torch.nn.init.constant_(module.bias, 0.0)
         
         # Initialize positional encoding with small values
         if hasattr(self.model, 'positional'):
-            torch.nn.init.normal_(self.model.positional, mean=0.0, std=0.02)
+            torch.nn.init.normal_(self.model.positional, mean=0.0, std=0.01)
 
     def _flatten(self, X: np.ndarray) -> np.ndarray:
         # X: (n_samples, context, n_tau, n_logm)
@@ -262,8 +281,8 @@ class TransformerSurfaceModel(BaseModel):
                 raise ValueError(f"Normalization stats contain Inf: mean_corr has Inf={np.any(np.isinf(self.mean_corr))}, std_corr has Inf={np.any(np.isinf(self.std_corr))}")
             
             y_correction_flat = (y_correction_flat - self.mean_corr) / self.std_corr
-            # Clip extreme values to prevent overflow
-            y_correction_flat = np.clip(y_correction_flat, -10.0, 10.0)
+            # Clip extreme values more aggressively to prevent overflow
+            y_correction_flat = np.clip(y_correction_flat, -5.0, 5.0)
             
             # Check for NaN/Inf after normalization
             if np.any(np.isnan(y_correction_flat)) or np.any(np.isinf(y_correction_flat)):
@@ -297,9 +316,9 @@ class TransformerSurfaceModel(BaseModel):
             if self.normalize:
                 # Use training stats for normalization
                 X_val_flat = (X_val_flat - self.mean) / self.std
-                X_val_flat = np.clip(X_val_flat, -10.0, 10.0)
+                X_val_flat = np.clip(X_val_flat, -5.0, 5.0)
                 y_correction_val_flat = (y_correction_val_flat - self.mean_corr) / self.std_corr
-                y_correction_val_flat = np.clip(y_correction_val_flat, -10.0, 10.0)
+                y_correction_val_flat = np.clip(y_correction_val_flat, -5.0, 5.0)
             baseline_val_flat = baseline_val.reshape(X_val.shape[0], self.n_features).astype(np.float32)
             y_val_flat = y_val.reshape(X_val.shape[0], self.n_features).astype(np.float32)
             val_dataset = TensorDataset(

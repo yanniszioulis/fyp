@@ -52,7 +52,7 @@ def main():
         return
     
     window = pipeline.windows[0]  # Window 0
-    context_length = 21
+    context_length = 5
     horizon = 21
     
     print(f"\n[3/4] Selecting consecutive days from Window {window.window_id}...")
@@ -69,9 +69,9 @@ def main():
     all_window_indices = np.sort(all_window_indices)
     
     # Sample size requirements
-    max_train_samples = 700
-    max_val_samples = 100
-    max_test_samples = 200
+    max_train_samples = 1400
+    max_val_samples = 200
+    max_test_samples = 400
     
     # Calculate days needed for each split
     train_days_needed = max_train_samples + context_length + horizon - 1
@@ -243,13 +243,13 @@ def main():
         context_length=context_length,
         d_model=8,  # Increased from 512
         n_heads=4,    # Increased from 16
-        n_layers=2,   # Increased from 6
-        dropout=0.2,
+        n_layers=4,   # Increased from 6
+        dropout=0.4,
         pool="last"
     ).to(device)
     
-    optimizer = torch.optim.AdamW(transformer.parameters(), lr=1e-2, weight_decay=0.0)  # Lower LR for stability
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
+    optimizer = torch.optim.AdamW(transformer.parameters(), lr=1e-1, weight_decay=0.0)  # Lower LR for stability
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=20)
     # Note: loss is computed as RMSE on surfaces (not MSE on corrections)
     scaler = GradScaler(enabled=False)
     
@@ -293,7 +293,7 @@ def main():
     print("EPOCH | TRAIN LOSS | VAL LOSS | TEST LOSS | TRAIN RMSE | VAL RMSE | TEST RMSE")
     print("=" * 70)
     
-    num_epochs = 60  # More epochs for overfitting
+    num_epochs = 100  # More epochs for overfitting
     for epoch in range(1, num_epochs + 1):
         # Training
         transformer.train()

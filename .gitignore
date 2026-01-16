@@ -28,6 +28,9 @@ results/*
 !results/tuning/
 !results/tuning/**
 
+# HOT (reference implementation at root level only)
+/HOT/
+
 # Misc
 *.log
 *.tmp

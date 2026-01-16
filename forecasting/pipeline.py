@@ -225,6 +225,11 @@ class ForecastingPipeline:
                         if X_val is not None and y_val is not None:
                             fit_params["X_val"] = X_val
                             fit_params["y_val"] = y_val
+                        # Pass tau_grid and logm_grid for GNN models
+                        if hasattr(self, 'tau_grid') and self.tau_grid is not None:
+                            fit_params["tau_grid"] = self.tau_grid
+                        if hasattr(self, 'logm_grid') and self.logm_grid is not None:
+                            fit_params["logm_grid"] = self.logm_grid
                         model.fit(
                             X_train if len(X_train) > 0 else None,
                             y_train if len(X_train) > 0 else None,

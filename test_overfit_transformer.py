@@ -53,7 +53,7 @@ def main():
     
     window = pipeline.windows[0]  # Window 0
     context_length = 21
-    horizon = 5
+    horizon = 21
     
     print(f"\n[3/4] Selecting consecutive days from Window {window.window_id}...")
     print(f"  Context: {context_length} days")
@@ -69,9 +69,9 @@ def main():
     all_window_indices = np.sort(all_window_indices)
     
     # Sample size requirements
-    max_train_samples = 70
-    max_val_samples = 10
-    max_test_samples = 20
+    max_train_samples = 700
+    max_val_samples = 100
+    max_test_samples = 200
     
     # Calculate days needed for each split
     train_days_needed = max_train_samples + context_length + horizon - 1
@@ -188,7 +188,7 @@ def main():
         num_epochs=1,  # Not used, we'll train manually
         pool="last",
         normalize=True,
-        baseline_decay=2,  # -1 means use persistence (last surface) as baseline
+        baseline_decay=-1,  # -1 means use persistence (last surface) as baseline
         device=str(device)
     )
     
@@ -241,14 +241,14 @@ def main():
     transformer = _SurfaceTransformer(
         n_features=n_features,
         context_length=context_length,
-        d_model=1024,  # Increased from 512
-        n_heads=32,    # Increased from 16
-        n_layers=12,   # Increased from 6
-        dropout=0.0,
+        d_model=8,  # Increased from 512
+        n_heads=4,    # Increased from 16
+        n_layers=2,   # Increased from 6
+        dropout=0.2,
         pool="last"
     ).to(device)
     
-    optimizer = torch.optim.AdamW(transformer.parameters(), lr=1e-3, weight_decay=0.0)  # Lower LR for stability
+    optimizer = torch.optim.AdamW(transformer.parameters(), lr=1e-2, weight_decay=0.0)  # Lower LR for stability
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20)
     # Note: loss is computed as RMSE on surfaces (not MSE on corrections)
     scaler = GradScaler(enabled=False)
@@ -293,7 +293,7 @@ def main():
     print("EPOCH | TRAIN LOSS | VAL LOSS | TEST LOSS | TRAIN RMSE | VAL RMSE | TEST RMSE")
     print("=" * 70)
     
-    num_epochs = 50  # More epochs for overfitting
+    num_epochs = 60  # More epochs for overfitting
     for epoch in range(1, num_epochs + 1):
         # Training
         transformer.train()

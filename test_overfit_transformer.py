@@ -52,8 +52,8 @@ def main():
         return
     
     window = pipeline.windows[0]  # Window 0
-    context_length = 63
-    horizon = 21
+    context_length = 21
+    horizon = 5
     
     print(f"\n[3/4] Selecting consecutive days from Window {window.window_id}...")
     print(f"  Context: {context_length} days")
@@ -180,7 +180,7 @@ def main():
         name="test_memorization",
         d_model=128,
         n_heads=4,
-        n_layers=4,
+        n_layers=2,
         dropout=0.0,
         learning_rate=1e-1,
         weight_decay=0.0,
@@ -188,7 +188,7 @@ def main():
         num_epochs=1,  # Not used, we'll train manually
         pool="last",
         normalize=True,
-        baseline_decay=-1,  # -1 means use persistence (last surface) as baseline
+        baseline_decay=2,  # -1 means use persistence (last surface) as baseline
         device=str(device)
     )
     

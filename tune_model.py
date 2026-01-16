@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from forecasting.pipeline import ForecastingPipeline
 from evaluation.metrics import compute_all_metrics
 from models.transformer.transformer_model import TransformerSurfaceModel
+from models.persistence.persistence_model import PersistenceModel
 
 
 def _parse_csv_list(value, cast_fn=int):
@@ -41,6 +42,7 @@ def _default_transformer_grid():
         "normalize": [True],
         "patience": [5],
         "min_delta": [0.0],
+        "baseline_decay": [1.0],  # Default to mean baseline (1.0), use -1 for persistence
     }
 
 
@@ -106,6 +108,14 @@ def main():
             print(f"Skipping window {window_id}: no validation samples")
             continue
 
+        # Compute persistence baseline for this window/config
+        persistence_model = PersistenceModel()
+        persistence_model.fit(X_train, y_train)
+        persistence_train_preds = persistence_model.predict_horizon(X_train, horizon=args.horizon)
+        persistence_val_preds = persistence_model.predict_horizon(X_val, horizon=args.horizon)
+        persistence_train_metrics = compute_all_metrics(y_train, persistence_train_preds)
+        persistence_val_metrics = compute_all_metrics(y_val, persistence_val_preds)
+        
         grid_list = list(_build_grid(grid_spec))
         total_configs = len(grid_list)
         print(
@@ -113,6 +123,12 @@ def main():
             f"context={args.context_length} | horizon={args.horizon}"
         )
         print(f"Grid size: {total_configs} configs")
+        print(
+            f"Persistence baseline: "
+            f"train_iv_rmse={persistence_train_metrics['iv_rmse']:.6f}  "
+            f"val_iv_rmse={persistence_val_metrics['iv_rmse']:.6f}"
+        )
+        print()
 
         best_val = float("inf")
         best_result = None
@@ -132,7 +148,8 @@ def main():
                 normalize=config["normalize"],
                 patience=config["patience"],
                 min_delta=config["min_delta"],
-                use_amp=args.use_amp
+                use_amp=args.use_amp,
+                baseline_decay=config.get("baseline_decay", 1.0)  # Default to 1.0 (mean), -1 for persistence
             )
 
             model.fit(
@@ -164,6 +181,12 @@ def main():
                 f"  train_iv_rmse={train_metrics['iv_rmse']:.6f}  "
                 f"val_iv_rmse={val_metrics['iv_rmse']:.6f}"
             )
+            # Compare to persistence
+            train_improvement = (persistence_train_metrics['iv_rmse'] - train_metrics['iv_rmse']) / persistence_train_metrics['iv_rmse'] * 100
+            val_improvement = (persistence_val_metrics['iv_rmse'] - val_metrics['iv_rmse']) / persistence_val_metrics['iv_rmse'] * 100
+            print(
+                f"  vs persistence: train={train_improvement:+.2f}%  val={val_improvement:+.2f}%"
+            )
 
             if val_metrics["iv_rmse"] < best_val:
                 best_val = val_metrics["iv_rmse"]
@@ -171,9 +194,12 @@ def main():
                 print(f"  best_so_far: val_iv_rmse={best_val:.6f}")
 
         if best_result:
+            best_val_improvement = (persistence_val_metrics['iv_rmse'] - best_result['val_metrics']['iv_rmse']) / persistence_val_metrics['iv_rmse'] * 100
+            best_train_improvement = (persistence_train_metrics['iv_rmse'] - best_result['train_metrics']['iv_rmse']) / persistence_train_metrics['iv_rmse'] * 100
             print("\nBest config:")
             print(f"  val_iv_rmse={best_result['val_metrics']['iv_rmse']:.6f}")
             print(f"  train_iv_rmse={best_result['train_metrics']['iv_rmse']:.6f}")
+            print(f"  vs persistence: train={best_train_improvement:+.2f}%  val={best_val_improvement:+.2f}%")
             print(f"  cfg={best_result['config']}")
 
     os.makedirs(os.path.join(args.results_dir, "tuning"), exist_ok=True)

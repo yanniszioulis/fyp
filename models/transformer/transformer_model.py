@@ -1,5 +1,6 @@
 """
-Transformer model for forecasting IV surfaces (temporal transformer).
+Transformer model for forecasting IV surfaces via correction prediction.
+Predicts correction from exponential-weighted baseline to target surface.
 """
 
 from typing import Optional
@@ -13,7 +14,8 @@ try:
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
-    from torch.cuda.amp import autocast, GradScaler
+    from torch.amp import autocast
+    from torch.cuda.amp import GradScaler
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -68,7 +70,8 @@ class _SurfaceTransformer(nn.Module):
 
 class TransformerSurfaceModel(BaseModel):
     """
-    Temporal transformer that treats each surface as one token.
+    Temporal transformer that predicts correction from exponential-weighted
+    baseline to target surface. Each surface is treated as one token.
     """
 
     def __init__(self,
@@ -86,6 +89,7 @@ class TransformerSurfaceModel(BaseModel):
                  patience: int = 10,
                  min_delta: float = 0.0,
                  use_amp: bool = False,
+                 baseline_decay: float = 1.0,
                  device: Optional[str] = None):
         super().__init__(name=name)
         if not TORCH_AVAILABLE:
@@ -107,6 +111,7 @@ class TransformerSurfaceModel(BaseModel):
         self.patience = patience
         self.min_delta = min_delta
         self.use_amp = use_amp
+        self.baseline_decay = baseline_decay
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = None
@@ -114,13 +119,47 @@ class TransformerSurfaceModel(BaseModel):
         self.n_logm = None
         self.n_features = None
         self.context_length = None
-        self.mean = None
-        self.std = None
+        self.mean = None  # For X normalization
+        self.std = None   # For X normalization
+        self.mean_corr = None  # For correction normalization
+        self.std_corr = None   # For correction normalization
 
     def _flatten(self, X: np.ndarray) -> np.ndarray:
         # X: (n_samples, context, n_tau, n_logm)
         n_samples, context_length, n_tau, n_logm = X.shape
         return X.reshape(n_samples, context_length, n_tau * n_logm)
+
+    def _compute_baseline(self, X: np.ndarray) -> np.ndarray:
+        """
+        Compute exponential-weighted baseline from context surfaces.
+        
+        Parameters:
+        -----------
+        X : np.ndarray, shape (n_samples, context_length, n_tau, n_logm)
+            Context surfaces
+            
+        Returns:
+        --------
+        baseline : np.ndarray, shape (n_samples, n_tau, n_logm)
+            Weighted average baseline surface
+        """
+        n_samples, context_length, n_tau, n_logm = X.shape
+        
+        # Use persistence (last surface) if baseline_decay is None or -1
+        if self.baseline_decay is None or self.baseline_decay == -1:
+            return X[:, -1, :, :].copy()  # Persistence: just use last surface
+        
+        if context_length == 1:
+            return X[:, 0, :, :]
+        
+        # Exponential-weighted average
+        indices = np.arange(context_length)
+        normalized_indices = indices / max(1, context_length - 1)
+        weights = np.exp((self.baseline_decay - 1.0) * normalized_indices)
+        weights = weights / weights.sum()
+        
+        baseline = np.average(X, axis=1, weights=weights)
+        return baseline
 
     def _normalize_array(self, X: np.ndarray) -> np.ndarray:
         if self.mean is None or self.std is None:
@@ -154,20 +193,34 @@ class TransformerSurfaceModel(BaseModel):
         self.n_logm = n_logm
         self.n_features = n_tau * n_logm
 
+        baseline_train = self._compute_baseline(X_train)
+        y_correction = y_train - baseline_train
+
         X_flat = self._flatten(X_train).astype(np.float32, copy=False)
-        y_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
+        y_correction_flat = y_correction.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
 
         if self.normalize:
-            # Per-feature normalization across all samples and time steps
+            # X uses its own stats, corrections use their own stats (like test_overfit_transformer.py)
             flat_for_stats = X_flat.reshape(-1, self.n_features)
             self.mean = flat_for_stats.mean(axis=0, keepdims=True)
             self.std = flat_for_stats.std(axis=0, keepdims=True)
-            X_flat = self._normalize_array(X_flat)
-            y_flat = self._normalize_array(y_flat)
+            self.std = np.maximum(self.std, 1e-8)
+            X_flat = (X_flat - self.mean) / self.std
+            
+            # Corrections normalized with their own statistics
+            self.mean_corr = y_correction_flat.mean(axis=0, keepdims=True)
+            self.std_corr = y_correction_flat.std(axis=0, keepdims=True)
+            self.std_corr = np.maximum(self.std_corr, 1e-8)
+            y_correction_flat = (y_correction_flat - self.mean_corr) / self.std_corr
 
+        # Include baseline and true targets in dataset for loss computation
+        baseline_train_flat = baseline_train.reshape(n_samples, self.n_features).astype(np.float32)
+        y_train_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32)
         dataset = TensorDataset(
             torch.tensor(X_flat, dtype=torch.float32),
-            torch.tensor(y_flat, dtype=torch.float32)
+            torch.tensor(y_correction_flat, dtype=torch.float32),
+            torch.tensor(baseline_train_flat, dtype=torch.float32),
+            torch.tensor(y_train_flat, dtype=torch.float32)
         )
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
@@ -175,13 +228,22 @@ class TransformerSurfaceModel(BaseModel):
         if X_val is not None and y_val is not None:
             if X_val.ndim != 4:
                 raise ValueError(f"Expected X_val shape (n_samples, context, n_tau, n_logm), got {X_val.shape}")
+            
+            baseline_val = self._compute_baseline(X_val)
+            y_correction_val = y_val - baseline_val
+            
             X_val_flat = self._flatten(X_val).astype(np.float32, copy=False)
-            y_val_flat = y_val.reshape(X_val_flat.shape[0], self.n_features).astype(np.float32, copy=False)
+            y_correction_val_flat = y_correction_val.reshape(X_val_flat.shape[0], self.n_features).astype(np.float32, copy=False)
             if self.normalize:
-                X_val_flat = self._normalize_array(X_val_flat)
-                y_val_flat = self._normalize_array(y_val_flat)
+                # Use training stats for normalization
+                X_val_flat = (X_val_flat - self.mean) / self.std
+                y_correction_val_flat = (y_correction_val_flat - self.mean_corr) / self.std_corr
+            baseline_val_flat = baseline_val.reshape(X_val.shape[0], self.n_features).astype(np.float32)
+            y_val_flat = y_val.reshape(X_val.shape[0], self.n_features).astype(np.float32)
             val_dataset = TensorDataset(
                 torch.tensor(X_val_flat, dtype=torch.float32),
+                torch.tensor(y_correction_val_flat, dtype=torch.float32),
+                torch.tensor(baseline_val_flat, dtype=torch.float32),
                 torch.tensor(y_val_flat, dtype=torch.float32)
             )
             val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
@@ -201,8 +263,12 @@ class TransformerSurfaceModel(BaseModel):
             lr=self.learning_rate,
             weight_decay=self.weight_decay
         )
-        loss_fn = nn.MSELoss()
+        # Loss is RMSE on surfaces (not MSE on corrections), matching test_overfit_transformer.py
         scaler = GradScaler(enabled=self.use_amp and self.device.startswith("cuda"))
+        
+        # Convert normalization stats to tensors for loss computation
+        mean_corr_t = torch.tensor(self.mean_corr, dtype=torch.float32).to(self.device) if self.normalize else None
+        std_corr_t = torch.tensor(self.std_corr, dtype=torch.float32).to(self.device) if self.normalize else None
 
         best_state = None
         best_val = float("inf")
@@ -210,13 +276,25 @@ class TransformerSurfaceModel(BaseModel):
 
         self.model.train()
         for _ in range(self.num_epochs):
-            for batch_x, batch_y in loader:
+            for batch_x, batch_y_correction, batch_baseline, batch_y_true in loader:
                 batch_x = batch_x.to(self.device)
-                batch_y = batch_y.to(self.device)
+                batch_y_correction = batch_y_correction.to(self.device)
+                batch_baseline = batch_baseline.to(self.device)
+                batch_y_true = batch_y_true.to(self.device)
                 optimizer.zero_grad(set_to_none=True)
-                with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
-                    preds = self.model(batch_x)
-                    loss = loss_fn(preds, batch_y)
+                with autocast(device_type="cuda" if self.use_amp and self.device.startswith("cuda") else "cpu", enabled=self.use_amp and self.device.startswith("cuda")):
+                    pred_correction_norm = self.model(batch_x)  # Predicts normalized corrections
+                    
+                    # Denormalize corrections and add to baseline to get surface predictions
+                    if self.normalize:
+                        pred_correction = pred_correction_norm * std_corr_t + mean_corr_t
+                    else:
+                        pred_correction = pred_correction_norm
+                    
+                    # Compute RMSE on surfaces (not corrections)
+                    pred_surface = batch_baseline + pred_correction
+                    loss = torch.sqrt(torch.mean((pred_surface - batch_y_true) ** 2))
+                    
                 if not torch.isfinite(loss):
                     raise ValueError("Non-finite loss encountered during training")
                 scaler.scale(loss).backward()
@@ -231,12 +309,23 @@ class TransformerSurfaceModel(BaseModel):
             self.model.eval()
             val_losses = []
             with torch.no_grad():
-                for batch_x, batch_y in val_loader:
+                for batch_x, batch_y_correction, batch_baseline, batch_y_true in val_loader:
                     batch_x = batch_x.to(self.device)
-                    batch_y = batch_y.to(self.device)
-                    with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
-                        preds = self.model(batch_x)
-                        val_loss = loss_fn(preds, batch_y).item()
+                    batch_y_correction = batch_y_correction.to(self.device)
+                    batch_baseline = batch_baseline.to(self.device)
+                    batch_y_true = batch_y_true.to(self.device)
+                    with autocast(device_type="cuda" if self.use_amp and self.device.startswith("cuda") else "cpu", enabled=self.use_amp and self.device.startswith("cuda")):
+                        pred_correction_norm = self.model(batch_x)  # Predicts normalized corrections
+                        
+                        # Denormalize corrections and add to baseline
+                        if self.normalize:
+                            pred_correction = pred_correction_norm * std_corr_t + mean_corr_t
+                        else:
+                            pred_correction = pred_correction_norm
+                        
+                        # Compute RMSE on surfaces
+                        pred_surface = batch_baseline + pred_correction
+                        val_loss = torch.sqrt(torch.mean((pred_surface - batch_y_true) ** 2)).item()
                     val_losses.append(val_loss)
             self.model.train()
 
@@ -276,20 +365,27 @@ class TransformerSurfaceModel(BaseModel):
                 f"Surface shape mismatch: expected ({self.n_tau}, {self.n_logm}), got ({n_tau}, {n_logm})"
             )
 
+        baseline = self._compute_baseline(X)
         X_flat = self._flatten(X).astype(np.float32, copy=False)
         if self.normalize:
-            X_flat = self._normalize_array(X_flat)
+            X_flat = (X_flat - self.mean) / self.std
 
         self.model.eval()
         with torch.no_grad():
-            with autocast(enabled=self.use_amp and self.device.startswith("cuda")):
-                preds = self.model(torch.tensor(X_flat, dtype=torch.float32).to(self.device))
-            preds = preds.cpu().numpy()
+            with autocast(device_type="cuda" if self.use_amp and self.device.startswith("cuda") else "cpu", enabled=self.use_amp and self.device.startswith("cuda")):
+                pred_correction_flat_norm = self.model(torch.tensor(X_flat, dtype=torch.float32).to(self.device))
+            pred_correction_flat_norm = pred_correction_flat_norm.cpu().numpy()
 
         if self.normalize:
-            preds = self._denormalize_array(preds)
+            # Denormalize corrections using correction stats (not X stats)
+            pred_correction_flat = pred_correction_flat_norm * self.std_corr + self.mean_corr
+        else:
+            pred_correction_flat = pred_correction_flat_norm
 
-        return preds.reshape(n_samples, n_tau, n_logm)
+        pred_correction = pred_correction_flat.reshape(n_samples, n_tau, n_logm)
+        predictions = baseline + pred_correction
+
+        return predictions
 
     def save_checkpoint(self, path: str):
         if not self.is_fitted or self.model is None:
@@ -308,6 +404,9 @@ class TransformerSurfaceModel(BaseModel):
             "pool": self.pool,
             "normalize": self.normalize,
             "use_amp": self.use_amp,
+            "baseline_decay": self.baseline_decay,
             "mean": self.mean,
-            "std": self.std
+            "std": self.std,
+            "mean_corr": self.mean_corr,
+            "std_corr": self.std_corr
         }, path)

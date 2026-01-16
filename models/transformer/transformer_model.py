@@ -196,6 +196,16 @@ class TransformerSurfaceModel(BaseModel):
         baseline_train = self._compute_baseline(X_train)
         y_correction = y_train - baseline_train
 
+        # Check for NaN/Inf in inputs
+        if np.any(np.isnan(X_train)) or np.any(np.isinf(X_train)):
+            raise ValueError(f"X_train contains NaN or Inf values")
+        if np.any(np.isnan(y_train)) or np.any(np.isinf(y_train)):
+            raise ValueError(f"y_train contains NaN or Inf values")
+        if np.any(np.isnan(baseline_train)) or np.any(np.isinf(baseline_train)):
+            raise ValueError(f"baseline_train contains NaN or Inf values")
+        if np.any(np.isnan(y_correction)) or np.any(np.isinf(y_correction)):
+            raise ValueError(f"y_correction contains NaN or Inf values")
+
         X_flat = self._flatten(X_train).astype(np.float32, copy=False)
         y_correction_flat = y_correction.reshape(n_samples, self.n_features).astype(np.float32, copy=False)
 
@@ -211,11 +221,26 @@ class TransformerSurfaceModel(BaseModel):
             self.mean_corr = y_correction_flat.mean(axis=0, keepdims=True)
             self.std_corr = y_correction_flat.std(axis=0, keepdims=True)
             self.std_corr = np.maximum(self.std_corr, 1e-8)
+            
+            # Check for NaN/Inf in normalization stats
+            if np.any(np.isnan(self.mean_corr)) or np.any(np.isnan(self.std_corr)):
+                raise ValueError(f"Normalization stats contain NaN: mean_corr has NaN={np.any(np.isnan(self.mean_corr))}, std_corr has NaN={np.any(np.isnan(self.std_corr))}")
+            if np.any(np.isinf(self.mean_corr)) or np.any(np.isinf(self.std_corr)):
+                raise ValueError(f"Normalization stats contain Inf: mean_corr has Inf={np.any(np.isinf(self.mean_corr))}, std_corr has Inf={np.any(np.isinf(self.std_corr))}")
+            
             y_correction_flat = (y_correction_flat - self.mean_corr) / self.std_corr
+            
+            # Check for NaN/Inf after normalization
+            if np.any(np.isnan(y_correction_flat)) or np.any(np.isinf(y_correction_flat)):
+                raise ValueError(f"y_correction_flat contains NaN or Inf after normalization")
 
         # Include baseline and true targets in dataset for loss computation
         baseline_train_flat = baseline_train.reshape(n_samples, self.n_features).astype(np.float32)
         y_train_flat = y_train.reshape(n_samples, self.n_features).astype(np.float32)
+        
+        # Final check before creating dataset
+        if np.any(np.isnan(baseline_train_flat)) or np.any(np.isnan(y_train_flat)):
+            raise ValueError(f"baseline_train_flat or y_train_flat contains NaN before dataset creation")
         dataset = TensorDataset(
             torch.tensor(X_flat, dtype=torch.float32),
             torch.tensor(y_correction_flat, dtype=torch.float32),
@@ -285,17 +310,48 @@ class TransformerSurfaceModel(BaseModel):
                 with autocast(device_type="cuda" if self.use_amp and self.device.startswith("cuda") else "cpu", enabled=self.use_amp and self.device.startswith("cuda")):
                     pred_correction_norm = self.model(batch_x)  # Predicts normalized corrections
                     
+                    # Check model output for NaN/Inf
+                    if torch.any(torch.isnan(pred_correction_norm)) or torch.any(torch.isinf(pred_correction_norm)):
+                        print(f"Error: Model output contains NaN/Inf")
+                        print(f"  pred_correction_norm stats: min={pred_correction_norm.min().item():.6f}, max={pred_correction_norm.max().item():.6f}, mean={pred_correction_norm.mean().item():.6f}")
+                        print(f"  batch_x stats: min={batch_x.min().item():.6f}, max={batch_x.max().item():.6f}, has_nan={torch.isnan(batch_x).any().item()}, has_inf={torch.isinf(batch_x).any().item()}")
+                        raise ValueError("Model output contains NaN or Inf - check model initialization or input normalization")
+                    
                     # Denormalize corrections and add to baseline to get surface predictions
                     if self.normalize:
+                        # Check normalization tensors
+                        if torch.any(torch.isnan(std_corr_t)) or torch.any(torch.isnan(mean_corr_t)):
+                            print(f"Error: Normalization tensors contain NaN")
+                            print(f"  std_corr_t: min={std_corr_t.min().item():.6f}, max={std_corr_t.max().item():.6f}, has_nan={torch.isnan(std_corr_t).any().item()}")
+                            print(f"  mean_corr_t: min={mean_corr_t.min().item():.6f}, max={mean_corr_t.max().item():.6f}, has_nan={torch.isnan(mean_corr_t).any().item()}")
+                            raise ValueError("Normalization tensors contain NaN")
                         pred_correction = pred_correction_norm * std_corr_t + mean_corr_t
+                        # Check denormalized result
+                        if torch.any(torch.isnan(pred_correction)) or torch.any(torch.isinf(pred_correction)):
+                            print(f"Error: Denormalized corrections contain NaN/Inf")
+                            print(f"  pred_correction_norm: min={pred_correction_norm.min().item():.6f}, max={pred_correction_norm.max().item():.6f}")
+                            print(f"  std_corr_t: min={std_corr_t.min().item():.6f}, max={std_corr_t.max().item():.6f}")
+                            print(f"  mean_corr_t: min={mean_corr_t.min().item():.6f}, max={mean_corr_t.max().item():.6f}")
+                            raise ValueError("Denormalized corrections contain NaN or Inf")
                     else:
                         pred_correction = pred_correction_norm
                     
+                    # Check baseline and targets before computing loss
+                    if torch.any(torch.isnan(batch_baseline)) or torch.any(torch.isnan(batch_y_true)):
+                        print(f"Error: batch_baseline or batch_y_true contains NaN")
+                        print(f"  batch_baseline: min={batch_baseline.min().item():.6f}, max={batch_baseline.max().item():.6f}, has_nan={torch.isnan(batch_baseline).any().item()}")
+                        print(f"  batch_y_true: min={batch_y_true.min().item():.6f}, max={batch_y_true.max().item():.6f}, has_nan={torch.isnan(batch_y_true).any().item()}")
+                        raise ValueError("batch_baseline or batch_y_true contains NaN")
+                    
                     # Compute RMSE on surfaces (not corrections)
                     pred_surface = batch_baseline + pred_correction
-                    loss = torch.sqrt(torch.mean((pred_surface - batch_y_true) ** 2))
+                    squared_errors = (pred_surface - batch_y_true) ** 2
+                    loss = torch.sqrt(torch.mean(squared_errors))
                     
                 if not torch.isfinite(loss):
+                    print(f"Error: Non-finite loss value: {loss.item()}")
+                    print(f"  Final check - pred_surface: min={pred_surface.min().item():.6f}, max={pred_surface.max().item():.6f}, has_nan={torch.isnan(pred_surface).any().item()}")
+                    print(f"  Final check - batch_y_true: min={batch_y_true.min().item():.6f}, max={batch_y_true.max().item():.6f}, has_nan={torch.isnan(batch_y_true).any().item()}")
                     raise ValueError("Non-finite loss encountered during training")
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)

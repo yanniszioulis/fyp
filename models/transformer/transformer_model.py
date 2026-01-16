@@ -59,13 +59,31 @@ class _SurfaceTransformer(nn.Module):
     def forward(self, x):
         # x: (batch, context_length, n_features)
         x = self.input_proj(x)
+        # Check for NaN after input projection
+        if torch.any(torch.isnan(x)) or torch.any(torch.isinf(x)):
+            raise ValueError(f"NaN/Inf after input_proj: input range=[{x.min().item():.6f}, {x.max().item():.6f}]")
+        
         x = x + self.positional.unsqueeze(0)
+        # Check for NaN after positional encoding
+        if torch.any(torch.isnan(x)) or torch.any(torch.isinf(x)):
+            raise ValueError(f"NaN/Inf after positional encoding")
+        
         x = self.encoder(x)
+        # Check for NaN after encoder
+        if torch.any(torch.isnan(x)) or torch.any(torch.isinf(x)):
+            raise ValueError(f"NaN/Inf after encoder")
+        
         if self.pool == "mean":
             x = x.mean(dim=1)
         else:
             x = x[:, -1, :]
-        return self.head(x)
+        
+        x = self.head(x)
+        # Check for NaN after head
+        if torch.any(torch.isnan(x)) or torch.any(torch.isinf(x)):
+            raise ValueError(f"NaN/Inf after head")
+        
+        return x
 
 
 class TransformerSurfaceModel(BaseModel):
@@ -123,6 +141,19 @@ class TransformerSurfaceModel(BaseModel):
         self.std = None   # For X normalization
         self.mean_corr = None  # For correction normalization
         self.std_corr = None   # For correction normalization
+
+    def _initialize_weights(self):
+        """Initialize model weights to prevent NaN outputs."""
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                # Use Xavier uniform initialization
+                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
+                if module.bias is not None:
+                    torch.nn.init.constant_(module.bias, 0.0)
+        
+        # Initialize positional encoding with small values
+        if hasattr(self.model, 'positional'):
+            torch.nn.init.normal_(self.model.positional, mean=0.0, std=0.02)
 
     def _flatten(self, X: np.ndarray) -> np.ndarray:
         # X: (n_samples, context, n_tau, n_logm)
@@ -216,6 +247,8 @@ class TransformerSurfaceModel(BaseModel):
             self.std = flat_for_stats.std(axis=0, keepdims=True)
             self.std = np.maximum(self.std, 1e-8)
             X_flat = (X_flat - self.mean) / self.std
+            # Clip extreme values to prevent overflow in transformer
+            X_flat = np.clip(X_flat, -10.0, 10.0)
             
             # Corrections normalized with their own statistics
             self.mean_corr = y_correction_flat.mean(axis=0, keepdims=True)
@@ -229,6 +262,8 @@ class TransformerSurfaceModel(BaseModel):
                 raise ValueError(f"Normalization stats contain Inf: mean_corr has Inf={np.any(np.isinf(self.mean_corr))}, std_corr has Inf={np.any(np.isinf(self.std_corr))}")
             
             y_correction_flat = (y_correction_flat - self.mean_corr) / self.std_corr
+            # Clip extreme values to prevent overflow
+            y_correction_flat = np.clip(y_correction_flat, -10.0, 10.0)
             
             # Check for NaN/Inf after normalization
             if np.any(np.isnan(y_correction_flat)) or np.any(np.isinf(y_correction_flat)):
@@ -262,7 +297,9 @@ class TransformerSurfaceModel(BaseModel):
             if self.normalize:
                 # Use training stats for normalization
                 X_val_flat = (X_val_flat - self.mean) / self.std
+                X_val_flat = np.clip(X_val_flat, -10.0, 10.0)
                 y_correction_val_flat = (y_correction_val_flat - self.mean_corr) / self.std_corr
+                y_correction_val_flat = np.clip(y_correction_val_flat, -10.0, 10.0)
             baseline_val_flat = baseline_val.reshape(X_val.shape[0], self.n_features).astype(np.float32)
             y_val_flat = y_val.reshape(X_val.shape[0], self.n_features).astype(np.float32)
             val_dataset = TensorDataset(
@@ -282,6 +319,9 @@ class TransformerSurfaceModel(BaseModel):
             dropout=self.dropout,
             pool=self.pool
         ).to(self.device)
+        
+        # Initialize weights properly to avoid NaN
+        self._initialize_weights()
 
         optimizer = torch.optim.AdamW(
             self.model.parameters(),

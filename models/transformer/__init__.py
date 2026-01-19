@@ -1,1 +1,0 @@
-"""Transformer model package."""

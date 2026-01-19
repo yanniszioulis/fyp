@@ -19,13 +19,13 @@ from evaluation.metrics import (compute_all_metrics, compute_metrics_by_maturity
 class ForecastingPipeline:
     """Main pipeline for forecasting volatility surfaces"""
     
-    def __init__(self, data_file: str = 'SPX_IV_fixed_grid.csv',
+    def __init__(self, data_file: str = None,
                  results_dir: str = 'results'):
         self.data_file = data_file
         self.results_dir = results_dir
         self.data = None
         self.tau_grid = None
-        self.logm_grid = None
+        self.m_grid = None
         self.dates = None
         self.windows = None
         
@@ -35,16 +35,16 @@ class ForecastingPipeline:
         os.makedirs(os.path.join(results_dir, 'metrics'), exist_ok=True)
         os.makedirs(os.path.join(results_dir, 'plots'), exist_ok=True)
     
-    def load_data(self):
+    def load_data(self, option_type: str = 'calls'):
         """Load and prepare data"""
-        self.data, self.tau_grid, self.logm_grid, self.dates = load_data(self.data_file)
+        self.data, self.tau_grid, self.m_grid, self.dates = load_data(self.data_file, option_type=option_type)
         print(f"Loaded data: shape {self.data.shape}")
     
     def create_windows(self, window_size_years: float = 10.0,
                       train_ratio: float = 0.7,
                       val_ratio: float = 0.1,
                       test_ratio: float = 0.2,
-                      shift_months: int = 6):
+                      shift_months: int = 12):
         """Create rolling window splits"""
         self.windows = create_rolling_windows(
             self.dates,
@@ -136,7 +136,7 @@ class ForecastingPipeline:
             y_test, predictions, self.tau_grid, self.tau_grid
         )
         metrics_by_moneyness = compute_metrics_by_moneyness(
-            y_test, predictions, self.tau_grid, self.logm_grid
+            y_test, predictions, self.tau_grid, self.m_grid
         )
         
         print(f"    IV RMSE: {metrics['iv_rmse']:.4f}")
@@ -225,11 +225,11 @@ class ForecastingPipeline:
                         if X_val is not None and y_val is not None:
                             fit_params["X_val"] = X_val
                             fit_params["y_val"] = y_val
-                        # Pass tau_grid and logm_grid for GNN models
+                        # Pass tau_grid and m_grid for models
                         if hasattr(self, 'tau_grid') and self.tau_grid is not None:
                             fit_params["tau_grid"] = self.tau_grid
-                        if hasattr(self, 'logm_grid') and self.logm_grid is not None:
-                            fit_params["logm_grid"] = self.logm_grid
+                        if hasattr(self, 'm_grid') and self.m_grid is not None:
+                            fit_params["m_grid"] = self.m_grid
                         model.fit(
                             X_train if len(X_train) > 0 else None,
                             y_train if len(X_train) > 0 else None,
@@ -319,7 +319,7 @@ def main():
         train_ratio=0.7,
         val_ratio=0.1,
         test_ratio=0.2,
-        shift_months=6
+        shift_months=12
     )
     
     # Run persistence baseline

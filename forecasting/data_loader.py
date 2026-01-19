@@ -1,84 +1,127 @@
 """
 Data loader for volatility surface forecasting pipeline.
-Loads SPX_IV_fixed_grid.csv and reshapes to 3D array format.
+Loads SPX surface CSV files (wide format) and reshapes to 3D array format.
 """
 
 import pandas as pd
 import numpy as np
+import re
 from typing import Tuple
 
 
-def load_data(filepath: str = 'SPX_IV_fixed_grid.csv') -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex]:
+def load_data(filepath: str = None, option_type: str = 'calls') -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex]:
     """
-    Load fixed grid data and reshape to 3D array.
+    Load surface data from wide format CSV and reshape to 3D array.
     
     Parameters:
     -----------
-    filepath : str
-        Path to SPX_IV_fixed_grid.csv
+    filepath : str, optional
+        Path to surface CSV file. If None, uses SPX_{option_type}_surfaces.csv
+    option_type : str, default 'calls'
+        Option type: 'calls' or 'puts'
         
     Returns:
     --------
-    data : np.ndarray, shape (n_dates, n_tau, n_logm)
+    data : np.ndarray, shape (n_dates, n_tau, n_m)
         Implied volatility data
     tau_grid : np.ndarray, shape (n_tau,)
         Tau (maturity) grid values
-    logm_grid : np.ndarray, shape (n_logm,)
-        Log-moneyness grid values
+    m_grid : np.ndarray, shape (n_m,)
+        Moneyness grid values
     dates : pd.DatetimeIndex
         Date index
     """
-    print(f"Loading data from {filepath}...")
+    if option_type not in ['calls', 'puts']:
+        raise ValueError(f"option_type must be 'calls' or 'puts', got '{option_type}'")
     
-    # Read CSV in chunks to handle large file
-    chunks = []
-    chunk_size = 100000
+    # Determine filepath
+    if filepath is None:
+        filepath = f'SPX_{option_type}_surfaces.csv'
     
-    for chunk in pd.read_csv(filepath, chunksize=chunk_size, low_memory=False):
-        chunk['date'] = pd.to_datetime(chunk['date'])
-        chunks.append(chunk)
+    print(f"Loading {option_type} data from {filepath}...")
     
-    df = pd.concat(chunks, ignore_index=True)
+    # Read wide format CSV
+    df = pd.read_csv(filepath, low_memory=False)
     
-    # Sort by date, then tau, then log_moneyness
-    df = df.sort_values(['date', 'tau', 'log_moneyness'])
+    # Convert date column to datetime
+    df['date'] = pd.to_datetime(df['date'])
     
-    # Get unique values
-    dates = pd.Series(pd.to_datetime(df['date'].unique())).sort_values().values
-    dates = pd.DatetimeIndex(dates)
-    tau_grid = np.sort(df['tau'].unique())
-    logm_grid = np.sort(df['log_moneyness'].unique())
+    # Sort by date
+    df = df.sort_values('date').reset_index(drop=True)
     
+    # Get dates
+    dates = pd.DatetimeIndex(df['date'].values)
     n_dates = len(dates)
+    
+    # Extract iv_* columns
+    iv_columns = [col for col in df.columns if col.startswith('iv_')]
+    
+    if len(iv_columns) == 0:
+        raise ValueError(f"No 'iv_*' columns found in {filepath}")
+    
+    # Parse column names to extract moneyness and tau values
+    # Pattern: iv_{moneyness}_{tau}
+    pattern = re.compile(r'iv_([\d.]+)_([\d.]+)')
+    
+    moneyness_values = []
+    tau_values = []
+    column_mapping = []
+    
+    for col in iv_columns:
+        match = pattern.match(col)
+        if match:
+            moneyness = float(match.group(1))
+            tau = float(match.group(2))
+            moneyness_values.append(moneyness)
+            tau_values.append(tau)
+            column_mapping.append((moneyness, tau, col))
+    
+    if len(column_mapping) == 0:
+        raise ValueError(f"Could not parse column names in {filepath}. Expected format: iv_{{moneyness}}_{{tau}}")
+    
+    # Get unique sorted grids
+    moneyness_grid = np.sort(np.unique(moneyness_values))
+    tau_grid = np.sort(np.unique(tau_values))
+    
+    n_m = len(moneyness_grid)
     n_tau = len(tau_grid)
-    n_logm = len(logm_grid)
     
-    print(f"Data shape: {n_dates} dates × {n_tau} tau × {n_logm} log-moneyness")
+    print(f"Data shape: {n_dates} dates × {n_tau} tau × {n_m} moneyness")
     print(f"Date range: {dates.min()} to {dates.max()}")
-    print(f"Tau range: {tau_grid.min():.2f} to {tau_grid.max():.2f} years")
-    print(f"Log-moneyness range: {logm_grid.min():.2f} to {logm_grid.max():.2f}")
+    print(f"Tau range: {tau_grid.min():.4f} to {tau_grid.max():.4f} years")
+    print(f"Moneyness range: {moneyness_grid.min():.4f} to {moneyness_grid.max():.4f}")
     
-    # Reshape to 3D array: (dates, tau, log_moneyness)
-    data = np.full((n_dates, n_tau, n_logm), np.nan)
-    
-    # Create mapping for faster lookup
+    # Create mapping from (moneyness, tau) to indices
+    m_map = {m: i for i, m in enumerate(moneyness_grid)}
     tau_map = {tau: i for i, tau in enumerate(tau_grid)}
-    logm_map = {logm: i for i, logm in enumerate(logm_grid)}
-    date_map = {date: i for i, date in enumerate(dates)}
     
-    # Fill array - use 'implied_volatility' column
-    for _, row in df.iterrows():
-        date_idx = date_map[pd.to_datetime(row['date'])]
-        tau_idx = tau_map[row['tau']]
-        logm_idx = logm_map[row['log_moneyness']]
-        data[date_idx, tau_idx, logm_idx] = row['implied_volatility']
+    # Initialize 3D array: (dates, tau, moneyness)
+    data = np.zeros((n_dates, n_tau, n_m))
+    
+    # Reshape data for each date
+    for date_idx in range(n_dates):
+        surface = np.full((n_tau, n_m), np.nan)
+        
+        # Fill surface from wide format columns
+        for moneyness, tau, col_name in column_mapping:
+            m_idx = m_map[moneyness]
+            tau_idx = tau_map[tau]
+            value = df.iloc[date_idx][col_name]
+            
+            # Handle NaN values
+            if pd.isna(value):
+                surface[tau_idx, m_idx] = np.nan
+            else:
+                surface[tau_idx, m_idx] = float(value)
+        
+        data[date_idx] = surface
     
     # Check for missing data
     missing_pct = np.isnan(data).sum() / data.size * 100
     if missing_pct > 0:
         print(f"Warning: {missing_pct:.2f}% missing data")
     
-    return data, tau_grid, logm_grid, dates
+    return data, tau_grid, moneyness_grid, dates
 
 
 def create_sequences(data: np.ndarray, dates: pd.DatetimeIndex,
@@ -89,7 +132,7 @@ def create_sequences(data: np.ndarray, dates: pd.DatetimeIndex,
     
     Parameters:
     -----------
-    data : np.ndarray, shape (n_dates, n_tau, n_logm)
+    data : np.ndarray, shape (n_dates, n_tau, n_m)
         Implied volatility data
     dates : pd.DatetimeIndex
         Date index
@@ -100,14 +143,14 @@ def create_sequences(data: np.ndarray, dates: pd.DatetimeIndex,
         
     Returns:
     --------
-    X : np.ndarray, shape (n_samples, context_length, n_tau, n_logm)
+    X : np.ndarray, shape (n_samples, context_length, n_tau, n_m)
         Input sequences
-    y : np.ndarray, shape (n_samples, n_tau, n_logm)
+    y : np.ndarray, shape (n_samples, n_tau, n_m)
         Target sequences
     sample_dates : np.ndarray, shape (n_samples,)
         Dates for each sample (target date)
     """
-    n_dates, n_tau, n_logm = data.shape
+    n_dates, n_tau, n_m = data.shape
     n_samples = n_dates - context_length - horizon + 1
     if n_samples <= 0:
         if verbose:
@@ -115,12 +158,12 @@ def create_sequences(data: np.ndarray, dates: pd.DatetimeIndex,
                 "Not enough data to create sequences: "
                 f"n_dates={n_dates}, context_length={context_length}, horizon={horizon}"
             )
-        empty_X = np.zeros((0, context_length, n_tau, n_logm))
-        empty_y = np.zeros((0, n_tau, n_logm))
+        empty_X = np.zeros((0, context_length, n_tau, n_m))
+        empty_y = np.zeros((0, n_tau, n_m))
         return empty_X, empty_y, np.array([])
     
-    X = np.zeros((n_samples, context_length, n_tau, n_logm))
-    y = np.zeros((n_samples, n_tau, n_logm))
+    X = np.zeros((n_samples, context_length, n_tau, n_m))
+    y = np.zeros((n_samples, n_tau, n_m))
     sample_dates = []
     
     for i in range(n_samples):

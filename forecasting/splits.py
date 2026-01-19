@@ -30,7 +30,7 @@ def create_rolling_windows(dates: pd.DatetimeIndex,
                           train_ratio: float = 0.7,
                           val_ratio: float = 0.1,
                           test_ratio: float = 0.2,
-                          shift_months: int = 6) -> List[WindowSplit]:
+                          shift_months: int = 12) -> List[WindowSplit]:
     """
     Create rolling window splits with specified shift.
     
@@ -47,7 +47,7 @@ def create_rolling_windows(dates: pd.DatetimeIndex,
     test_ratio : float
         Proportion of window for testing (default: 0.2)
     shift_months : int
-        Number of months to shift window forward (default: 6)
+        Number of months to shift window forward (default: 12)
         
     Returns:
     --------

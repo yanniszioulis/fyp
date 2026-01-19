@@ -30,7 +30,29 @@ results/*
 
 # HOT (reference implementation at root level only)
 /HOT/
+/PI-ConvTF/
 
 # Misc
 *.log
 *.tmp
+
+# LaTeX auxiliary files
+report/build/
+report/*.aux
+report/*.bbl
+report/*.bcf
+report/*.blg
+report/*.lof
+report/*.lot
+report/*.maf
+report/*.mtc
+report/*.mtc0
+report/*.out
+report/*.run.xml
+report/*.toc
+report/*.fdb_latexmk
+report/*.fls
+report/*.synctex.gz
+# Keep main.tex and main.pdf
+!report/main.tex
+!report/main.pdf

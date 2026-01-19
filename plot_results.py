@@ -43,6 +43,8 @@ def main():
     label_map = {
         "persistence": "Persistence",
         "transformer": "Transformer",
+        "ridge_var": "Ridge VAR",
+        "convlstm": "ConvLSTM",
     }
     model_label = None
     if args.model_id:
@@ -51,6 +53,8 @@ def main():
     results_map = {
         "persistence": "results/metrics/persistence_results.json",
         "transformer": "results/metrics/transformer_results.json",
+        "ridge_var": "results/metrics/ridge_var_results.json",
+        "convlstm": "results/metrics/convlstm_results.json",
     }
 
     if args.compare_models:

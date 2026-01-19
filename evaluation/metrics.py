@@ -108,9 +108,9 @@ def compute_metrics_by_maturity(iv_true: np.ndarray, iv_pred: np.ndarray,
     
     Parameters:
     -----------
-    iv_true : np.ndarray, shape (n_samples, n_tau, n_logm)
+    iv_true : np.ndarray, shape (n_samples, n_tau, n_m)
         True implied volatility
-    iv_pred : np.ndarray, shape (n_samples, n_tau, n_logm)
+    iv_pred : np.ndarray, shape (n_samples, n_tau, n_m)
         Predicted implied volatility
     tau : np.ndarray, shape (n_tau,)
         Tau grid values
@@ -134,23 +134,23 @@ def compute_metrics_by_maturity(iv_true: np.ndarray, iv_pred: np.ndarray,
 
 
 def compute_metrics_by_moneyness(iv_true: np.ndarray, iv_pred: np.ndarray,
-                                 tau: np.ndarray, logm_grid: np.ndarray,
+                                 tau: np.ndarray, m_grid: np.ndarray,
                                  atm_threshold: float = 0.05) -> Dict[str, Dict[str, float]]:
     """
     Compute metrics separately for ATM and OTM regions.
     
     Parameters:
     -----------
-    iv_true : np.ndarray, shape (n_samples, n_tau, n_logm)
+    iv_true : np.ndarray, shape (n_samples, n_tau, n_m)
         True implied volatility
-    iv_pred : np.ndarray, shape (n_samples, n_tau, n_logm)
+    iv_pred : np.ndarray, shape (n_samples, n_tau, n_m)
         Predicted implied volatility
     tau : np.ndarray, shape (n_tau,)
         Tau grid values
-    logm_grid : np.ndarray, shape (n_logm,)
-        Log-moneyness grid
+    m_grid : np.ndarray, shape (n_m,)
+        Moneyness grid
     atm_threshold : float
-        Threshold for ATM (default: 0.05)
+        Threshold for ATM (default: 0.05) - threshold for absolute log-moneyness
         
     Returns:
     --------
@@ -158,6 +158,8 @@ def compute_metrics_by_moneyness(iv_true: np.ndarray, iv_pred: np.ndarray,
         Dictionary with 'atm' and 'otm' keys
     """
     # Find ATM and OTM indices
+    # Convert moneyness to log-moneyness for ATM calculation
+    logm_grid = np.log(m_grid)
     atm_mask = np.abs(logm_grid) < atm_threshold
     otm_mask = ~atm_mask
     

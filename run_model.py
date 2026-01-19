@@ -305,7 +305,6 @@ def main():
                 lr_factor=0.5,  # PI-ConvTF default
                 patience=10,  # PI-ConvTF default
                 min_delta=1e-6,  # PI-ConvTF default
-                use_amp=args.use_amp,
                 device=args.device  # Auto-detect if None
             ),
             model_id="convlstm",

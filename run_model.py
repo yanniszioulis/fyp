@@ -294,15 +294,18 @@ def main():
                 filters=[64],  # PI-ConvTF default
                 kernel_size=[3],  # PI-ConvTF default
                 strides=[1],  # PI-ConvTF default
-                padding=[0],  # PI-ConvTF default
+                padding=[1],  # PI-ConvTF default
                 last_conv_kernel=1,  # PI-ConvTF default
                 last_conv_stride=1,  # PI-ConvTF default
-                last_conv_padding=1,  # PI-ConvTF default
+                last_conv_padding=0,  # PI-ConvTF default
                 batch_size=32,  # PI-ConvTF default
                 epochs=100,  # PI-ConvTF default
-                learning_rate=0.001,  # PI-ConvTF default
+                learning_rate=0.01,  # PI-ConvTF default
                 lr_patience=5,  # PI-ConvTF default
                 lr_factor=0.5,  # PI-ConvTF default
+                patience=10,  # PI-ConvTF default
+                min_delta=1e-6,  # PI-ConvTF default
+                use_amp=args.use_amp,
                 device=args.device  # Auto-detect if None
             ),
             model_id="convlstm",

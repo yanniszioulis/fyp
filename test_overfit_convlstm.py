@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test script to train ConvLSTM on a specific configuration (w0, c21, h5).
-Compares ConvLSTM performance against persistence baseline.
+Test script to train SA-ConvLSTM on a specific configuration (w0, c21, h5).
+Compares SA-ConvLSTM performance against persistence baseline.
 Uses MPS (Metal Performance Shaders) for Apple Silicon GPU acceleration.
 """
 
@@ -14,7 +14,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from forecasting.pipeline import ForecastingPipeline
-from models.convlstm.convlstm_model import ConvLSTMModel
+from models.sa_convlstm.sa_convlstm_model import SAConvLSTMModel
 from models.persistence.persistence_model import PersistenceModel
 
 
@@ -27,7 +27,20 @@ def compute_rmse(predictions, targets):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train ConvLSTM on w0, c21, h5 with optional custom sample sizes")
+    parser = argparse.ArgumentParser(description="Train SA-ConvLSTM on w0, c21, h5 with optional custom sample sizes")
+    parser.add_argument(
+        "--inter-channels",
+        dest="inter_channels",
+        type=int,
+        default=8,
+        help="Inter-channels for self-attention memory (default: 8, matching PI-ConvTF. Use 'None' to disable self-attention)"
+    )
+    parser.add_argument(
+        "--no-sa",
+        dest="disable_sa",
+        action="store_true",
+        help="Disable self-attention (equivalent to vanilla ConvLSTM)"
+    )
     parser.add_argument(
         "--train-samples",
         type=int,
@@ -69,7 +82,7 @@ def main():
             args.test_samples = 2
     
     print("=" * 60)
-    print("ConvLSTM Training Test")
+    print("SA-ConvLSTM Training Test")
     print("Configuration: Window 0, Context 21, Horizon 5")
     if args.train_samples is not None or args.val_samples is not None or args.test_samples is not None:
         print(f"Sample sizes: Train={args.train_samples}, Val={args.val_samples}, Test={args.test_samples}")
@@ -118,8 +131,8 @@ def main():
     
     # Build sequences for c21, h5
     print("\n[4/5] Building sequences...")
-    context_length = 5
-    horizon = 1
+    context_length = 21
+    horizon = 5
     
     X_train, y_train, X_val, y_val, X_test, y_test, sample_dates = pipeline._build_sequences_for_window(
         window=window,
@@ -228,12 +241,17 @@ def main():
         print(f"  Test RMSE:  {persistence_test_rmse:.6f}")
     print(f"{'='*60}")
     
-    # Initialize ConvLSTM model
-    print("\n[6/6] Initializing ConvLSTM model...")
-    model = ConvLSTMModel(
-        name="convlstm_w0_c21_h5",
+    # Initialize SA-ConvLSTM model
+    print("\n[6/6] Initializing SA-ConvLSTM model...")
+    
+    # Determine inter_channels: use 'None' if --no-sa flag is set, otherwise use provided value
+    inter_channels_value = 'None' if args.disable_sa else args.inter_channels
+    
+    model = SAConvLSTMModel(
+        name="sa_convlstm_w0_c21_h5",
         num_layers=1,
         filters=[64],  # Must match num_layers: [filters_layer1, filters_layer2]
+        inter_channels=inter_channels_value,  # Self-attention memory channels (or 'None' to disable)
         kernel_size=[3],  # Must match num_layers: [kernel_layer1, kernel_layer2]
         strides=[1],  # Must match num_layers: [stride_layer1, stride_layer2]
         padding=[1],  # Must match num_layers: [padding_layer1, padding_layer2] - padding=1 for kernel_size=3 to maintain spatial dims
@@ -251,7 +269,11 @@ def main():
     )
     
     print(f"\n{'='*60}")
-    print("ConvLSTM Training Configuration:")
+    print("SA-ConvLSTM Training Configuration:")
+    if args.disable_sa:
+        print(f"  Self-Attention: DISABLED (vanilla ConvLSTM)")
+    else:
+        print(f"  Self-Attention: ENABLED (inter_channels={args.inter_channels})")
     print(f"  Device: {device}")
     print(f"  Training samples: {len(X_train)}")
     print(f"  Validation samples: {len(X_val) if X_val is not None else 0}")
@@ -263,19 +285,19 @@ def main():
     print(f"  Min delta: {model.min_delta}")
     print(f"{'='*60}\n")
     
-    # Verify ConvLSTM receives same data as persistence
+    # Verify SA-ConvLSTM receives same data as persistence
     print("\n" + "="*60)
-    print("CONVLSTM DATA VERIFICATION:")
+    print("SA-CONVLSTM DATA VERIFICATION:")
     print("="*60)
-    print(f"ConvLSTM will receive:")
+    print(f"SA-ConvLSTM will receive:")
     print(f"  X_train.shape: {X_train.shape}")
     print(f"  y_train.shape: {y_train.shape}")
     print(f"  Same as persistence: ✓")
-    print(f"  (ConvLSTM normalizes internally, but uses same raw data)")
+    print(f"  (SA-ConvLSTM normalizes internally, but uses same raw data)")
     print("="*60 + "\n")
     
     # Train the model
-    print("Starting ConvLSTM training...")
+    print("Starting SA-ConvLSTM training...")
     print("(This may take a while - watch for train/val loss convergence)\n")
     
     # For overfitting tests with small datasets, use final model instead of best val model
@@ -295,14 +317,14 @@ def main():
     print("Training Complete!")
     print("=" * 60)
     
-    # Evaluate ConvLSTM
-    print("\nEvaluating ConvLSTM...")
+    # Evaluate SA-ConvLSTM
+    print("\nEvaluating SA-ConvLSTM...")
     convlstm_train_pred = model.predict_horizon(X_train, horizon=horizon)
     convlstm_val_pred = model.predict_horizon(X_val, horizon=horizon) if X_val is not None and len(X_val) > 0 else None
     convlstm_test_pred = model.predict_horizon(X_test, horizon=horizon) if len(X_test) > 0 else None
     
-    # Verify ConvLSTM prediction shape matches
-    print(f"\nConvLSTM prediction verification:")
+    # Verify SA-ConvLSTM prediction shape matches
+    print(f"\nSA-ConvLSTM prediction verification:")
     print(f"  convlstm_train_pred.shape: {convlstm_train_pred.shape}")
     print(f"  y_train.shape: {y_train.shape}")
     print(f"  Shapes match: {convlstm_train_pred.shape == y_train.shape}")
@@ -313,7 +335,7 @@ def main():
     convlstm_test_rmse = compute_rmse(convlstm_test_pred, y_test) if convlstm_test_pred is not None else np.nan
     
     print(f"\n{'='*60}")
-    print("ConvLSTM Results:")
+    print("SA-ConvLSTM Results:")
     print(f"  Train RMSE: {convlstm_train_rmse:.6f}")
     if not np.isnan(convlstm_val_rmse):
         print(f"  Val RMSE:   {convlstm_val_rmse:.6f}")
@@ -323,9 +345,9 @@ def main():
     
     # Comparison
     print(f"\n{'='*60}")
-    print("Comparison: ConvLSTM vs Persistence")
+    print("Comparison: SA-ConvLSTM vs Persistence")
     print(f"{'='*60}")
-    print(f"{'Metric':<15} {'Persistence':<15} {'ConvLSTM':<15} {'Improvement':<15}")
+    print(f"{'Metric':<15} {'Persistence':<15} {'SA-ConvLSTM':<15} {'Improvement':<15}")
     print(f"{'-'*60}")
     
     # Train comparison
@@ -347,17 +369,17 @@ def main():
     # Summary
     print("Summary:")
     if convlstm_train_rmse < persistence_train_rmse:
-        print(f"  ✓ ConvLSTM learns better than persistence on training data")
+        print(f"  ✓ SA-ConvLSTM learns better than persistence on training data")
         print(f"    (Train RMSE: {convlstm_train_rmse:.6f} < {persistence_train_rmse:.6f})")
     else:
-        print(f"  ✗ ConvLSTM does not improve over persistence on training data")
+        print(f"  ✗ SA-ConvLSTM does not improve over persistence on training data")
     
     if not np.isnan(convlstm_test_rmse) and not np.isnan(persistence_test_rmse):
         if convlstm_test_rmse < persistence_test_rmse:
-            print(f"  ✓ ConvLSTM generalizes better than persistence")
+            print(f"  ✓ SA-ConvLSTM generalizes better than persistence")
             print(f"    (Test RMSE: {convlstm_test_rmse:.6f} < {persistence_test_rmse:.6f})")
         else:
-            print(f"  ✗ ConvLSTM does not generalize better than persistence")
+            print(f"  ✗ SA-ConvLSTM does not generalize better than persistence")
     
     if not np.isnan(convlstm_val_rmse) and not np.isnan(convlstm_test_rmse):
         if convlstm_train_rmse < convlstm_val_rmse * 0.7:

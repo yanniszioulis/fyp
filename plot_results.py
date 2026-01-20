@@ -73,7 +73,7 @@ def main():
         os.makedirs(compare_dir, exist_ok=True)
         save_path = os.path.join(
             compare_dir,
-            f"summary_all_configs_{'_'.join(model_ids)}.png"
+            f"summary_all_configs_{'_'.join(model_ids)}.pdf"
         )
         plot_model_comparison_summary(model_dfs, label_map, save_path=save_path)
         return

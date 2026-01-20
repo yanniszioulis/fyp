@@ -262,6 +262,11 @@ def plot_model_comparison_summary(model_dfs: Dict[str, pd.DataFrame],
     """
     Plot IV RMSE comparisons across models in a context/horizon grid.
     """
+    # Configure matplotlib to use LaTeX
+    plt.rcParams['text.usetex'] = True
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = ['Computer Modern Roman']
+    
     # Determine grid from first model
     first_df = next(iter(model_dfs.values()))
     context_lengths = sorted(first_df['context_length'].unique())
@@ -270,7 +275,8 @@ def plot_model_comparison_summary(model_dfs: Dict[str, pd.DataFrame],
     n_cols = len(horizons)
     n_rows = len(context_lengths)
     
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=True)
+    # Don't share y-axis globally - each column will have its own scaling
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharey=False)
     if n_rows == 1:
         axes = axes.reshape(1, -1)
     if n_cols == 1:
@@ -278,9 +284,21 @@ def plot_model_comparison_summary(model_dfs: Dict[str, pd.DataFrame],
     
     sns.set_style("whitegrid")
     
+    # Store y-values per column to compute column-specific y-limits
+    column_y_values = {j: [] for j in range(n_cols)}
+    
+    # Print header
+    print("\n" + "="*80)
+    print("MODEL COMPARISON RESULTS")
+    print("="*80)
+    
     for i, context_length in enumerate(context_lengths):
         for j, horizon in enumerate(horizons):
             ax = axes[i, j]
+            
+            # Print config header
+            print(f"\nConfig: Context={context_length}d, Horizon={horizon}d")
+            print("-" * 80)
             
             for model_id, df in model_dfs.items():
                 plot_df = df[
@@ -298,25 +316,61 @@ def plot_model_comparison_summary(model_dfs: Dict[str, pd.DataFrame],
                 x = plot_df['window_id']
                 label = model_labels.get(model_id, model_id)
                 ax.plot(x, plot_df['iv_rmse'], marker='o', linewidth=2, markersize=5, label=label)
+                
+                # Collect y-values for this column
+                column_y_values[j].extend(plot_df['iv_rmse'].values)
+                
+                # Print results for this model
+                print(f"\n{label}:")
+                for _, row in plot_df.iterrows():
+                    window_id = int(row['window_id'])
+                    iv_rmse = row['iv_rmse']
+                    print(f"  W{window_id+1}: {iv_rmse:.6f}")
+                # Print summary stats
+                mean_rmse = plot_df['iv_rmse'].mean()
+                std_rmse = plot_df['iv_rmse'].std()
+                min_rmse = plot_df['iv_rmse'].min()
+                max_rmse = plot_df['iv_rmse'].max()
+                print(f"  Mean: {mean_rmse:.6f}, Std: {std_rmse:.6f}, Min: {min_rmse:.6f}, Max: {max_rmse:.6f}")
             
-            ax.set_title(f'Context: {context_length}d, Horizon: {horizon}d', fontsize=10, fontweight='bold')
-            ax.set_xlabel('Window ID', fontsize=9)
+            ax.set_title(rf'Context: {context_length}d, Horizon: {horizon}d', 
+                        fontsize=12, fontweight='bold', usetex=True)
+            ax.set_xlabel(r'Window ID', fontsize=11, usetex=True)
             if j == 0:
-                ax.set_ylabel('IV RMSE', fontsize=9)
+                ax.set_ylabel(r'IV RMSE', fontsize=11, usetex=True)
             ax.set_xticks(x)
-            ax.set_xticklabels([f'W{w}' for w in x], fontsize=8)
+            # Add +1 to window IDs for display
+            ax.set_xticklabels([rf'$W_{{{w+1}}}$' for w in x], fontsize=10)
             ax.grid(True, alpha=0.3)
+    
+    # Set same y-axis limits for each column
+    for j in range(n_cols):
+        if column_y_values[j]:
+            y_min = min(column_y_values[j])
+            y_max = max(column_y_values[j])
+            # Add small padding
+            y_range = y_max - y_min
+            y_padding = y_range * 0.05
+            for i in range(n_rows):
+                axes[i, j].set_ylim(y_min - y_padding, y_max + y_padding)
     
     handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc='upper right', ncol=1)
+        # Convert labels to LaTeX format - escape underscores
+        latex_labels = [label.replace('_', r'\_') for label in labels]
+        fig.legend(handles, latex_labels, loc='upper right', ncol=1, fontsize=11, prop={'family': 'serif'})
     
-    fig.suptitle('Model Comparison: IV RMSE Across All Configurations',
-                 fontsize=14, fontweight='bold', y=0.995)
+    fig.suptitle(r'Model Comparison: IV RMSE Across All Configurations',
+                 fontsize=16, fontweight='bold', y=0.995, usetex=True)
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        # Change extension to PDF if not already
+        if save_path.endswith('.png'):
+            save_path = save_path[:-4] + '.pdf'
+        elif not save_path.endswith('.pdf'):
+            save_path = save_path + '.pdf'
+        plt.savefig(save_path, bbox_inches='tight', format='pdf')
         print(f"Comparison plot saved to {save_path}")
     
     plt.close()

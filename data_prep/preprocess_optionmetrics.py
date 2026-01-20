@@ -74,9 +74,8 @@ class OptionMetricsPreprocess:
         unique_dates = sorted(self.options_df['date'].unique())
         print(f"Processing {len(unique_dates)} unique dates...")
         
-        # Prepare output dataframes
-        calls_data = []
-        puts_data = []
+        # Prepare output data
+        combined_data = []
         
         for i, date in enumerate(unique_dates):
             if (i + 1) % 100 == 0:
@@ -98,41 +97,58 @@ class OptionMetricsPreprocess:
             # Calculate moneyness
             day_options['moneyness'] = day_options['strike'] / underlying_price
             
-            # Filter by moneyness range
+            # Filter by moneyness range (base range)
             moneyness_filter = (day_options['moneyness'] >= self.moneyness_min) & \
                               (day_options['moneyness'] <= self.moneyness_max)
             day_options = day_options[moneyness_filter].copy()
             
-            # Filter out zero volume (optional - you may want to keep this)
+            # Filter out zero volume
             day_options = day_options[day_options['volume'] > 0].copy()
             
-            # Process calls and puts separately
+            # Filter for OTM wings and ATM:
+            # - Calls: OTM when moneyness > 1.0 (strike > spot), ATM when |moneyness - 1.0| < 0.01
+            # - Puts: OTM when moneyness < 1.0 (strike < spot), ATM when |moneyness - 1.0| < 0.01
+            atm_threshold = 0.01  # Very close to ATM
+            
             calls = day_options[day_options['cp_flag'] == 'C'].copy()
             puts = day_options[day_options['cp_flag'] == 'P'].copy()
             
-            # Create surfaces
-            calls_surface = self.create_surface(calls, date, underlying_price, 'C')
-            puts_surface = self.create_surface(puts, date, underlying_price, 'P')
+            # Filter calls: OTM calls (moneyness > 1.0) OR ATM (|moneyness - 1.0| < threshold)
+            if len(calls) > 0:
+                calls_otm = calls[calls['moneyness'] > 1.0].copy()
+                calls_atm = calls[np.abs(calls['moneyness'] - 1.0) < atm_threshold].copy()
+                calls_filtered = pd.concat([calls_otm, calls_atm]).drop_duplicates()
+            else:
+                calls_filtered = calls.copy()
             
-            if calls_surface is not None:
-                calls_data.append({
+            # Filter puts: OTM puts (moneyness < 1.0) OR ATM (|moneyness - 1.0| < threshold)
+            if len(puts) > 0:
+                puts_otm = puts[puts['moneyness'] < 1.0].copy()
+                puts_atm = puts[np.abs(puts['moneyness'] - 1.0) < atm_threshold].copy()
+                puts_filtered = pd.concat([puts_otm, puts_atm]).drop_duplicates()
+            else:
+                puts_filtered = puts.copy()
+            
+            # Combine calls and puts for single surface
+            combined_options = pd.concat([calls_filtered, puts_filtered]).reset_index(drop=True)
+            
+            # Create combined surface
+            combined_surface = self.create_surface(combined_options, date, underlying_price, 'Combined')
+            
+            if combined_surface is not None:
+                # Store both calls and puts data for the same date
+                combined_data.append({
                     'date': date.strftime('%Y-%m-%d'),
                     'underlying_price': underlying_price,
-                    'surface': calls_surface
-                })
-            
-            if puts_surface is not None:
-                puts_data.append({
-                    'date': date.strftime('%Y-%m-%d'),
-                    'underlying_price': underlying_price,
-                    'surface': puts_surface
+                    'surface': combined_surface,
+                    'calls': calls_filtered,  # Store filtered calls for visualization
+                    'puts': puts_filtered     # Store filtered puts for visualization
                 })
         
-        # Save to CSV files
-        self.save_surfaces(calls_data, 'calls')
-        self.save_surfaces(puts_data, 'puts')
+        # Save to single CSV file
+        self.save_combined_surface(combined_data)
         
-        print(f"\nCompleted! Saved {len(calls_data)} call surfaces and {len(puts_data)} put surfaces")
+        print(f"\nCompleted! Saved {len(combined_data)} combined surfaces to SPX_surfaces.csv")
         
     def create_surface(self, options, date, underlying_price, option_type):
         """
@@ -202,15 +218,14 @@ class OptionMetricsPreprocess:
             print(f"  Error interpolating {option_type} surface for {date}: {e}")
             return None
     
-    def save_surfaces(self, surfaces_data, option_type):
+    def save_combined_surface(self, surfaces_data):
         """
-        Save surfaces to CSV file
+        Save combined surfaces to single CSV file
         
         Args:
-            surfaces_data: List of dicts with 'date', 'underlying_price', 'surface'
-            option_type: 'calls' or 'puts'
+            surfaces_data: List of dicts with 'date', 'underlying_price', 'surface', 'calls', 'puts'
         """
-        output_file = join(self.output_dir, f'SPX_{option_type}_surfaces.csv')
+        output_file = join(self.output_dir, 'SPX_surfaces.csv')
         
         # Calculate moneyness and ttm grid values
         moneyness_grid = linspace(self.moneyness_min, self.moneyness_max, self.n_axis_points)
@@ -246,7 +261,7 @@ class OptionMetricsPreprocess:
         # Create DataFrame and save
         df = pd.DataFrame(rows, columns=column_names)
         df.to_csv(output_file, index=False)
-        print(f"Saved {len(surfaces_data)} {option_type} surfaces to {output_file}")
+        print(f"Saved {len(surfaces_data)} combined surfaces to {output_file}")
 
 
 def main():

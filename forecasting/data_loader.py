@@ -9,16 +9,14 @@ import re
 from typing import Tuple
 
 
-def load_data(filepath: str = None, option_type: str = 'calls') -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex]:
+def load_data(filepath: str = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex]:
     """
     Load surface data from wide format CSV and reshape to 3D array.
     
     Parameters:
     -----------
     filepath : str, optional
-        Path to surface CSV file. If None, uses SPX_{option_type}_surfaces.csv
-    option_type : str, default 'calls'
-        Option type: 'calls' or 'puts'
+        Path to surface CSV file. If None, uses SPX_surfaces.csv (combined calls and puts)
         
     Returns:
     --------
@@ -31,14 +29,11 @@ def load_data(filepath: str = None, option_type: str = 'calls') -> Tuple[np.ndar
     dates : pd.DatetimeIndex
         Date index
     """
-    if option_type not in ['calls', 'puts']:
-        raise ValueError(f"option_type must be 'calls' or 'puts', got '{option_type}'")
-    
     # Determine filepath
     if filepath is None:
-        filepath = f'SPX_{option_type}_surfaces.csv'
+        filepath = 'SPX_surfaces.csv'
     
-    print(f"Loading {option_type} data from {filepath}...")
+    print(f"Loading surface data from {filepath}...")
     
     # Read wide format CSV
     df = pd.read_csv(filepath, low_memory=False)

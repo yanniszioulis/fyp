@@ -35,9 +35,9 @@ class ForecastingPipeline:
         os.makedirs(os.path.join(results_dir, 'metrics'), exist_ok=True)
         os.makedirs(os.path.join(results_dir, 'plots'), exist_ok=True)
     
-    def load_data(self, option_type: str = 'calls'):
+    def load_data(self):
         """Load and prepare data"""
-        self.data, self.tau_grid, self.m_grid, self.dates = load_data(self.data_file, option_type=option_type)
+        self.data, self.tau_grid, self.m_grid, self.dates = load_data(self.data_file)
         print(f"Loaded data: shape {self.data.shape}")
     
     def create_windows(self, window_size_years: float = 10.0,

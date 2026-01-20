@@ -94,7 +94,7 @@ def main():
     
     # Load data
     print("\n[2/5] Loading data...")
-    pipeline.load_data(option_type='calls')
+    pipeline.load_data()
     
     # Create rolling windows
     print("\n[3/5] Creating rolling windows...")

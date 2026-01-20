@@ -31,6 +31,7 @@ results/*
 # HOT (reference implementation at root level only)
 /HOT/
 /PI-ConvTF/
+/viz_stuff/
 
 # Misc
 *.log

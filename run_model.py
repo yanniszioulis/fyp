@@ -26,14 +26,7 @@ def main():
         "--data",
         dest="data_file",
         default=None,
-        help="Path to surface data CSV (defaults to env FYP_DATA_PATH or auto-determined from --option-type)"
-    )
-    parser.add_argument(
-        "--option-type",
-        dest="option_type",
-        default="calls",
-        choices=["calls", "puts"],
-        help="Option type: calls or puts (default: calls)"
+        help="Path to surface data CSV (defaults to env FYP_DATA_PATH or SPX_surfaces.csv)"
     )
     parser.add_argument(
         "--results",
@@ -187,11 +180,10 @@ def main():
 
     print("=" * 60)
     print(f"Model Run: {args.model_id}")
-    print(f"Option Type: {args.option_type}")
     print("=" * 60)
 
     print("\n[1/3] Loading data...")
-    pipeline.load_data(option_type=args.option_type)
+    pipeline.load_data()
 
     print("\n[2/3] Creating rolling windows...")
     pipeline.create_windows(
@@ -207,65 +199,6 @@ def main():
         results = pipeline.run_persistence(
             context_lengths=context_lengths,
             horizons=horizons,
-            save_results=args.save_results
-        )
-    elif args.model_id == "transformer":
-        results = pipeline.run_model(
-            model_factory=lambda name, **kwargs: TransformerSurfaceModel(
-                name=name,
-                d_model=args.d_model,
-                n_heads=args.n_heads,
-                n_layers=args.n_layers,
-                dropout=args.dropout,
-                learning_rate=args.learning_rate,
-                weight_decay=args.weight_decay,
-                batch_size=args.batch_size,
-                num_epochs=args.num_epochs,
-                pool=args.pool,
-                normalize=args.normalize,
-                patience=args.patience,
-                min_delta=args.min_delta,
-                use_amp=args.use_amp,
-                baseline_decay=args.baseline_decay
-            ),
-            model_id="transformer",
-            context_lengths=context_lengths,
-            horizons=horizons,
-            train_on_val=False,
-            use_val=True,
-            save_checkpoints=args.save_checkpoint,
-            min_train_samples=1,
-            save_results=args.save_results
-        )
-    elif args.model_id == "hot":
-        results = pipeline.run_model(
-            model_factory=lambda name, **kwargs: HOTSurfaceModel(
-                name=name,
-                d_model=args.d_model,
-                d_mlp=args.d_model * 4,  # Default d_mlp = 4 * d_model
-                n_blocks=args.n_layers,  # Use n_layers as n_blocks
-                n_head=args.n_heads,
-                dropout=args.dropout,
-                learning_rate=args.learning_rate,
-                weight_decay=args.weight_decay,
-                batch_size=args.batch_size,
-                num_epochs=args.num_epochs,
-                patience=args.patience,
-                min_delta=args.min_delta,
-                use_amp=args.use_amp,
-                baseline_decay=args.baseline_decay,
-                embedding_type='linear',  # Default to linear embedding
-                pe_type='learnable',      # Default to learnable positional embeddings
-                attention_mode='kronecker_product',  # Default to product mode
-                use_rope=True,            # Use RoPE for time dimension
-            ),
-            model_id="hot",
-            context_lengths=context_lengths,
-            horizons=horizons,
-            train_on_val=False,
-            use_val=True,
-            save_checkpoints=False,  # TODO: Add checkpoint support for HOT
-            min_train_samples=1,
             save_results=args.save_results
         )
     elif args.model_id == "ridge_var":
@@ -319,7 +252,7 @@ def main():
     else:
         raise SystemExit(
             f"Unknown model '{args.model_id}'. "
-            "Supported: persistence, transformer, hot, ridge_var, convlstm."
+            "Supported: persistence, ridge_var, convlstm."
         )
 
     print("\n" + "=" * 60)

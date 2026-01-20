@@ -890,8 +890,8 @@ class ConvLSTMModel(BaseModel):
                 # Update learning rate
                 self.scheduler.step(avg_val_loss)
                 
-                if (epoch + 1) % 5 == 0:
-                    print(f"{self.name} Epoch {epoch+1}/{self.epochs} - Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f} (Best: {self.best_val_loss:.6f} @ epoch {best_epoch}, Patience: {patience_counter}/{self.patience})")
+                # if (epoch + 1) % 5 == 0:
+                #     print(f"{self.name} Epoch {epoch+1}/{self.epochs} - Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f} (Best: {self.best_val_loss:.6f} @ epoch {best_epoch}, Patience: {patience_counter}/{self.patience})")
                 
                 # Early stopping
                 if patience_counter >= self.patience:
@@ -904,8 +904,8 @@ class ConvLSTMModel(BaseModel):
                     self.best_val_loss = avg_train_loss
                     self.best_model_state = self.model.state_dict().copy()
                 
-                if (epoch + 1) % 5 == 0:
-                    print(f"{self.name} Epoch {epoch+1}/{self.epochs} - Train Loss: {avg_train_loss:.6f}")
+                # if (epoch + 1) % 5 == 0:
+                #     print(f"{self.name} Epoch {epoch+1}/{self.epochs} - Train Loss: {avg_train_loss:.6f}")
         
         # Load best model state (or keep final model for overfitting tests)
         use_final_model = kwargs.get('use_final_model', False)
@@ -1037,7 +1037,7 @@ class ConvLSTMModel(BaseModel):
     
     def load_checkpoint(self, filepath):
         """Load model checkpoint"""
-        checkpoint = torch.load(filepath, map_location=self.device)
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
         
         # Restore hyperparameters
         hp = checkpoint['hyperparameters']

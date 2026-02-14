@@ -233,7 +233,7 @@ class OptionMetricsPreprocess:
         ttm_grid = self._make_tau_grid(self.ttm_min, self.ttm_max, self.n_axis_points)
 
 
-        column_names = ["date", "underlying_price"]
+        column_names = ["date"]
         for i in range(self.n_axis_points):
             for j in range(self.n_axis_points):
                 m = round(moneyness_grid[j], 4)
@@ -243,7 +243,7 @@ class OptionMetricsPreprocess:
         rows = []
         for data in surfaces_data:
             surface = data["surface"]
-            row = {"date": data["date"], "underlying_price": data["underlying_price"]}
+            row = {"date": data["date"]}
             for i in range(self.n_axis_points):
                 for j in range(self.n_axis_points):
                     m = round(moneyness_grid[j], 4)

@@ -1,0 +1,3 @@
+SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_dm128_nh16_el3_dl1_df256_fc1_ebtimeF_dtTrue_Exp_0  
+mse:0.17555123567581177, mae:0.2933778762817383, rse:0.6764044165611267
+

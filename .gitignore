@@ -32,11 +32,6 @@ results/*
 DynGWN/data/**
 DynGWN/logs/**
 
-# DynGWN results: keep small, reproducible outputs tracked
-DynGWN/results/**
-!DynGWN/results/**/pred.npy
-!DynGWN/results/**/start_dates.npy
-!DynGWN/results/**/meta.json
 
 # HOT (reference implementation at root level only)
 /PI-ConvTF/

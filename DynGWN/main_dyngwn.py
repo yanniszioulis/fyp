@@ -24,6 +24,18 @@ import torch.distributed as dist
 
 from engine import trainer
 
+def _load_checkpoint(path: str, *, map_location=None) -> dict:
+    """
+    PyTorch 2.6+ defaults torch.load(weights_only=True), which can fail on older
+    checkpoints that contain non-primitive (e.g., numpy scalar) values.
+    Try safe load first; fall back to full unpickling for trusted local checkpoints.
+    """
+    try:
+        return torch.load(path, map_location=map_location)  # weights_only default (True in PT2.6+)
+    except Exception:
+        # Fallback for older checkpoints saved with numpy scalars in metadata.
+        return torch.load(path, map_location=map_location, weights_only=False)
+
 def parse_args():
     parser = argparse.ArgumentParser()
 #     parser.add_argument('--device', type=str, default='cuda', help='')
@@ -405,7 +417,8 @@ def main(args):
 #             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
             
             #testing
-            engine.model.load_state_dict(torch.load(checkpoint_file)['model'])
+            ckpt = _load_checkpoint(checkpoint_file, map_location=device)
+            engine.model.load_state_dict(ckpt['model'])
         #     bestid = np.argmin(his_loss)
         #     engine.model.load_state_dict(torch.load(args.save+"_epoch_"+str(bestid+1)+"_"+str(round(his_loss[bestid],2))+".pth"))
 
@@ -433,7 +446,8 @@ def main(args):
     # Save PatchTST-style predictions (scaled space) after training.
     if args.rank == 0 and (args.save_preds or args.domain == 'spx_iv'):
         if os.path.exists(checkpoint_file):
-            engine.model.load_state_dict(torch.load(checkpoint_file)['model'])
+            ckpt = _load_checkpoint(checkpoint_file, map_location=device)
+            engine.model.load_state_dict(ckpt['model'])
         pred_scaled = _predict_scaled(engine, data['test_loader'], device)  # [N, horizon, nodes]
 
         setting = _build_results_setting_name(args)
@@ -488,9 +502,7 @@ def train_one_epoch(engine, train_loader, epoch, args, device):
         del trainy
         if A is not None:
             del trainA
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("Cuda memory after forward:", torch.cuda.memory_reserved("cuda"))
+        # (Removed noisy per-iter CUDA memory debug prints.)
         train_loss.append(metrics[0])
         train_mape.append(metrics[1])
         train_rmse.append(metrics[2])
@@ -526,9 +538,7 @@ def validate(engine, val_loader, device):
         del testy
         if A is not None:
             del testA
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("Cuda memory after forward:", torch.cuda.memory_reserved("cuda"))
+        # (Removed noisy per-iter CUDA memory debug prints.)
         valid_loss.append(metrics[0])
         valid_mape.append(metrics[1])
         valid_rmse.append(metrics[2])
@@ -589,7 +599,8 @@ class EarlyStopping:
         torch.save(
             {
                 'model': model.state_dict(),
-                'best_val_loss': self.val_loss_min
+                # Store as plain Python float for PyTorch weights_only loading compatibility.
+                'best_val_loss': float(self.val_loss_min)
             },
             self.path
         )
@@ -626,9 +637,7 @@ def compute_metrics(engine, test_data, scaler, device, name='test', horizon: int
         del testy
         if A is not None:
             del testA
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("Cuda memory after forward:", torch.cuda.memory_reserved("cuda"))
+        # (Removed noisy per-iter CUDA memory debug prints.)
 
     realy = torch.cat(realoutputs, dim=0)
     yhat = torch.cat(outputs, dim=0)

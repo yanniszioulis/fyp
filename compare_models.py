@@ -10,7 +10,7 @@ using the same split + scaling as PatchTST Dataset_Custom:
 - borders for val/test include a -seq_len overlap
 
 Models:
-- PatchTST: expects pred.npy with shape [N, pred_len, 401] (underlying_price + 400 IVs)
+- PatchTST: expects pred.npy with shape [N, pred_len, 400] (IV grid only)
 - Persistence: same shape/order as PatchTST
 - HOT: expects pred.npy with shape [N, H, W, pred_len] and start_dates.npy with dates
        (H=20, W=20 so H*W=400 IVs). Saved from HOT pipeline.
@@ -139,9 +139,56 @@ def load_hot_iv_pred(path: str) -> np.ndarray:
     if arr.ndim != 4:
         raise ValueError(f"Unexpected HOT pred shape: {arr.shape}")
     n, h, w, p = arr.shape
+    if h * w != 400:
+        raise ValueError(f"Expected HOT surface grid to have 400 cells (got {h}x{w}={h*w}) in {path}")
     arr = arr.transpose(0, 3, 1, 2)  # [N, pred, H, W]
     vec = arr.reshape(n, p, h * w, order="F")  # moneyness varies fastest, then tau
     return vec.astype(np.float32, copy=False)
+
+def _align_hot_to_patch_dates(
+    *,
+    hot_pred: np.ndarray,
+    hot_dates: np.ndarray,
+    patch_dates: np.ndarray,
+    hot_name: str,
+) -> np.ndarray:
+    hot_dates = hot_dates.astype("datetime64[D]")
+    hot_map = {d: i for i, d in enumerate(hot_dates)}
+    hot_idx = []
+    missing = 0
+    for d in patch_dates:
+        i = hot_map.get(d)
+        if i is None:
+            missing += 1
+            hot_idx.append(-1)
+        else:
+            hot_idx.append(i)
+    if missing:
+        raise ValueError(f"{hot_name} is missing {missing} start_dates that exist in PatchTST test set.")
+    return hot_pred[np.array(hot_idx, dtype=int)]
+
+
+def _align_pred_to_patch_dates(
+    *,
+    pred: np.ndarray,
+    pred_dates: np.ndarray,
+    patch_dates: np.ndarray,
+    name: str,
+) -> np.ndarray:
+    pred_dates = pred_dates.astype("datetime64[D]")
+    pred_map = {d: i for i, d in enumerate(pred_dates)}
+    pred_idx = []
+    missing = 0
+    for d in patch_dates:
+        i = pred_map.get(d)
+        if i is None:
+            missing += 1
+            pred_idx.append(-1)
+        else:
+            pred_idx.append(i)
+    if missing:
+        raise ValueError(f"{name} is missing {missing} start_dates that exist in PatchTST test set.")
+    return pred[np.array(pred_idx, dtype=int)]
 
 
 def main():
@@ -169,14 +216,36 @@ def main():
         "SPX_IV_21_63_VAR1_ridge_intercept_custom_ftM_sl21_ll0_pl63_Exp_0/pred.npy",
     )
     parser.add_argument(
-        "--hot_pred",
+        "--hot_pred_product",
         type=str,
         default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_product/pred.npy",
     )
     parser.add_argument(
-        "--hot_dates",
+        "--hot_dates_product",
         type=str,
         default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_product/start_dates.npy",
+    )
+    parser.add_argument(
+        "--hot_pred_sum",
+        type=str,
+        default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_sum/pred.npy",
+    )
+    parser.add_argument(
+        "--hot_dates_sum",
+        type=str,
+        default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_sum/start_dates.npy",
+    )
+    parser.add_argument(
+        "--dyngwn_pred",
+        type=str,
+        default=None,
+        help="Optional DynGWN pred.npy path (shape [N, pred_len, 400] in scaled space).",
+    )
+    parser.add_argument(
+        "--dyngwn_dates",
+        type=str,
+        default=None,
+        help="Optional DynGWN start_dates.npy path to align by date.",
     )
     args = parser.parse_args()
 
@@ -187,8 +256,10 @@ def main():
     patch_pred = load_patchtst_iv_pred(args.patchtst_pred)
     persist_pred = load_patchtst_iv_pred(args.persist_pred)
     var_pred = load_patchtst_iv_pred(args.var_pred)
-    hot_pred = load_hot_iv_pred(args.hot_pred)
-    hot_dates = np.load(args.hot_dates).astype("datetime64[D]")
+    hot_pred_product = load_hot_iv_pred(args.hot_pred_product)
+    hot_dates_product = np.load(args.hot_dates_product).astype("datetime64[D]")
+    hot_pred_sum = load_hot_iv_pred(args.hot_pred_sum)
+    hot_dates_sum = np.load(args.hot_dates_sum).astype("datetime64[D]")
 
     n_patch = patch_pred.shape[0]
     trues = trues_all[:n_patch]
@@ -205,26 +276,40 @@ def main():
     if var_pred.shape[1:] != trues.shape[1:]:
         raise ValueError(f"VAR pred shape {var_pred.shape} != truth {trues.shape}")
 
-    hot_map = {d: i for i, d in enumerate(hot_dates)}
-    hot_idx = []
-    missing = 0
-    for d in patch_dates:
-        i = hot_map.get(d)
-        if i is None:
-            missing += 1
-            hot_idx.append(-1)
-        else:
-            hot_idx.append(i)
-    if missing:
-        raise ValueError(f"HOT is missing {missing} start_dates that exist in PatchTST test set.")
-    hot_aligned = hot_pred[np.array(hot_idx, dtype=int)]
+    hot_product_aligned = _align_hot_to_patch_dates(
+        hot_pred=hot_pred_product,
+        hot_dates=hot_dates_product,
+        patch_dates=patch_dates,
+        hot_name="HOT(product)",
+    )
+    hot_sum_aligned = _align_hot_to_patch_dates(
+        hot_pred=hot_pred_sum,
+        hot_dates=hot_dates_sum,
+        patch_dates=patch_dates,
+        hot_name="HOT(sum)",
+    )
 
     preds = {
         "PatchTST": patch_pred,
-        "HOT": hot_aligned,
+        "HOT(product)": hot_product_aligned,
+        "HOT(sum)": hot_sum_aligned,
         "VAR1": var_pred,
         "Persistence": persist_pred,
     }
+
+    if args.dyngwn_pred:
+        dyngwn_pred = load_patchtst_iv_pred(args.dyngwn_pred)
+        if args.dyngwn_dates:
+            dyngwn_dates = np.load(args.dyngwn_dates).astype("datetime64[D]")
+            dyngwn_pred = _align_pred_to_patch_dates(
+                pred=dyngwn_pred,
+                pred_dates=dyngwn_dates,
+                patch_dates=patch_dates,
+                name="DynGWN",
+            )
+        else:
+            dyngwn_pred = dyngwn_pred[:n_patch]
+        preds["DynGWN"] = dyngwn_pred
 
     rows = []
     for name, arr in preds.items():
@@ -242,34 +327,35 @@ def main():
         )
 
     by_name = {r["name"]: r for r in rows}
-    print("=" * 78)
-    print(f"{'Metric':<12} {'PatchTST':>18} {'HOT':>18} {'VAR1':>18} {'Persistence':>18}")
-    print("=" * 78)
+    model_order = ["PatchTST", "HOT(product)", "HOT(sum)", "VAR1", "Persistence"]
+    if "DynGWN" in by_name and "DynGWN" not in model_order:
+        model_order.insert(3, "DynGWN")
+
+    display = {"HOT(product)": "HOT(prod)", "HOT(sum)": "HOT(sum)", "Persistence": "Persistence"}
+    colw = 14
+    line_w = 12 + 1 + (colw + 1) * len(model_order)
+    print("=" * line_w)
+    print(f"{'Metric':<12} " + " ".join([f"{display.get(m, m):>{colw}}" for m in model_order]))
+    print("=" * line_w)
     for metric in ["mse", "mae", "rse", "ic_mean", "ic_std"]:
-        print(
-            f"{metric:<12} "
-            f"{by_name['PatchTST'][metric]:>18.10f} "
-            f"{by_name['HOT'][metric]:>18.10f} "
-            f"{by_name['VAR1'][metric]:>18.10f} "
-            f"{by_name['Persistence'][metric]:>18.10f}"
-        )
-    print("=" * 78)
+        print(f"{metric:<12} " + " ".join([f"{by_name[m][metric]:>{colw}.10f}" for m in model_order]))
+    print("=" * line_w)
 
     horizons_to_show = [1, 5, 10, 21, 42, 63]
     print(f"\nPer-horizon IC (averaged across {trues.shape[0]} test windows):")
-    print(f"{'Horizon':<10} {'PatchTST':>14} {'HOT':>14} {'VAR1':>14} {'Persistence':>14}")
-    print("-" * 56)
+    ic_colw = 12
+    ic_line_w = 10 + 1 + (ic_colw + 1) * len(model_order)
+    display_ic = {**display, "Persistence": "Persist"}
+    print(f"{'Horizon':<10} " + " ".join([f"{display_ic.get(m, m):>{ic_colw}}" for m in model_order]))
+    print("-" * ic_line_w)
     for h in horizons_to_show:
         if 1 <= h <= args.pred_len:
             idx = h - 1
             print(
                 f"t+{h:<7} "
-                f"{by_name['PatchTST']['ic_h'][idx]:>14.6f} "
-                f"{by_name['HOT']['ic_h'][idx]:>14.6f} "
-                f"{by_name['VAR1']['ic_h'][idx]:>14.6f} "
-                f"{by_name['Persistence']['ic_h'][idx]:>14.6f}"
+                + " ".join([f"{by_name[m]['ic_h'][idx]:>{ic_colw}.6f}" for m in model_order])
             )
-    print("-" * 56)
+    print("-" * 74)
 
 
 if __name__ == "__main__":

@@ -203,9 +203,13 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 
-def _compute_loss(pred_scaled, y_scaled, loss_kind, mean=None, std=None):
+def _compute_loss(pred_scaled, y_scaled, loss_kind, mean=None, std=None, huber_delta=1.0):
     if loss_kind == 'mse':
         return nn.functional.mse_loss(pred_scaled, y_scaled)
+    if loss_kind == 'mae_scaled':
+        return nn.functional.l1_loss(pred_scaled, y_scaled)
+    if loss_kind == 'huber_scaled':
+        return nn.functional.smooth_l1_loss(pred_scaled, y_scaled, beta=huber_delta)
     if loss_kind == 'mae_original':
         pred_orig = pred_scaled * std + mean
         y_orig    = y_scaled    * std + mean
@@ -213,24 +217,24 @@ def _compute_loss(pred_scaled, y_scaled, loss_kind, mean=None, std=None):
     raise ValueError(f"unknown loss_kind: {loss_kind!r}")
 
 
-def _epoch(model, loader, opt, device, loss_kind, mean=None, std=None):
+def _epoch(model, loader, opt, device, loss_kind, mean=None, std=None, huber_delta=1.0):
     model.train()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        loss = _compute_loss(model(xb), yb, loss_kind, mean, std)
+        loss = _compute_loss(model(xb), yb, loss_kind, mean, std, huber_delta)
         opt.zero_grad(); loss.backward(); opt.step()
         total += loss.item() * len(xb); n += len(xb)
     return total / n
 
 
 @torch.no_grad()
-def _val_loss(model, loader, device, loss_kind, mean=None, std=None):
+def _val_loss(model, loader, device, loss_kind, mean=None, std=None, huber_delta=1.0):
     model.eval()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        total += _compute_loss(model(xb), yb, loss_kind, mean, std).item() * len(xb)
+        total += _compute_loss(model(xb), yb, loss_kind, mean, std, huber_delta).item() * len(xb)
         n     += len(xb)
     return total / n
 
@@ -254,8 +258,8 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
     log_rows = []
 
     for epoch in range(1, args.epochs + 1):
-        tr_loss = _epoch(model, tr_loader, opt, device, args.loss, mean, std)
-        va_loss = _val_loss(model, va_loader, device, args.loss, mean, std)
+        tr_loss = _epoch(model, tr_loader, opt, device, args.loss, mean, std, args.huber_delta)
+        va_loss = _val_loss(model, va_loader, device, args.loss, mean, std, args.huber_delta)
         log_rows.append({'epoch': epoch, 'train_loss': tr_loss, 'val_loss': va_loss})
 
         if va_loss < best_val:
@@ -277,7 +281,12 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
         w.writeheader(); w.writerows(log_rows)
 
     model.load_state_dict(torch.load(ckpt, map_location=device))
-    label = {'mse': 'MSE (scaled)', 'mae_original': 'MAE (original IV)'}[args.loss]
+    label = {
+        'mse':           'MSE (scaled)',
+        'mae_original':  'MAE (original IV)',
+        'mae_scaled':    'MAE (scaled)',
+        'huber_scaled':  f'Huber (scaled, δ={args.huber_delta})',
+    }[args.loss]
     print(f'  best val {label}: {best_val:.6f}')
     return model
 
@@ -306,7 +315,9 @@ def main():
                     help='Skip training; load best_model.pt + config.json from --out_dir, '
                          'run inference, write pred.npy.')
     ap.add_argument('--loss',         default='mse',
-                    choices=['mse', 'mae_original'])
+                    choices=['mse', 'mae_original', 'mae_scaled', 'huber_scaled'])
+    ap.add_argument('--huber_delta',  type=float, default=1.0,
+                    help='Threshold for huber_scaled (default 1.0 = ~1 stdev).')
     args = ap.parse_args()
 
     if args.device == 'auto':
@@ -329,13 +340,19 @@ def main():
         with open(cfg_path) as f:
             cfg = json.load(f)
         for k in ('csv_path', 'seq_len', 'pred_len', 'kernel_size',
-                  'conv_kernel', 'conv_dropout', 'batch_size', 'loss'):
+                  'conv_kernel', 'conv_dropout', 'batch_size', 'loss',
+                  'huber_delta'):
             if k in cfg:
                 setattr(args, k, cfg[k])
         print(f'[predict_only] {cfg_path}')
 
     if args.out_dir is None:
-        loss_suffix = '' if args.loss == 'mse' else '_lossmae'
+        loss_suffix = {
+            'mse':           '',
+            'mae_original':  '_lossmae',
+            'mae_scaled':    '_lossmaescaled',
+            'huber_scaled':  f'_losshuberscaled_d{args.huber_delta:g}',
+        }[args.loss]
         args.out_dir = (
             f'DCISM/results/'
             f'SPX_IV_{args.seq_len}_{args.pred_len}'
@@ -383,6 +400,7 @@ def main():
             'patience':      args.patience,
             'seed':          args.seed,
             'loss':          args.loss,
+            'huber_delta':   args.huber_delta,
         }
         with open(os.path.join(args.out_dir, 'config.json'), 'w') as f:
             json.dump(config, f, indent=2)

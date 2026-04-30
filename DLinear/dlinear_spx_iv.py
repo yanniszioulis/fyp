@@ -152,22 +152,24 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
 
 def _compute_loss(pred_scaled: torch.Tensor, y_scaled: torch.Tensor,
                   loss_kind: str, mean: torch.Tensor = None,
-                  std: torch.Tensor = None) -> torch.Tensor:
+                  std: torch.Tensor = None, huber_delta: float = 1.0) -> torch.Tensor:
     """
     Loss options:
       mse           — MSE in scaled space (default).
       mae_original  — MAE on inverse-transformed pred vs y (original IV space).
-                       Mathematically equivalent to std-weighted MAE in scaled space:
-                       channels with higher historical std contribute more.
-      mae_scaled    — Plain MAE in scaled space. Equivalent to (1/std)-weighted MAE
-                       in original space, i.e. all channels weighted uniformly.
-                       Tests the hypothesis that mae_original's std-weighting hurts
-                       short-horizon performance on low-vol channels.
+                       Equivalent to std-weighted MAE in scaled space.
+      mae_scaled    — Plain MAE in scaled space. Uniform per-channel weighting.
+      huber_scaled  — Huber loss in scaled space. Quadratic for |err| < delta,
+                       linear above. Interpolates MSE (small err) and MAE (large err)
+                       — tests whether MAE's coarse small-error gradient is what
+                       hurts short-horizon performance.
     """
     if loss_kind == 'mse':
         return nn.functional.mse_loss(pred_scaled, y_scaled)
     if loss_kind == 'mae_scaled':
         return nn.functional.l1_loss(pred_scaled, y_scaled)
+    if loss_kind == 'huber_scaled':
+        return nn.functional.smooth_l1_loss(pred_scaled, y_scaled, beta=huber_delta)
     if loss_kind == 'mae_original':
         pred_orig = pred_scaled * std + mean
         y_orig    = y_scaled    * std + mean
@@ -175,12 +177,12 @@ def _compute_loss(pred_scaled: torch.Tensor, y_scaled: torch.Tensor,
     raise ValueError(f"unknown loss_kind: {loss_kind!r}")
 
 
-def _epoch(model, loader, opt, device, loss_kind, mean=None, std=None):
+def _epoch(model, loader, opt, device, loss_kind, mean=None, std=None, huber_delta=1.0):
     model.train()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        loss = _compute_loss(model(xb), yb, loss_kind, mean, std)
+        loss = _compute_loss(model(xb), yb, loss_kind, mean, std, huber_delta)
         opt.zero_grad(); loss.backward(); opt.step()
         total += loss.item() * len(xb)
         n     += len(xb)
@@ -188,12 +190,12 @@ def _epoch(model, loader, opt, device, loss_kind, mean=None, std=None):
 
 
 @torch.no_grad()
-def _val_loss(model, loader, device, loss_kind, mean=None, std=None):
+def _val_loss(model, loader, device, loss_kind, mean=None, std=None, huber_delta=1.0):
     model.eval()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        total += _compute_loss(model(xb), yb, loss_kind, mean, std).item() * len(xb)
+        total += _compute_loss(model(xb), yb, loss_kind, mean, std, huber_delta).item() * len(xb)
         n     += len(xb)
     return total / n
 
@@ -218,8 +220,8 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
     log_rows = []
 
     for epoch in range(1, args.epochs + 1):
-        tr_loss = _epoch(model, tr_loader, opt, device, args.loss, mean, std)
-        va_loss = _val_loss(model, va_loader, device, args.loss, mean, std)
+        tr_loss = _epoch(model, tr_loader, opt, device, args.loss, mean, std, args.huber_delta)
+        va_loss = _val_loss(model, va_loader, device, args.loss, mean, std, args.huber_delta)
         log_rows.append({'epoch': epoch, 'train_loss': tr_loss, 'val_loss': va_loss})
 
         if va_loss < best_val:
@@ -246,6 +248,7 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
         'mse':           'MSE (scaled)',
         'mae_original':  'MAE (original IV)',
         'mae_scaled':    'MAE (scaled)',
+        'huber_scaled':  f'Huber (scaled, δ={args.huber_delta})',
     }[args.loss]
     print(f'  best val {label}: {best_val:.6f}')
     return model
@@ -274,13 +277,12 @@ def main():
                     help='Skip training; load best_model.pt + config.json from --out_dir, '
                          'run inference, write pred.npy.')
     ap.add_argument('--loss', default='mse',
-                    choices=['mse', 'mae_original', 'mae_scaled'],
-                    help='Training loss. mse: MSE in scaled space (default). '
-                         'mae_original: masked MAE in original IV space '
-                         '(implicitly std-weights by channel: high-std channels '
-                         'matter more). mae_scaled: plain MAE in scaled space '
-                         '(uniform per-channel weighting; tests whether removing '
-                         'std-weighting recovers short-horizon performance).')
+                    choices=['mse', 'mae_original', 'mae_scaled', 'huber_scaled'],
+                    help='Training loss in scaled space unless suffix says otherwise. '
+                         'huber_scaled interpolates MSE (small err) → MAE (large err) '
+                         'at the threshold given by --huber_delta.')
+    ap.add_argument('--huber_delta', type=float, default=1.0,
+                    help='Threshold for huber_scaled (default 1.0 = ~1 stdev).')
     args = ap.parse_args()
 
     # Device
@@ -315,8 +317,9 @@ def main():
         args.pred_len    = cfg.get('pred_len',    args.pred_len)
         args.kernel_size = cfg.get('kernel_size', args.kernel_size)
         args.batch_size  = cfg.get('batch_size',  args.batch_size)
-        # 'loss' is irrelevant for inference, but keep it consistent with the run.
+        # 'loss' irrelevant for inference, but kept for label consistency.
         args.loss        = cfg.get('loss',        args.loss)
+        args.huber_delta = cfg.get('huber_delta', args.huber_delta)
         print(f'[predict_only] {cfg_path}')
 
     if args.out_dir is None:
@@ -325,6 +328,7 @@ def main():
             'mse':           '',
             'mae_original':  '_lossmae',
             'mae_scaled':    '_lossmaescaled',
+            'huber_scaled':  f'_losshuberscaled_d{args.huber_delta:g}',
         }[args.loss]
         args.out_dir = (
             f'DLinear/results/'
@@ -370,6 +374,7 @@ def main():
             'patience':    args.patience,
             'seed':        args.seed,
             'loss':        args.loss,
+            'huber_delta': args.huber_delta,
         }
         with open(os.path.join(args.out_dir, 'config.json'), 'w') as f:
             json.dump(config, f, indent=2)

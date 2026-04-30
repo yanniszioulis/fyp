@@ -94,6 +94,12 @@ MODELS = [
         "loader":       "flat",
     },
     {
+        "name":         "DLinear(Huber)",
+        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_losshuberscaled_*",
+        "regen_script": "DLinear/dlinear_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
         "name":         "DCISMv0",
         "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*",
         "name_filter":  lambda n: "_loss" not in n,  # MSE only
@@ -102,7 +108,21 @@ MODELS = [
     },
     {
         "name":         "DCISMv0(MAE)",
+        # MAE-original (without BC): exact suffix "_lossmae".
         "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_lossmae",
+        "name_filter":  lambda n: not n.endswith("_bc"),
+        "regen_script": "DCISM/dcism_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
+        "name":         "DCISMv0(MAE+BC)",
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_lossmae_bc",
+        "regen_script": "DCISM/dcism_spx_iv.py",  # unused; auto-regen uses BC script
+        "loader":       "flat",
+    },
+    {
+        "name":         "DCISMv0(Huber)",
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_losshuberscaled_*",
         "regen_script": "DCISM/dcism_spx_iv.py",
         "loader":       "flat",
     },
@@ -426,8 +446,28 @@ def _maybe_regen(spec: dict, name: str) -> str | None:
     if os.path.exists(pred_path):
         return pred_path
 
-    print(f"  {name}: pred.npy missing → regenerating from {out_dir} ...")
     import subprocess, sys as _sys
+
+    # Special case: bias-corrected DCISM dirs (suffix `_bc`).
+    # apply_bias_correction.py reads the source (`<out_dir>` minus `_bc`) and
+    # rewrites the BC output dir from scratch.
+    if out_dir.endswith("_bc"):
+        src_dir = out_dir[:-3]
+        if (os.path.exists(os.path.join(src_dir, "best_model.pt"))
+                and os.path.exists(os.path.join(src_dir, "config.json"))):
+            print(f"  {name}: pred.npy missing in {out_dir}; "
+                  f"applying bias correction from {src_dir} ...")
+            rc = subprocess.run(
+                [_sys.executable, "DCISM/apply_bias_correction.py", "--src_dir", src_dir]
+            ).returncode
+            if rc == 0 and os.path.exists(pred_path):
+                return pred_path
+            print(f"  {name}: BC regeneration failed (exit {rc})")
+            return None
+        print(f"  {name}: source dir {src_dir} missing ckpt/config — skipping")
+        return None
+
+    print(f"  {name}: pred.npy missing → regenerating from {out_dir} ...")
     rc = subprocess.run(
         [_sys.executable, spec["regen_script"], "--predict_only", "--out_dir", out_dir]
     ).returncode

@@ -41,7 +41,8 @@ MODEL_ARGS = {
     "dlinear":  [("--epochs", "epochs"), ("--batch_size", "batch_size"),
                  ("--lr", "lr"), ("--patience", "patience"),
                  ("--kernel_size", "kernel_size"),
-                 ("--loss", "loss")],
+                 ("--loss", "loss"),
+                 ("--huber_delta", "huber_delta")],
     "patchtst": [("--epochs", "epochs"), ("--batch_size", "batch_size"),
                  ("--lr", "lr"), ("--patience", "patience"),
                  ("--patch_len", "patch_len"), ("--stride", "stride"),
@@ -67,7 +68,8 @@ MODEL_ARGS = {
                  ("--kernel_size", "kernel_size"),
                  ("--conv_kernel", "conv_kernel"),
                  ("--conv_dropout", "conv_dropout"),
-                 ("--loss", "loss")],
+                 ("--loss", "loss"),
+                 ("--huber_delta", "huber_delta")],
 }
 
 
@@ -131,7 +133,8 @@ def main():
     # DLinear / DCISM
     ap.add_argument("--kernel_size",  type=int, default=None)
     ap.add_argument("--loss",         default=None,
-                    choices=["mse", "mae_original", "mae_scaled"])
+                    choices=["mse", "mae_original", "mae_scaled", "huber_scaled"])
+    ap.add_argument("--huber_delta",  type=float, default=None)
 
     # DCISM
     ap.add_argument("--conv_kernel",  type=int,   default=None)

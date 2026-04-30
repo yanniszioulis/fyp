@@ -365,3 +365,121 @@ Three runs, ~1 hour total on a T4. After this round we'll have a clean
 - Add `MAE_original` metric column to compare_models.py (just a few lines).
 - log-IV / total-variance target ablation on DLinear or DCISM.
 - Factor-head extension if DCISM clears the bar but isn't dominant.
+
+---
+
+## Findings from 2×2 ablation (post first Colab cycle)
+
+```
+Metric    DLinear  DLin(MAE) DCISMv0  DCISM(MAE)  | best
+mse        0.148    0.159    0.150    0.153       | DLinear
+ic_mean   +0.571   +0.531   +0.569   +0.576       | DCISM(MAE) ★
+t+1 IC    +0.930   +0.839↓  +0.932   +0.928       | DCISM(MSE)
+t+1 MSE    0.016    0.053↓   0.013★   0.014       | DCISM(MSE)
+t+63 IC   +0.399   +0.382   +0.395   +0.415★      | DCISM(MAE) ★
+bias      +0.027   -0.014   +0.034   -0.077       | DCISM(MSE) most-calibrated
+```
+
+**Three findings:**
+1. **DCISM(MAE) wins on IC** — overall (0.576) and at every horizon, strongest at t+63 (0.415 vs DLinear 0.399).
+2. **DCISM(MSE) wins on t+1 MSE** (0.0126, beats persistence 0.0127). Isolates the value of the conv polish.
+3. **MAE-original helps DCISM but actively hurts DLinear** at short horizons. Initial hypothesis: per-channel std-weighting introduced by training in original space.
+
+---
+
+## Std-weighting hypothesis test — REJECTED
+
+Plan: train DLinear with plain MAE in scaled space (`mae_scaled`), which is
+equivalent to (1/std)-weighted MAE in original space — uniform per-channel
+weighting. If std-weighting is the culprit, t+1 IC should recover.
+
+Result: **identical to MAE-original**. t+1 IC 0.840 vs 0.839; t+1 MSE 0.052
+vs 0.053; differences at the 4th decimal.
+
+→ Std-weighting is NOT the cause.
+
+## New hypothesis — MAE's gradient magnitude
+
+`∂|x|/∂x = sign(x)` is constant in magnitude regardless of error size.
+`∂x²/∂x = 2x` is proportional to the error. At t+1, errors are small;
+MSE provides fine-grained "make this small error smaller" gradient that
+MAE cannot. The damage fingerprint matches:
+
+```
+Horizon  MSE-loss  MAE-loss  ratio
+t+1      0.016     0.052     3.3×
+t+5      0.060     0.082     1.4×
+t+10     0.093     0.109     1.2×
+t+21     0.131     0.149     1.1×
+t+42     0.182     0.187     1.02×
+t+63     0.200     0.200     1.00×
+```
+
+Concentrated at short horizons, fades to zero by t+63. That's the gradient
+property, not channel weighting. **DCISM(MAE) doesn't suffer this** because
+the conv polish provides additional fine-grained spatial refinement that
+fills the small-error gradient gap.
+
+If correct, **Huber loss** (MSE for small errors, MAE for large) should
+recover DLinear's t+1 performance while preserving long-horizon advantage.
+
+## Bias correction for DCISM(MAE) — naive version FAILED
+
+Implemented as `DCISM/apply_bias_correction.py` (post-hoc): per-channel
+additive offset fit on val, applied to test predictions. Saves to
+`<src>_bc/`. compare_models auto-regenerates if pred.npy is missing.
+
+| Metric | DCISMv0(MAE) | DCISMv0(MAE+BC) |
+|---|---|---|
+| mse | 0.153 | **0.155** ↓ |
+| ic_mean | +0.576 | **+0.482** ↓↓ |
+| t+1 IC | +0.928 | +0.820 ↓↓ |
+| bias (test) | −0.077 | **+0.083** (over-corrected) |
+
+Cause: **regime drift.** Val mean bias = +0.16; test bias was −0.077.
+Adding +0.16 over-corrects. Val (~2021-2022) sits before the 2022-23 vol
+regime change; test (2022-04 → 2025-06) is on the other side. Static offset
+from val doesn't transfer.
+
+Lesson: any future bias correction must be either time-adaptive
+(rolling/online) or learned end-to-end (so training distribution matches
+inference). Naive offset rejected.
+
+---
+
+## Next experiments to queue on Colab
+
+| # | Command | What it tests |
+|---|---|---|
+| 1 | `python train.py --models dlinear --loss huber_scaled --huber_delta 1.0` | gradient-magnitude hypothesis: does Huber recover DLinear's t+1 IC vs MAE? |
+| 2 | `python train.py --models dlinear --loss huber_scaled --huber_delta 0.3` | smaller delta = more MSE-like; ablation along the MSE↔MAE axis |
+| 3 | `python train.py --models dcism --loss huber_scaled --huber_delta 1.0` | does Huber-DCISM match (MAE)'s long-horizon IC win without sacrificing short-horizon? |
+| 4 | `python train.py --models dcism --conv_kernel 5 --loss mae_original` | larger polish kernel — more spatial smoothing capacity |
+| 5 | `python train.py --models dcism --conv_kernel 5` | same polish ablation under MSE loss |
+
+Total ~1-1.5 hr on a T4. After this we'll have:
+- Loss ablation on identical DLinear arch: MSE / MAE / Huber-1.0 / Huber-0.3
+- Polish-kernel ablation on DCISM under both losses
+- Enough to pick a headline DCISM config for the report
+
+**BC line of investigation paused** — naive offset doesn't generalise; would
+need rolling/learned correction. Not pursuing unless Huber results re-open
+the question.
+
+## Implementation log (newest)
+
+- DLinear `--loss mae_scaled` — std-weighting test (rejected hypothesis).
+  Suffix `_lossmaescaled`.
+- DLinear & DCISM `--loss huber_scaled` with `--huber_delta` (default 1.0).
+  Suffix `_losshuberscaled_d<delta>`. Tests gradient-magnitude hypothesis.
+- `DCISM/apply_bias_correction.py` — standalone BC utility. Reads
+  ckpt+config from src dir, fits per-channel additive bias on val, applies
+  to test, writes `<src>_bc/`.
+- `compare_models.py`:
+  - new rows: `DLinear(MAE-s)`, `DLinear(Huber)`, `DCISMv0(MAE+BC)`,
+    `DCISMv0(Huber)`.
+  - `_maybe_regen` auto-detects `_bc` suffixed dirs: when pred.npy is
+    missing AND the source dir (without `_bc`) has ckpt+config, runs
+    `apply_bias_correction.py` instead of standard predict-only.
+  - Tightened `name_filter` lambdas to use `"_loss" not in n` (handles all
+    non-MSE suffixes) and `not n.endswith("_bc")` (separates BC from MAE).

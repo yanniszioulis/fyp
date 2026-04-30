@@ -118,13 +118,24 @@ t+{1, 5, 10, 21, 42, 63}.
   Means and stds are not saved; they are re-derived deterministically.
 - **HOT reshape**: `iv.reshape(-1, 20, 20, order="F")` maps CSV column k to
   `[i_mono, i_tau]`. Verified against the loader in `compare_models.load_hot`.
-- **DynGWN graph mode**: standalone uses adaptive adjacency only (the
-  legacy `main_dyngwn.py` supported `grid_plus_adaptive` and dynamic GCN).
-  Receptive field with blocks=4, layers=2, kernel=2 is 13.
+- **HOT positional encoding**: default `--pe rope` applies RoPE on the
+  temporal dim (matches legacy `ts_tensor.py` default). `--pe nope` disables.
+- **DynGWN graph_mode**: default `--graph_mode grid_plus_adaptive` adds a
+  fixed 4-neighbor moneyness×tau adjacency on top of the learned adaptive
+  one (matches legacy run). `--graph_mode adaptive_only` drops the grid.
+  Receptive field with blocks=4, layers=2, kernel=2 is 13. The legacy
+  `main_dyngwn.py` additionally supported `dynamic_gcn_bool` (correlation
+  matrices over a sliding window) — **not ported** because legacy SPX runs
+  used `dynamic_gcn_bool=False` anyway.
+- **DynGWN training objective**: standalone trains scaled-space MSE.
+  Legacy used `masked_mae` after `inverse_transform` — different objective,
+  expect slightly different convergence.
 - **PatchTST**: patch_len=stride=7 → 3 patches over seq_len=21. RevIN with
   affine=True. Residual scaled-dot-product attention with learnable scale.
-- **VAR1**: global VAR(1) fit by ridge regression on all of train (one fit,
-  not rolling window). `--tune_ridge` does a logspace search.
+- **VAR1**: global VAR(1) fit by ridge regression on `iv[:n_train]` (first 70%).
+  Legacy `var_lag1_rollout.py` fit on the first 80% (train+val merged); the
+  new fit is more apples-to-apples vs. neural models. `--tune_ridge` does a
+  logspace search.
 
 ## Editing rules
 

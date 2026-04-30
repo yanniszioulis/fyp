@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-DynGWN (static-graph WaveNet) training script for SPX IV surface forecasting.
+DynGWN (Graph-WaveNet) training script for SPX IV surface forecasting.
 
-Uses adaptive-only graph adjacency (no static grid, no dynamic GCN) for simplicity.
 All model code is inlined — no dependency on the legacy DynGWN/ pipeline files.
 
 Architecture:
   - WaveNet-style dilated temporal convolutions (blocks=4, layers=2, kernel_size=2)
-  - Learned adaptive adjacency (nodevec1 @ nodevec2)
-  - Graph convolution at each WaveNet step
+  - Graph convolution at each WaveNet step using one or two supports:
+        graph_mode='grid_plus_adaptive'  (default, matches legacy run):
+            [4-neighbor moneyness×tau grid, learned adaptive (nodevec1 @ nodevec2)]
+        graph_mode='adaptive_only':
+            [learned adaptive only]
 
 Outputs (in --out_dir):
     pred.npy          [N_test, pred_len, 400]  scaled-space predictions
@@ -33,6 +35,35 @@ from torch.utils.data import DataLoader, TensorDataset
 TRAIN_FRAC = 0.70
 TEST_FRAC  = 0.20
 N_IV       = 400
+H_MONO     = 20   # moneyness axis
+W_TAU      = 20   # tau axis
+
+
+# ─── Static grid adjacency ────────────────────────────────────────────────────
+
+def _make_grid_adjacency(h: int = H_MONO, w: int = W_TAU,
+                         self_loops: bool = True) -> np.ndarray:
+    """4-neighbor adjacency over a flattened H×W grid (matches legacy generator)."""
+    n = h * w
+    A = np.zeros((n, n), dtype=np.float32)
+    nid = lambda r, c: r * w + c
+    for r in range(h):
+        for c in range(w):
+            i = nid(r, c)
+            if self_loops:
+                A[i, i] = 1.0
+            if c - 1 >= 0:    A[i, nid(r, c - 1)] = 1.0
+            if c + 1 < w:     A[i, nid(r, c + 1)] = 1.0
+            if r - 1 >= 0:    A[i, nid(r - 1, c)] = 1.0
+            if r + 1 < h:     A[i, nid(r + 1, c)] = 1.0
+    return A
+
+
+def _row_normalize(A: np.ndarray) -> np.ndarray:
+    """Row-stochastic (D^-1 A) — matches the einsum 'ncvl,vw->ncwl' message-passing form."""
+    rowsum = A.sum(axis=1, keepdims=True)
+    rowsum[rowsum == 0] = 1.0
+    return (A / rowsum).astype(np.float32)
 
 
 # ─── Graph WaveNet Model ──────────────────────────────────────────────────────
@@ -85,16 +116,23 @@ class DynGWN(nn.Module):
     def __init__(self, num_nodes: int = 400, dropout: float = 0.3,
                  in_dim: int = 1, seq_len: int = 21, pred_len: int = 63,
                  nhid: int = 32, kernel_size: int = 2,
-                 blocks: int = 4, layers: int = 2):
+                 blocks: int = 4, layers: int = 2,
+                 static_supports: list = None):
         super().__init__()
-        self.blocks = blocks
-        self.layers = layers
+        self.blocks    = blocks
+        self.layers    = layers
         self.num_nodes = num_nodes
 
         skip_channels = nhid * 8
         end_channels  = nhid * 16
         order         = 2
-        support_len   = 1  # adaptive adjacency only
+
+        # static_supports: list of fixed [N, N] adjacencies registered as buffers.
+        # Adaptive adjacency adds one more support, computed at every forward.
+        self.static_supports = static_supports or []
+        for i, sup in enumerate(self.static_supports):
+            self.register_buffer(f"static_support_{i}", sup, persistent=False)
+        support_len = len(self.static_supports) + 1   # +1 for adaptive
 
         self.start_conv = nn.Conv2d(in_dim, nhid, kernel_size=(1, 1))
 
@@ -148,7 +186,9 @@ class DynGWN(nn.Module):
         x    = self.start_conv(x)
         skip = 0
         adp  = F.softmax(F.relu(torch.mm(self.nodevec1, self.nodevec2)), dim=1)
-        new_supports = [adp]
+        statics = [getattr(self, f"static_support_{i}")
+                   for i in range(len(self.static_supports))]
+        new_supports = statics + [adp]
 
         gcn_idx = 0
         for i in range(self.blocks * self.layers):
@@ -181,7 +221,10 @@ class DynGWN(nn.Module):
 def load_splits(csv_path: str, seq_len: int, pred_len: int):
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
-    iv_cols = sorted([c for c in df.columns if c.startswith("iv_")])
+    # CSV column order = (tau outer, moneyness inner). Do NOT sort — alphabetical
+    # order scrambles the surface and breaks cross-sectional alignment with
+    # compare_models.py (which uses CSV order).
+    iv_cols = [c for c in df.columns if c.startswith("iv_")]
     assert len(iv_cols) == N_IV
 
     T = len(df)
@@ -303,13 +346,17 @@ def main():
     ap.add_argument("--csv_path",     default="SPX_surfaces.csv")
     ap.add_argument("--seq_len",      type=int,   default=21)
     ap.add_argument("--pred_len",     type=int,   default=63)
+    ap.add_argument("--graph_mode",   default="grid_plus_adaptive",
+                    choices=["grid_plus_adaptive", "adaptive_only"],
+                    help="grid_plus_adaptive (legacy default) adds a fixed 4-neighbor "
+                         "moneyness×tau grid to the learned adaptive adjacency.")
     ap.add_argument("--nhid",         type=int,   default=32,
                     help="Residual and dilation channels (skip=nhid*8, end=nhid*16)")
     ap.add_argument("--blocks",       type=int,   default=4)
     ap.add_argument("--layers",       type=int,   default=2)
     ap.add_argument("--kernel_size",  type=int,   default=2)
     ap.add_argument("--dropout",      type=float, default=0.3)
-    ap.add_argument("--epochs",       type=int,   default=300)
+    ap.add_argument("--epochs",       type=int,   default=500)
     ap.add_argument("--batch_size",   type=int,   default=32)
     ap.add_argument("--lr",           type=float, default=1e-3)
     ap.add_argument("--weight_decay", type=float, default=1e-4)
@@ -331,7 +378,7 @@ def main():
 
     if args.out_dir is None:
         args.out_dir = (f"DynGWN/results/SPX_IV_{args.seq_len}_{args.pred_len}"
-                        f"_DynGWN_adaptive"
+                        f"_DynGWN_{args.graph_mode}"
                         f"_nh{args.nhid}_b{args.blocks}_l{args.layers}"
                         f"_ep{args.epochs}")
     os.makedirs(args.out_dir, exist_ok=True)
@@ -345,12 +392,19 @@ def main():
     print(f"  T={info['T']}  train={info['train_windows']}  "
           f"val={info['val_windows']}  test={info['test_windows']} windows")
 
+    static_supports = []
+    if args.graph_mode == "grid_plus_adaptive":
+        A_grid = _row_normalize(_make_grid_adjacency(self_loops=True))
+        static_supports = [torch.from_numpy(A_grid)]
+
     model = DynGWN(num_nodes=N_IV, dropout=args.dropout,
                    in_dim=1, seq_len=args.seq_len, pred_len=args.pred_len,
                    nhid=args.nhid, kernel_size=args.kernel_size,
-                   blocks=args.blocks, layers=args.layers).to(device)
+                   blocks=args.blocks, layers=args.layers,
+                   static_supports=static_supports).to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters: {n_params:,}  receptive_field={model.receptive_field}")
+    print(f"  graph_mode : {args.graph_mode}  ({len(static_supports)+1} supports)")
+    print(f"  Parameters : {n_params:,}  receptive_field={model.receptive_field}")
 
     print("\nTraining...")
     model = train(model, X_tr, y_tr, X_va, y_va, args, args.out_dir, device)
@@ -361,8 +415,8 @@ def main():
     model.eval()
     with torch.no_grad():
         for xb, _ in te_loader:
-            out = model(xb.to(device))                      # [B, pred_len, nodes, 1]
-            out = out.squeeze(-1).permute(0, 2, 1).cpu().numpy()  # [B, pred_len, nodes]
+            out = model(xb.to(device))            # [B, pred_len=63, nodes=400, 1]
+            out = out.squeeze(-1).cpu().numpy()   # [B, 63, 400]  (compare_models flat format)
             preds.append(out)
     preds = np.concatenate(preds, axis=0)[:len(test_dates)].astype(np.float32)
 

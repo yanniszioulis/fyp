@@ -29,7 +29,11 @@ N_IV       = 400
 def _load(csv_path: str):
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
-    iv_cols = sorted([c for c in df.columns if c.startswith("iv_")])
+    # Use CSV column order as-is — it's already (tau outer, moneyness inner) sorted.
+    # DO NOT call sorted() here; alphabetical sort scrambles the order
+    # (e.g. iv_0.9105_0.04 sorts BEFORE iv_0.9_0.04 because '1' < '_'),
+    # which would break cross-sectional alignment with compare_models.py.
+    iv_cols = [c for c in df.columns if c.startswith("iv_")]
     assert len(iv_cols) == N_IV, f"Expected {N_IV} iv_ columns, found {len(iv_cols)}"
     return df["date"].to_numpy(dtype="datetime64[D]"), df[iv_cols].to_numpy(dtype=np.float64), iv_cols
 
@@ -90,6 +94,11 @@ def main():
     ap.add_argument("--tune_ridge",   action="store_true",
                     help="Grid-search ridge_lambda on test windows before final fit")
     ap.add_argument("--out_dir",      default=None)
+    # Accepted for compatibility with the train.py dispatcher; both are no-ops here.
+    ap.add_argument("--device",       default="auto",
+                    help="Ignored: VAR1 is pure numpy/sklearn, no GPU.")
+    ap.add_argument("--seed",         type=int, default=42,
+                    help="Ignored: ridge regression solution is deterministic.")
     args = ap.parse_args()
 
     if args.out_dir is None:

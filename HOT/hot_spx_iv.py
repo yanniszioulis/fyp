@@ -196,15 +196,20 @@ class HOT(nn.Module):
     def __init__(self, d_hidden: int = 128, d_mlp: int = 512, n_blocks: int = 4,
                  n_head: int = 8, patch_size: int = 4,
                  context_length: int = 21, prediction_length: int = 63,
-                 attention_type: str = "kronecker_product", dropout: float = 0.0):
+                 attention_type: str = "kronecker_product", dropout: float = 0.0,
+                 pe: str = "rope"):
         super().__init__()
+        assert pe in ("rope", "nope"), f"pe must be 'rope' or 'nope', got {pe!r}"
         self.patch_size        = patch_size
         self.context_length    = context_length
         self.prediction_length = prediction_length
+        self.pe                = pe
 
         t_patches = math.ceil(context_length / patch_size)
 
-        self.pos_emb = lambda x: torch.zeros_like(x).to(x.device)  # 'nope' mode
+        # 'nope' and 'rope' both set the additive pos_emb to zero. RoPE is applied
+        # inside the attention layer along the temporal dim (rope_dims=[3]).
+        self.pos_emb = lambda x: torch.zeros_like(x).to(x.device)
 
         self.emb = nn.Sequential(
             nn.Conv1d(1, d_hidden, kernel_size=patch_size, stride=patch_size),
@@ -216,10 +221,12 @@ class HOT(nn.Module):
         # Input to transformer blocks: [B, H=20, W=20, Tp', d]
         # KroneckerAttention iterates dims 1..3 (H, W, Tp') → 3 modes.
         num_modes = 3
+        rope_dims = [3] if pe == "rope" else []
         self.blocks = nn.ModuleList([
             TransformerBlock(d_hidden=d_hidden, d_mlp=d_mlp, n_head=n_head,
                              dropout=dropout, attention_type=attention_type,
-                             num_modes=num_modes, rope_dims=[], input_size=t_patches)
+                             num_modes=num_modes, rope_dims=rope_dims,
+                             input_size=t_patches)
             for _ in range(n_blocks)
         ])
 
@@ -274,7 +281,10 @@ def _to_grid(iv: np.ndarray) -> np.ndarray:
 def load_splits(csv_path: str, seq_len: int, pred_len: int):
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
-    iv_cols = sorted([c for c in df.columns if c.startswith("iv_")])
+    # CSV column order = (tau outer, moneyness inner). Required for the F-order
+    # reshape `iv.reshape(-1, 20, 20, order='F')` → [i_mono, i_tau] mapping.
+    # Do NOT sort — alphabetical order scrambles the surface.
+    iv_cols = [c for c in df.columns if c.startswith("iv_")]
     assert len(iv_cols) == N_IV
 
     T = len(df)
@@ -390,7 +400,11 @@ def main():
     ap.add_argument("--patch_size",      type=int,   default=4)
     ap.add_argument("--attention_type",  default="kronecker_product",
                     choices=["kronecker_product", "kronecker_sum"])
-    ap.add_argument("--dropout",         type=float, default=0.0)
+    ap.add_argument("--pe",              default="rope",
+                    choices=["rope", "nope"],
+                    help="Positional encoding: 'rope' applies RoPE on the temporal "
+                         "dim (matches legacy ts_tensor.py default); 'nope' disables it.")
+    ap.add_argument("--dropout",         type=float, default=0.1)
     ap.add_argument("--epochs",          type=int,   default=100)
     ap.add_argument("--batch_size",      type=int,   default=32)
     ap.add_argument("--lr",              type=float, default=1e-3)
@@ -411,12 +425,11 @@ def main():
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
     if device.type == "cuda": torch.cuda.manual_seed_all(args.seed)
 
-    att_short = args.attention_type.split("_")[1]
     if args.out_dir is None:
         args.out_dir = (f"HOT/results/SPX_IV_{args.seq_len}_{args.pred_len}"
                         f"_HOT_tensor_dh{args.d_hidden}_nb{args.n_blocks}"
                         f"_nh{args.n_head}_ps{args.patch_size}_{args.attention_type}"
-                        f"_ep{args.epochs}")
+                        f"_pe{args.pe}_ep{args.epochs}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     print(f"Device     : {device}")
@@ -433,7 +446,8 @@ def main():
     model = HOT(d_hidden=args.d_hidden, d_mlp=args.d_mlp, n_blocks=args.n_blocks,
                 n_head=args.n_head, patch_size=args.patch_size,
                 context_length=args.seq_len, prediction_length=args.pred_len,
-                attention_type=args.attention_type, dropout=args.dropout).to(device)
+                attention_type=args.attention_type, dropout=args.dropout,
+                pe=args.pe).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
 

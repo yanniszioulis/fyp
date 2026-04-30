@@ -49,53 +49,44 @@ REPORT_HORIZONS = [1, 5, 10, 21, 42, 63]
 
 MODELS = [
     {
-        "name": "PatchTST",
+        "name":   "PatchTST",
         # New canonical path first, then legacy PatchTST-main fallback.
-        "pred":  ["PatchTST/results/SPX_IV_21_63_PatchTST_*/pred.npy",
-                  "PatchTST-main/PatchTST_supervised/results/"
-                  "SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_*/pred.npy"],
-        "dates": ["PatchTST/results/SPX_IV_21_63_PatchTST_*/start_dates.npy",
-                  None],
+        # start_dates.npy is auto-discovered next to pred.npy.
+        "pred":   ["PatchTST/results/SPX_IV_21_63_PatchTST_*/pred.npy",
+                   "PatchTST-main/PatchTST_supervised/results/"
+                   "SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_*/pred.npy"],
         "loader": "flat",
     },
     {
-        "name": "Persistence",
-        "pred":  "PatchTST-main/PatchTST_supervised/results/"
-                 "SPX_IV_21_63_Persistence_*/pred.npy",
-        "dates": None,
+        "name":   "Persistence",
+        "pred":   "PatchTST-main/PatchTST_supervised/results/"
+                  "SPX_IV_21_63_Persistence_*/pred.npy",
         "loader": "flat",
     },
     {
-        "name": "VAR1",
-        # New canonical path first, then legacy fallback.
-        "pred":  ["VAR1/results/SPX_IV_21_63_VAR1_*/pred.npy",
-                  "var_lag1_results/pred.npy"],
-        "dates": ["VAR1/results/SPX_IV_21_63_VAR1_*/start_dates.npy",
-                  "var_lag1_results/start_dates.npy"],
+        "name":   "VAR1",
+        "pred":   ["VAR1/results/SPX_IV_21_63_VAR1_*/pred.npy",
+                   "var_lag1_results/pred.npy"],
         "loader": "flat",
     },
     {
-        "name": "HOT(product)",
-        "pred":  "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_product/pred.npy",
-        "dates": "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_product/start_dates.npy",
+        "name":   "HOT(product)",
+        "pred":   "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_product*/pred.npy",
         "loader": "hot",
     },
     {
-        "name": "HOT(sum)",
-        "pred":  "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_sum/pred.npy",
-        "dates": "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_sum/start_dates.npy",
+        "name":   "HOT(sum)",
+        "pred":   "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_sum*/pred.npy",
         "loader": "hot",
     },
     {
-        "name": "DynGWN",
-        "pred":  "DynGWN/results/SPX_IV_21_63_DynGWN_*/pred.npy",
-        "dates": "DynGWN/results/SPX_IV_21_63_DynGWN_*/start_dates.npy",
+        "name":   "DynGWN",
+        "pred":   "DynGWN/results/SPX_IV_21_63_DynGWN_*/pred.npy",
         "loader": "flat",
     },
     {
-        "name": "DLinear",
-        "pred":  "DLinear/results/SPX_IV_21_63_DLinear_*/pred.npy",
-        "dates": "DLinear/results/SPX_IV_21_63_DLinear_*/start_dates.npy",
+        "name":   "DLinear",
+        "pred":   "DLinear/results/SPX_IV_21_63_DLinear_*/pred.npy",
         "loader": "flat",
     },
 ]
@@ -400,12 +391,16 @@ def main():
 
     for spec in MODELS:
         name = spec["name"]
-        pred_path  = _resolve_path(spec["pred"])
-        dates_path = _resolve_path(spec["dates"])
+        pred_path = _resolve_path(spec["pred"])
 
         if pred_path is None:
             print(f"  {name}: no results found — skipping")
             continue
+
+        # start_dates.npy is always co-located with pred.npy in the new pipeline.
+        # Legacy paths (PatchTST-main, original Persistence) won't have one.
+        sibling_dates = os.path.join(os.path.dirname(pred_path), "start_dates.npy")
+        dates_path = sibling_dates if os.path.exists(sibling_dates) else None
 
         try:
             pred = LOADERS[spec["loader"]](pred_path)

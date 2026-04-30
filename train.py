@@ -48,11 +48,15 @@ MODEL_ARGS = {
                  ("--d_hidden", "d_hidden"), ("--d_mlp", "d_mlp"),
                  ("--n_blocks", "n_blocks"), ("--n_head", "n_head"),
                  ("--patch_size", "patch_size"),
-                 ("--attention_type", "attention_type"), ("--dropout", "dropout")],
+                 ("--attention_type", "attention_type"),
+                 ("--pe", "pe"),
+                 ("--dropout", "dropout")],
     "dyngwn":   [("--epochs", "epochs"), ("--batch_size", "batch_size"),
                  ("--lr", "lr"), ("--patience", "patience"),
                  ("--nhid", "nhid"), ("--blocks", "blocks"),
-                 ("--layers", "layers"), ("--dropout", "dropout")],
+                 ("--layers", "layers"),
+                 ("--graph_mode", "graph_mode"),
+                 ("--dropout", "dropout")],
 }
 
 
@@ -136,11 +140,15 @@ def main():
     ap.add_argument("--patch_size",   type=int,   default=None)
     ap.add_argument("--attention_type", default=None,
                     choices=["kronecker_product", "kronecker_sum"])
+    ap.add_argument("--pe",           default=None,
+                    choices=["rope", "nope"])
 
     # DynGWN
     ap.add_argument("--nhid",         type=int,   default=None)
     ap.add_argument("--blocks",       type=int,   default=None)
     ap.add_argument("--layers",       type=int,   default=None)
+    ap.add_argument("--graph_mode",   default=None,
+                    choices=["grid_plus_adaptive", "adaptive_only"])
 
     # Shared training
     ap.add_argument("--epochs",       type=int,   default=None)

@@ -273,7 +273,9 @@ class PatchTST(nn.Module):
 def load_splits(csv_path: str, seq_len: int, pred_len: int):
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
-    iv_cols = sorted([c for c in df.columns if c.startswith("iv_")])
+    # CSV column order = (tau outer, moneyness inner). Do NOT sort — alphabetical
+    # order scrambles the surface (see VAR1 script for a fuller note).
+    iv_cols = [c for c in df.columns if c.startswith("iv_")]
     assert len(iv_cols) == N_IV
 
     T = len(df)

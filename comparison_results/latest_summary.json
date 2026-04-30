@@ -1,5 +1,5 @@
 {
-  "timestamp": "20260430_105646",
+  "timestamp": "20260430_123234",
   "models": {
     "Persist(ref)": {
       "mse": 0.1974482536315918,
@@ -15,17 +15,17 @@
       "source": "built-in"
     },
     "PatchTST": {
-      "mse": 0.18855491280555725,
-      "rmse": 0.43422910174878565,
-      "mae": 0.31078803539276123,
-      "rse": 0.7031188049803807,
-      "bias": 0.04164643585681915,
-      "da": 0.8447763254786451,
-      "ic_mean": 0.16447330071366933,
-      "ic_std": 0.4961853491199692,
+      "mse": 0.17886729538440704,
+      "rmse": 0.4229270568128824,
+      "mae": 0.294689804315567,
+      "rse": 0.6819520622068111,
+      "bias": 0.03008432872593403,
+      "da": 0.8587569754464286,
+      "ic_mean": 0.5217746679521754,
+      "ic_std": 0.38936101153813324,
       "name": "PatchTST",
-      "n_windows": 776,
-      "source": "PatchTST/results/SPX_IV_21_63_PatchTST_pl7_s7_dm128_nh16_nl3_ep100/pred.npy"
+      "n_windows": 768,
+      "source": "PatchTST-main/PatchTST_supervised/results/SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_dm128_nh16_el3_dl1_df256_fc1_ebtimeF_dtTrue_Exp_0/pred.npy"
     },
     "Persistence": {
       "mse": 0.19843989610671997,
@@ -41,17 +41,17 @@
       "source": "PatchTST-main/PatchTST_supervised/results/SPX_IV_21_63_Persistence_custom_ftM_sl21_ll0_pl63_Exp_0/pred.npy"
     },
     "VAR1": {
-      "mse": 0.15107420086860657,
-      "rmse": 0.3886826480158415,
-      "mae": 0.2762903869152069,
-      "rse": 0.6293688770642513,
-      "bias": 0.029605986550450325,
-      "da": 0.8738435301096383,
-      "ic_mean": 0.4866133273450031,
-      "ic_std": 0.4315506593494614,
+      "mse": 0.1524512767791748,
+      "rmse": 0.3904500951199459,
+      "mae": 0.27766281366348267,
+      "rse": 0.6322308095369142,
+      "bias": 0.043037302792072296,
+      "da": 0.86988872524955,
+      "ic_mean": 0.44862905077650667,
+      "ic_std": 0.4767249704866547,
       "name": "VAR1",
       "n_windows": 776,
-      "source": "var_lag1_results/pred.npy"
+      "source": "VAR1/results/SPX_IV_21_63_VAR1_tuned/pred.npy"
     },
     "HOT(product)": {
       "mse": 0.23587562143802643,
@@ -78,6 +78,19 @@
       "name": "HOT(sum)",
       "n_windows": 776,
       "source": "HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_sum/pred.npy"
+    },
+    "DynGWN": {
+      "mse": 0.15621596574783325,
+      "rmse": 0.39524165487437335,
+      "mae": 0.2717401385307312,
+      "rse": 0.6399887981842999,
+      "bias": -0.03694147989153862,
+      "da": 0.872029536900671,
+      "ic_mean": 0.5231507218274227,
+      "ic_std": 0.3907862028443924,
+      "name": "DynGWN",
+      "n_windows": 776,
+      "source": "DynGWN/results/SPX_IV_21_63_DynGWN_grid_plus_adaptive_sl21_pl63_nh32_b4_l2_lr0.001_Exp_1/pred.npy"
     },
     "DLinear": {
       "mse": 0.14781759679317474,

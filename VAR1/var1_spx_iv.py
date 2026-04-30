@@ -15,6 +15,7 @@ Outputs (in --out_dir):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 import numpy as np
@@ -94,12 +95,33 @@ def main():
     ap.add_argument("--tune_ridge",   action="store_true",
                     help="Grid-search ridge_lambda on test windows before final fit")
     ap.add_argument("--out_dir",      default=None)
+    ap.add_argument("--predict_only", action="store_true",
+                    help="Skip tuning prompt; read config.json from --out_dir, "
+                         "re-fit (fast) with the saved ridge_lambda, write pred.npy.")
     # Accepted for compatibility with the train.py dispatcher; both are no-ops here.
     ap.add_argument("--device",       default="auto",
                     help="Ignored: VAR1 is pure numpy/sklearn, no GPU.")
     ap.add_argument("--seed",         type=int, default=42,
                     help="Ignored: ridge regression solution is deterministic.")
     args = ap.parse_args()
+
+    # ── Predict-only mode: load config from out_dir, skip tuning. ─────────────
+    if args.predict_only:
+        if args.out_dir is None:
+            raise SystemExit("--predict_only requires --out_dir <existing dir with config.json>")
+        cfg_path = os.path.join(args.out_dir, "config.json")
+        if not os.path.exists(cfg_path):
+            raise SystemExit(f"--predict_only: config.json not found at {cfg_path}")
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        # Override args from saved config (everything that affects predictions).
+        args.csv_path     = cfg.get("csv_path", args.csv_path)
+        args.seq_len      = cfg.get("seq_len",  args.seq_len)
+        args.pred_len     = cfg.get("pred_len", args.pred_len)
+        args.ridge_lambda = cfg["ridge_lambda_used"]
+        args.tune_ridge   = False  # skip tuning; we already know the best lambda
+        print(f"[predict_only] loaded config from {cfg_path}")
+        print(f"[predict_only] ridge_lambda={args.ridge_lambda:g}")
 
     if args.out_dir is None:
         tag = "tuned" if args.tune_ridge else f"lam{args.ridge_lambda:g}"
@@ -148,6 +170,18 @@ def main():
 
     np.save(os.path.join(args.out_dir, "pred.npy"),        preds)
     np.save(os.path.join(args.out_dir, "start_dates.npy"), start_dates)
+
+    # Save config so the run is fully reproducible from out_dir + CSV.
+    config = {
+        "model":             "VAR1",
+        "csv_path":          args.csv_path,
+        "seq_len":           args.seq_len,
+        "pred_len":          args.pred_len,
+        "ridge_lambda_used": float(ridge_lam),
+        "tuned":             bool(args.tune_ridge),
+    }
+    with open(os.path.join(args.out_dir, "config.json"), "w") as f:
+        json.dump(config, f, indent=2)
 
     print(f"Saved pred.npy {preds.shape}  start_dates.npy {start_dates.shape}")
     print(f"Done. Results in {args.out_dir}/")

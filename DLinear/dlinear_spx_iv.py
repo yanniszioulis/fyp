@@ -18,6 +18,7 @@ Outputs (in --out_dir):
 
 import argparse
 import csv
+import json
 import os
 import random
 
@@ -214,6 +215,9 @@ def main():
     ap.add_argument('--seed',        type=int,   default=42)
     ap.add_argument('--out_dir',     default=None,
                     help='Override output directory (auto-named from config by default)')
+    ap.add_argument('--predict_only', action='store_true',
+                    help='Skip training; load best_model.pt + config.json from --out_dir, '
+                         'run inference, write pred.npy.')
     args = ap.parse_args()
 
     # Device
@@ -233,6 +237,23 @@ def main():
     if device.type == 'cuda':
         torch.cuda.manual_seed_all(args.seed)
 
+    # ── Predict-only: load config, rebuild model, load checkpoint, predict. ──
+    if args.predict_only:
+        if args.out_dir is None:
+            raise SystemExit('--predict_only requires --out_dir <dir with config.json + best_model.pt>')
+        cfg_path  = os.path.join(args.out_dir, 'config.json')
+        ckpt_path = os.path.join(args.out_dir, 'best_model.pt')
+        if not (os.path.exists(cfg_path) and os.path.exists(ckpt_path)):
+            raise SystemExit(f'--predict_only: need config.json and best_model.pt in {args.out_dir}')
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        args.csv_path    = cfg.get('csv_path',    args.csv_path)
+        args.seq_len     = cfg.get('seq_len',     args.seq_len)
+        args.pred_len    = cfg.get('pred_len',    args.pred_len)
+        args.kernel_size = cfg.get('kernel_size', args.kernel_size)
+        args.batch_size  = cfg.get('batch_size',  args.batch_size)
+        print(f'[predict_only] {cfg_path}')
+
     if args.out_dir is None:
         args.out_dir = (
             f'DLinear/results/'
@@ -245,9 +266,6 @@ def main():
 
     print(f'Device     : {device}')
     print(f'Output dir : {args.out_dir}')
-    print(f'Config     : seq_len={args.seq_len}, pred_len={args.pred_len}, '
-          f'kernel_size={args.kernel_size}, epochs={args.epochs}, '
-          f'batch_size={args.batch_size}, lr={args.lr}, patience={args.patience}')
 
     print('\nLoading data...')
     X_tr, y_tr, X_va, y_va, X_te, _y_te, test_dates, info = load_splits(
@@ -262,8 +280,29 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     print(f'  Parameters: {n_params:,}')
 
-    print('\nTraining...')
-    model = train(model, X_tr, y_tr, X_va, y_va, args, args.out_dir, device)
+    if args.predict_only:
+        ckpt_path = os.path.join(args.out_dir, 'best_model.pt')
+        model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
+        print(f'  Loaded checkpoint from {ckpt_path}')
+    else:
+        # Save reproducibility config alongside the checkpoint.
+        config = {
+            'model':       'DLinear',
+            'csv_path':    args.csv_path,
+            'seq_len':     args.seq_len,
+            'pred_len':    args.pred_len,
+            'kernel_size': args.kernel_size,
+            'epochs':      args.epochs,
+            'batch_size':  args.batch_size,
+            'lr':          args.lr,
+            'patience':    args.patience,
+            'seed':        args.seed,
+        }
+        with open(os.path.join(args.out_dir, 'config.json'), 'w') as f:
+            json.dump(config, f, indent=2)
+
+        print('\nTraining...')
+        model = train(model, X_tr, y_tr, X_va, y_va, args, args.out_dir, device)
 
     print('\nPredicting on test set...')
     te_loader = DataLoader(

@@ -21,6 +21,7 @@ Outputs (in --out_dir):
 
 import argparse
 import csv
+import json
 import os
 import random
 
@@ -364,6 +365,9 @@ def main():
     ap.add_argument("--device",       default="auto")
     ap.add_argument("--seed",         type=int,   default=42)
     ap.add_argument("--out_dir",      default=None)
+    ap.add_argument("--predict_only", action="store_true",
+                    help="Skip training; load best_model.pt + config.json from --out_dir, "
+                         "run inference, write pred.npy.")
     args = ap.parse_args()
 
     if args.device == "auto":
@@ -375,6 +379,21 @@ def main():
 
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
     if device.type == "cuda": torch.cuda.manual_seed_all(args.seed)
+
+    if args.predict_only:
+        if args.out_dir is None:
+            raise SystemExit("--predict_only requires --out_dir <dir with config.json + best_model.pt>")
+        cfg_path  = os.path.join(args.out_dir, "config.json")
+        ckpt_path = os.path.join(args.out_dir, "best_model.pt")
+        if not (os.path.exists(cfg_path) and os.path.exists(ckpt_path)):
+            raise SystemExit(f"--predict_only: need config.json and best_model.pt in {args.out_dir}")
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        for k in ("csv_path", "seq_len", "pred_len", "graph_mode", "nhid",
+                  "blocks", "layers", "kernel_size", "dropout", "batch_size"):
+            if k in cfg:
+                setattr(args, k, cfg[k])
+        print(f"[predict_only] {cfg_path}")
 
     if args.out_dir is None:
         args.out_dir = (f"DynGWN/results/SPX_IV_{args.seq_len}_{args.pred_len}"
@@ -406,8 +425,34 @@ def main():
     print(f"  graph_mode : {args.graph_mode}  ({len(static_supports)+1} supports)")
     print(f"  Parameters : {n_params:,}  receptive_field={model.receptive_field}")
 
-    print("\nTraining...")
-    model = train(model, X_tr, y_tr, X_va, y_va, args, args.out_dir, device)
+    if args.predict_only:
+        ckpt_path = os.path.join(args.out_dir, "best_model.pt")
+        model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
+        print(f"  Loaded checkpoint from {ckpt_path}")
+    else:
+        config = {
+            "model":         "DynGWN",
+            "csv_path":      args.csv_path,
+            "seq_len":       args.seq_len,
+            "pred_len":      args.pred_len,
+            "graph_mode":    args.graph_mode,
+            "nhid":          args.nhid,
+            "blocks":        args.blocks,
+            "layers":        args.layers,
+            "kernel_size":   args.kernel_size,
+            "dropout":       args.dropout,
+            "epochs":        args.epochs,
+            "batch_size":    args.batch_size,
+            "lr":            args.lr,
+            "weight_decay":  args.weight_decay,
+            "patience":      args.patience,
+            "seed":          args.seed,
+        }
+        with open(os.path.join(args.out_dir, "config.json"), "w") as f:
+            json.dump(config, f, indent=2)
+
+        print("\nTraining...")
+        model = train(model, X_tr, y_tr, X_va, y_va, args, args.out_dir, device)
 
     print("\nPredicting on test set...")
     te_loader = _make_loader(X_te, np.zeros_like(X_te), args.batch_size, shuffle=False)

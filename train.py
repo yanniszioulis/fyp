@@ -8,11 +8,14 @@ compares all results with compare_models.py.
 Usage:
     python train.py --models all
     python train.py --models var1 dlinear patchtst
-    python train.py --models hot --attention_type kronecker_sum
+    python train.py --models hot                            # both kronecker variants
+    python train.py --models hot --attention_type kronecker_sum   # only sum
     python train.py --models dyngwn --epochs 500 --compare
 
-Each model script lives in its own subfolder and is always invoked with
-python <subfolder>/<script>.py [model-specific args passed through].
+When `hot` is selected (either directly or via `all`) and no
+`--attention_type` is specified, BOTH `kronecker_product` and `kronecker_sum`
+variants are trained back-to-back. This mirrors the comparison setup, where
+HOT(product) and HOT(sum) are evaluated as two separate models.
 """
 
 import argparse
@@ -168,15 +171,32 @@ def main():
         if unknown:
             ap.error(f"Unknown model(s): {unknown}. Choose from: {list(MODELS.keys())} or 'all'")
 
-    print(f"Models to train: {selected}")
+    # Expand `hot` → both kronecker variants when no override given.
+    # Each entry is (model_name, attention_type_override_or_None).
+    expanded: list[tuple[str, str | None]] = []
+    for m in selected:
+        if m == "hot" and args.attention_type is None:
+            expanded.append(("hot", "kronecker_product"))
+            expanded.append(("hot", "kronecker_sum"))
+        else:
+            expanded.append((m, None))
+
+    label = lambda m, attn: f"{m}({attn.split('_')[1]})" if attn else m
+    print(f"Models to train: {[label(m, a) for m, a in expanded]}")
 
     failed = []
-    for model_name in selected:
+    for model_name, attn_override in expanded:
         script     = MODELS[model_name]
         extra_args = _build_args(args, model_name)
+        if attn_override is not None:
+            # Strip any existing --attention_type from _build_args, then append override.
+            if "--attention_type" in extra_args:
+                i = extra_args.index("--attention_type")
+                del extra_args[i:i + 2]
+            extra_args += ["--attention_type", attn_override]
         rc = _run(script, extra_args)
         if rc != 0:
-            failed.append(model_name)
+            failed.append(label(model_name, attn_override))
 
     if args.compare:
         print(f"\n{'='*70}")
@@ -190,7 +210,7 @@ def main():
     if failed:
         print(f"Completed with errors in: {failed}")
     else:
-        print(f"All models trained successfully: {selected}")
+        print(f"All models trained successfully: {[label(m, a) for m, a in expanded]}")
     if args.compare:
         print("Comparison results saved to comparison_results/")
     print("=" * 70)

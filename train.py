@@ -131,7 +131,7 @@ def main():
     # DLinear / DCISM
     ap.add_argument("--kernel_size",  type=int, default=None)
     ap.add_argument("--loss",         default=None,
-                    choices=["mse", "mae_original"])
+                    choices=["mse", "mae_original", "mae_scaled"])
 
     # DCISM
     ap.add_argument("--conv_kernel",  type=int,   default=None)

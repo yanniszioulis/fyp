@@ -12,6 +12,12 @@ Architecture:
         graph_mode='adaptive_only':
             [learned adaptive only]
 
+Training loss (matches legacy engine.py): masked_mae on inverse-transformed
+predictions vs ground truth in ORIGINAL IV space. Inputs (x) are scaled by
+StandardScaler; targets (y) stay in original space; the model output is
+inverse-transformed inside the loss. pred.npy is still saved in scaled space
+(compare_models contract).
+
 Outputs (in --out_dir):
     pred.npy          [N_test, pred_len, 400]  scaled-space predictions
     start_dates.npy   [N_test]                  datetime64[D] start of each window
@@ -38,6 +44,23 @@ TEST_FRAC  = 0.20
 N_IV       = 400
 H_MONO     = 20   # moneyness axis
 W_TAU      = 20   # tau axis
+
+
+# ─── Loss (legacy masked_mae from DynGWN/util.py) ─────────────────────────────
+
+def masked_mae(preds: torch.Tensor, labels: torch.Tensor, null_val=float("nan")) -> torch.Tensor:
+    """Mean absolute error with masking for null/NaN labels (legacy semantics)."""
+    if null_val != null_val:  # NaN
+        mask = ~torch.isnan(labels)
+    else:
+        mask = labels != null_val
+    mask = mask.float()
+    mask /= torch.mean(mask)
+    mask = torch.where(torch.isnan(mask), torch.zeros_like(mask), mask)
+    loss = torch.abs(preds - labels)
+    loss = loss * mask
+    loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
+    return torch.mean(loss)
 
 
 # ─── Static grid adjacency ────────────────────────────────────────────────────
@@ -220,6 +243,11 @@ class DynGWN(nn.Module):
 # ─── Data ─────────────────────────────────────────────────────────────────────
 
 def load_splits(csv_path: str, seq_len: int, pred_len: int):
+    """
+    Returns x in SCALED space (input to model), y in ORIGINAL IV space (loss target).
+    The legacy loss inverse-transforms model output before computing masked_mae,
+    so y must remain in the original (un-scaled) space.
+    """
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
     # CSV column order = (tau outer, moneyness inner). Do NOT sort — alphabetical
@@ -236,17 +264,18 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     b1 = [0,           n_train - seq_len,  T - n_test - seq_len]
     b2 = [n_train,     n_train + n_val,    T]
 
-    iv = df[iv_cols].to_numpy(dtype=np.float32)
-    scaler = StandardScaler().fit(iv[b1[0]:b2[0]])
-    iv = scaler.transform(iv).astype(np.float32)
-    dates = df["date"].to_numpy(dtype="datetime64[D]")
+    iv_raw = df[iv_cols].to_numpy(dtype=np.float32)               # original space
+    scaler = StandardScaler().fit(iv_raw[b1[0]:b2[0]])
+    iv_sc  = scaler.transform(iv_raw).astype(np.float32)           # scaled space
+    dates  = df["date"].to_numpy(dtype="datetime64[D]")
 
     def _windows(start, end):
-        sl = iv[start:end]   # [T_slice, 400]
-        n  = len(sl) - seq_len - pred_len + 1
+        sl_x = iv_sc[start:end]                                     # scaled  → x
+        sl_y = iv_raw[start:end]                                    # original → y
+        n  = len(sl_x) - seq_len - pred_len + 1
         # X: [N, seq_len, 400, 1]   y: [N, pred_len, 400, 1]
-        X = np.stack([sl[i        : i+seq_len,   :, None] for i in range(n)])
-        y = np.stack([sl[i+seq_len : i+seq_len+pred_len, :, None] for i in range(n)])
+        X = np.stack([sl_x[i        : i+seq_len,    :, None] for i in range(n)])
+        y = np.stack([sl_y[i+seq_len : i+seq_len+pred_len, :, None] for i in range(n)])
         return X.astype(np.float32), y.astype(np.float32)
 
     X_tr, y_tr = _windows(b1[0], b2[0])
@@ -256,10 +285,9 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     test_slice_dates = dates[b1[2]:b2[2]]
     test_start_dates = np.array([test_slice_dates[i + seq_len] for i in range(len(X_te))])
 
-    return X_tr, y_tr, X_va, y_va, X_te, test_start_dates, dict(
-        T=T, n_train=n_train, n_val=n_val, n_test=n_test,
-        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te)
-    )
+    info = dict(T=T, n_train=n_train, n_val=n_val, n_test=n_test,
+                train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te))
+    return X_tr, y_tr, X_va, y_va, X_te, test_start_dates, info, scaler
 
 
 def _make_loader(X: np.ndarray, y: np.ndarray,
@@ -273,17 +301,22 @@ def _make_loader(X: np.ndarray, y: np.ndarray,
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 
-def _epoch(model, loader, opt, device, clip: float = 5.0):
+def _denorm(out_scaled: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+    """Inverse-transform [B, nodes, pred] scaled output to original space."""
+    # mean/std are [nodes] → broadcast over [B, nodes, pred].
+    return out_scaled * std.view(1, -1, 1) + mean.view(1, -1, 1)
+
+
+def _epoch(model, loader, opt, device, mean, std, clip: float = 5.0):
     model.train()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        # output: [B, pred_len, nodes, 1]
-        out  = model(xb)
-        # target: yb[:,0,:,:] → [B, nodes, pred_len]  (channel-0 = the only feature)
-        pred = out.squeeze(-1).permute(0, 2, 1)      # [B, nodes, pred_len]
-        real = yb[:, 0, :, :]                        # [B, nodes, pred_len]
-        loss = F.mse_loss(pred, real)
+        out  = model(xb)                                    # [B, pred, nodes, 1] scaled
+        out  = out.squeeze(-1).permute(0, 2, 1)             # [B, nodes, pred] scaled
+        pred = _denorm(out, mean, std)                      # [B, nodes, pred] original
+        real = yb[:, 0, :, :]                               # [B, nodes, pred] original
+        loss = masked_mae(pred, real, null_val=float("nan"))
         opt.zero_grad(); loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), clip)
         opt.step()
@@ -292,29 +325,33 @@ def _epoch(model, loader, opt, device, clip: float = 5.0):
 
 
 @torch.no_grad()
-def _val_loss(model, loader, device):
+def _val_loss(model, loader, device, mean, std):
     model.eval()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
         out  = model(xb).squeeze(-1).permute(0, 2, 1)
+        pred = _denorm(out, mean, std)
         real = yb[:, 0, :, :]
-        total += F.mse_loss(out, real).item() * len(xb); n += len(xb)
+        total += masked_mae(pred, real, null_val=float("nan")).item() * len(xb)
+        n     += len(xb)
     return total / n
 
 
-def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
+def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
     tr_loader = _make_loader(X_tr, y_tr, args.batch_size, shuffle=True)
     va_loader = _make_loader(X_va, y_va, args.batch_size, shuffle=False)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=device)
+    std  = torch.tensor(scaler.scale_, dtype=torch.float32, device=device)
 
     best_val, wait = float("inf"), 0
     ckpt = os.path.join(out_dir, "best_model.pt")
     log_rows = []
 
     for epoch in range(1, args.epochs + 1):
-        tr_loss = _epoch(model, tr_loader, opt, device)
-        va_loss = _val_loss(model, va_loader, device)
+        tr_loss = _epoch(model, tr_loader, opt, device, mean, std)
+        va_loss = _val_loss(model, va_loader, device, mean, std)
         log_rows.append({"epoch": epoch, "train_loss": tr_loss, "val_loss": va_loss})
 
         if va_loss < best_val:
@@ -336,7 +373,7 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
         w.writeheader(); w.writerows(log_rows)
 
     model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
-    print(f"  best val MSE: {best_val:.6f}")
+    print(f"  best val masked-MAE: {best_val:.6f}")
     return model
 
 
@@ -406,7 +443,7 @@ def main():
     print(f"Output dir : {args.out_dir}")
 
     print("\nLoading data...")
-    X_tr, y_tr, X_va, y_va, X_te, test_dates, info = load_splits(
+    X_tr, y_tr, X_va, y_va, X_te, test_dates, info, scaler = load_splits(
         args.csv_path, args.seq_len, args.pred_len)
     print(f"  T={info['T']}  train={info['train_windows']}  "
           f"val={info['val_windows']}  test={info['test_windows']} windows")
@@ -452,7 +489,7 @@ def main():
             json.dump(config, f, indent=2)
 
         print("\nTraining...")
-        model = train(model, X_tr, y_tr, X_va, y_va, args, args.out_dir, device)
+        model = train(model, X_tr, y_tr, X_va, y_va, scaler, args, args.out_dir, device)
 
     print("\nPredicting on test set...")
     te_loader = _make_loader(X_te, np.zeros_like(X_te), args.batch_size, shuffle=False)

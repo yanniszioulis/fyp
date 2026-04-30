@@ -36,7 +36,7 @@ COMMON_ARGS = ["csv_path", "seq_len", "pred_len", "device", "seed"]
 
 # Per-model extra args (model_name → list of (--arg, attr_name) tuples)
 MODEL_ARGS = {
-    "var1":     [("--tune_ridge", "tune_ridge"), ("--ridge_lambda", "ridge_lambda")],
+    "var1":     [],   # plain OLS — no hyperparameters
     "dlinear":  [("--epochs", "epochs"), ("--batch_size", "batch_size"),
                  ("--lr", "lr"), ("--patience", "patience"),
                  ("--kernel_size", "kernel_size")],
@@ -119,10 +119,6 @@ def main():
     ap.add_argument("--pred_len", type=int, default=63)
     ap.add_argument("--device",   default="auto")
     ap.add_argument("--seed",     type=int, default=42)
-
-    # VAR1
-    ap.add_argument("--tune_ridge",   action="store_true")
-    ap.add_argument("--ridge_lambda", type=float, default=None)
 
     # DLinear
     ap.add_argument("--kernel_size",  type=int, default=None)

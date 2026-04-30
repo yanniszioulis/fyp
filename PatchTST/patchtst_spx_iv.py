@@ -36,7 +36,7 @@ N_IV       = 400
 # ─── RevIN ────────────────────────────────────────────────────────────────────
 
 class RevIN(nn.Module):
-    def __init__(self, num_features: int, eps: float = 1e-5, affine: bool = True):
+    def __init__(self, num_features: int, eps: float = 1e-5, affine: bool = False):
         super().__init__()
         self.num_features = num_features
         self.eps = eps
@@ -233,21 +233,29 @@ class PatchTST(nn.Module):
     Channel-independent PatchTST with RevIN.
     Input:  [B, seq_len, C]  (scaled)
     Output: [B, pred_len, C] (scaled)
+
+    padding_patch: 'end' replicates the last value `stride` times before unfolding,
+    yielding patch_num+1 patches. Matches legacy run_longExp.py default.
     """
     def __init__(self, c_in: int, seq_len: int, pred_len: int,
                  patch_len: int = 7, stride: int = 7,
                  d_model: int = 128, n_heads: int = 16, n_layers: int = 3,
                  d_ff: int = 256, attn_dropout: float = 0., dropout: float = 0.,
                  head_dropout: float = 0., res_attention: bool = True,
-                 revin: bool = True):
+                 revin: bool = True, affine: bool = False,
+                 padding_patch: str = "end"):
         super().__init__()
         self.revin = revin
         if revin:
-            self.revin_layer = RevIN(c_in)
+            self.revin_layer = RevIN(c_in, affine=affine)
 
+        self.patch_len     = patch_len
+        self.stride        = stride
+        self.padding_patch = padding_patch
         patch_num = int((seq_len - patch_len) / stride + 1)
-        self.patch_len = patch_len
-        self.stride    = stride
+        if padding_patch == "end":
+            self.padding_patch_layer = nn.ReplicationPad1d((0, stride))
+            patch_num += 1
 
         self.backbone = _TSTiEncoder(c_in, patch_num, patch_len, d_model, n_heads,
                                      d_ff, attn_dropout, dropout, n_layers, res_attention)
@@ -258,12 +266,14 @@ class PatchTST(nn.Module):
         # x: [B, seq_len, C]
         if self.revin:
             x = self.revin_layer(x, "norm")
-        z = x.permute(0, 2, 1)                                # [B, C, seq_len]
-        z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)  # [B, C, num_patches, patch_len]
-        z = z.permute(0, 1, 3, 2)                             # [B, C, patch_len, num_patches]
-        z = self.backbone(z)                                   # [B, C, d_model, num_patches]
-        z = self.head(z)                                       # [B, C, pred_len]
-        z = z.permute(0, 2, 1)                                 # [B, pred_len, C]
+        z = x.permute(0, 2, 1)                                              # [B, C, seq_len]
+        if self.padding_patch == "end":
+            z = self.padding_patch_layer(z)                                  # [B, C, seq_len + stride]
+        z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)   # [B, C, num_patches, patch_len]
+        z = z.permute(0, 1, 3, 2)                                            # [B, C, patch_len, num_patches]
+        z = self.backbone(z)                                                 # [B, C, d_model, num_patches]
+        z = self.head(z)                                                     # [B, C, pred_len]
+        z = z.permute(0, 2, 1)                                               # [B, pred_len, C]
         if self.revin:
             z = self.revin_layer(z, "denorm")
         return z
@@ -391,6 +401,12 @@ def main():
     ap.add_argument("--dropout",     type=float, default=0.0)
     ap.add_argument("--attn_dropout",type=float, default=0.0)
     ap.add_argument("--head_dropout",type=float, default=0.0)
+    ap.add_argument("--padding_patch", default="end",
+                    choices=["end", "none"],
+                    help="'end' replicates last value stride-times before unfold "
+                         "(adds +1 patch). Matches legacy default.")
+    ap.add_argument("--revin_affine", type=int, default=0,
+                    help="RevIN affine params: 1=on, 0=off (legacy default).")
     ap.add_argument("--epochs",      type=int,   default=100)
     ap.add_argument("--batch_size",  type=int,   default=64)
     ap.add_argument("--lr",          type=float, default=1e-4)
@@ -425,9 +441,19 @@ def main():
             cfg = json.load(f)
         for k in ("csv_path", "seq_len", "pred_len", "patch_len", "stride",
                   "d_model", "n_heads", "n_layers", "d_ff",
-                  "dropout", "attn_dropout", "head_dropout", "batch_size"):
+                  "dropout", "attn_dropout", "head_dropout", "batch_size",
+                  "padding_patch", "revin_affine"):
             if k in cfg:
                 setattr(args, k, cfg[k])
+        # Backwards compatibility: configs written before the architectural fix
+        # don't include these fields. Their checkpoints were trained with
+        # padding_patch='none' and RevIN affine=True (the pre-fix defaults).
+        if "padding_patch" not in cfg:
+            args.padding_patch = "none"
+            print("[predict_only] config lacks 'padding_patch'; assuming 'none' (pre-fix)")
+        if "revin_affine" not in cfg:
+            args.revin_affine = 1
+            print("[predict_only] config lacks 'revin_affine'; assuming 1 (pre-fix)")
         print(f"[predict_only] {cfg_path}")
 
     if args.out_dir is None:
@@ -450,7 +476,9 @@ def main():
                      patch_len=args.patch_len, stride=args.stride,
                      d_model=args.d_model, n_heads=args.n_heads, n_layers=args.n_layers,
                      d_ff=args.d_ff, attn_dropout=args.attn_dropout,
-                     dropout=args.dropout, head_dropout=args.head_dropout).to(device)
+                     dropout=args.dropout, head_dropout=args.head_dropout,
+                     padding_patch=args.padding_patch,
+                     affine=bool(args.revin_affine)).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
 
@@ -466,6 +494,8 @@ def main():
             "pred_len":      args.pred_len,
             "patch_len":     args.patch_len,
             "stride":        args.stride,
+            "padding_patch": args.padding_patch,
+            "revin_affine":  args.revin_affine,
             "d_model":       args.d_model,
             "n_heads":       args.n_heads,
             "n_layers":      args.n_layers,

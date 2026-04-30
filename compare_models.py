@@ -69,7 +69,8 @@ REPORT_HORIZONS = [1, 5, 10, 21, 42, 63]
 MODELS = [
     {
         "name":         "VAR1",
-        "regen_dir":    "VAR1/results/SPX_IV_21_63_VAR1_*",
+        # No trailing `_` because the new dir name is plain "SPX_IV_21_63_VAR1".
+        "regen_dir":    "VAR1/results/SPX_IV_21_63_VAR1*",
         "regen_script": "VAR1/var1_spx_iv.py",
         "loader":       "flat",
     },
@@ -438,8 +439,7 @@ def main():
                   f"{' + best_model.pt' if 'VAR1' not in name else ''}) — skipping")
             continue
 
-        # start_dates.npy is always co-located with pred.npy in the new pipeline.
-        # Legacy paths (PatchTST-main, original Persistence) won't have one.
+        # start_dates.npy is always co-located with pred.npy.
         sibling_dates = os.path.join(os.path.dirname(pred_path), "start_dates.npy")
         dates_path = sibling_dates if os.path.exists(sibling_dates) else None
 

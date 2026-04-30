@@ -2,14 +2,16 @@
 """
 VAR(1) baseline for SPX IV surface forecasting.
 
-Fits a single global VAR(1) model on the training set (70%) with optional
-ridge regularisation. Rolls out 63 steps for every test window.
+Fits a single global VAR(1) model on the training set (70%) by ordinary
+least squares — no regularisation, no hyperparameter tuning. Rolls out
+63 steps for every test window.
 
 Uses the canonical 70/10/20 split to ensure date alignment with all other models.
 
 Outputs (in --out_dir):
     pred.npy          [N_test, pred_len, 400]  scaled-space predictions
     start_dates.npy   [N_test]                  datetime64[D] start of each window
+    config.json       {model, csv_path, seq_len, pred_len}
 """
 
 from __future__ import annotations
@@ -39,73 +41,46 @@ def _load(csv_path: str):
     return df["date"].to_numpy(dtype="datetime64[D]"), df[iv_cols].to_numpy(dtype=np.float64), iv_cols
 
 
-def _fit_var1(x_train: np.ndarray, ridge_lambda: float, intercept: bool = True):
-    """Fit global VAR(1) via ridge regression, return one-step-ahead predictor."""
+def _fit_var1(x_train: np.ndarray):
+    """
+    Fit global VAR(1) by ordinary least squares with intercept.
+        x_{t+1} = x_t @ B + b
+    Solved via lstsq for numerical robustness when K is large.
+    Returns a one-step-ahead predictor `step(x) -> x_next`.
+    """
     X = x_train[:-1]
     Y = x_train[1:]
-    K = X.shape[1]
 
-    if intercept:
-        mu_x, mu_y = X.mean(0), Y.mean(0)
-        Xc, Yc = X - mu_x, Y - mu_y
-    else:
-        mu_x = mu_y = None
-        Xc, Yc = X, Y
+    mu_x = X.mean(0)
+    mu_y = Y.mean(0)
+    Xc = X - mu_x
+    Yc = Y - mu_y
 
-    A = Xc.T @ Xc
-    if ridge_lambda > 0:
-        A += ridge_lambda * np.eye(K, dtype=A.dtype)
-    B = np.linalg.solve(A, Xc.T @ Yc)
+    # B is K×K; lstsq handles rank-deficiency gracefully if K ≈ N.
+    B, *_ = np.linalg.lstsq(Xc, Yc, rcond=None)
 
     def step(x_t):
-        x_in = (x_t - mu_x) if intercept else x_t
-        out = x_in @ B
-        return (out + mu_y) if intercept else out
+        return ((x_t - mu_x) @ B) + mu_y
 
     return step
 
 
-def _tune_lambda(x_train: np.ndarray, x_full: np.ndarray,
-                  start_indices: np.ndarray, pred_len: int,
-                  grid: list[float]) -> float:
-    best_lam, best_mse = grid[0], float("inf")
-    for lam in grid:
-        step = _fit_var1(x_train, ridge_lambda=lam)
-        total, n = 0.0, 0
-        for s in start_indices:
-            x_t = x_full[s - 1]
-            true = x_full[s : s + pred_len]
-            for h in range(pred_len):
-                x_t = step(x_t)
-                diff = (x_t - true[h]).astype(np.float64)
-                total += float(diff @ diff)
-                n += diff.shape[0]
-        mse = total / n
-        if mse < best_mse:
-            best_mse, best_lam = mse, lam
-    return best_lam
-
-
 def main():
-    ap = argparse.ArgumentParser(description="VAR(1) baseline on SPX IV surface")
+    ap = argparse.ArgumentParser(description="VAR(1) baseline on SPX IV surface (plain OLS)")
     ap.add_argument("--csv_path",     default="SPX_surfaces.csv")
-    ap.add_argument("--seq_len",      type=int,   default=21)
-    ap.add_argument("--pred_len",     type=int,   default=63)
-    ap.add_argument("--ridge_lambda", type=float, default=1.0)
-    ap.add_argument("--tune_ridge",   action="store_true",
-                    help="Grid-search ridge_lambda on test windows before final fit")
+    ap.add_argument("--seq_len",      type=int, default=21)
+    ap.add_argument("--pred_len",     type=int, default=63)
     ap.add_argument("--out_dir",      default=None)
     ap.add_argument("--predict_only", action="store_true",
-                    help="Skip tuning prompt; read config.json from --out_dir, "
-                         "re-fit (fast) with the saved ridge_lambda, write pred.npy.")
+                    help="Skip the run banner; read config.json from --out_dir, "
+                         "re-fit (fast), write pred.npy.")
     # Accepted for compatibility with the train.py dispatcher; both are no-ops here.
     ap.add_argument("--device",       default="auto",
                     help="Ignored: VAR1 is pure numpy/sklearn, no GPU.")
     ap.add_argument("--seed",         type=int, default=42,
-                    help="Ignored: ridge regression solution is deterministic.")
+                    help="Ignored: OLS solution is deterministic.")
     args = ap.parse_args()
 
-    # ── Predict-only mode: load config from out_dir, skip tuning. ─────────────
     if args.predict_only:
         if args.out_dir is None:
             raise SystemExit("--predict_only requires --out_dir <existing dir with config.json>")
@@ -114,18 +89,13 @@ def main():
             raise SystemExit(f"--predict_only: config.json not found at {cfg_path}")
         with open(cfg_path) as f:
             cfg = json.load(f)
-        # Override args from saved config (everything that affects predictions).
-        args.csv_path     = cfg.get("csv_path", args.csv_path)
-        args.seq_len      = cfg.get("seq_len",  args.seq_len)
-        args.pred_len     = cfg.get("pred_len", args.pred_len)
-        args.ridge_lambda = cfg["ridge_lambda_used"]
-        args.tune_ridge   = False  # skip tuning; we already know the best lambda
+        args.csv_path = cfg.get("csv_path", args.csv_path)
+        args.seq_len  = cfg.get("seq_len",  args.seq_len)
+        args.pred_len = cfg.get("pred_len", args.pred_len)
         print(f"[predict_only] loaded config from {cfg_path}")
-        print(f"[predict_only] ridge_lambda={args.ridge_lambda:g}")
 
     if args.out_dir is None:
-        tag = "tuned" if args.tune_ridge else f"lam{args.ridge_lambda:g}"
-        args.out_dir = f"VAR1/results/SPX_IV_{args.seq_len}_{args.pred_len}_VAR1_{tag}"
+        args.out_dir = f"VAR1/results/SPX_IV_{args.seq_len}_{args.pred_len}_VAR1"
     os.makedirs(args.out_dir, exist_ok=True)
 
     print(f"Output dir : {args.out_dir}")
@@ -148,15 +118,8 @@ def main():
     print(f"Test windows: {n_windows}  "
           f"({dates[start_indices[0]]} → {dates[start_indices[-1]]})")
 
-    ridge_lam = args.ridge_lambda
-    if args.tune_ridge:
-        grid = [float(x) for x in np.logspace(-4, 4, 9)]
-        print(f"Tuning ridge lambda over {grid} ...")
-        ridge_lam = _tune_lambda(iv_sc[:n_train], iv_sc, start_indices, args.pred_len, grid)
-        print(f"Best lambda = {ridge_lam:g}")
-
-    print(f"Fitting VAR(1) on training set (lambda={ridge_lam:g}) ...")
-    step = _fit_var1(iv_sc[:n_train], ridge_lambda=ridge_lam)
+    print("Fitting VAR(1) on training set by OLS ...")
+    step = _fit_var1(iv_sc[:n_train])
 
     preds       = np.zeros((n_windows, args.pred_len, N_IV), dtype=np.float32)
     start_dates = np.zeros(n_windows, dtype="datetime64[D]")
@@ -171,14 +134,11 @@ def main():
     np.save(os.path.join(args.out_dir, "pred.npy"),        preds)
     np.save(os.path.join(args.out_dir, "start_dates.npy"), start_dates)
 
-    # Save config so the run is fully reproducible from out_dir + CSV.
     config = {
-        "model":             "VAR1",
-        "csv_path":          args.csv_path,
-        "seq_len":           args.seq_len,
-        "pred_len":          args.pred_len,
-        "ridge_lambda_used": float(ridge_lam),
-        "tuned":             bool(args.tune_ridge),
+        "model":    "VAR1",
+        "csv_path": args.csv_path,
+        "seq_len":  args.seq_len,
+        "pred_len": args.pred_len,
     }
     with open(os.path.join(args.out_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)

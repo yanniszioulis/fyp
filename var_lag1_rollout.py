@@ -62,21 +62,24 @@ def standardize_train_only(x: np.ndarray, train_end_idx: int) -> tuple[np.ndarra
     return xz, mu, sigma
 
 
-def fit_var1_stepper(context: np.ndarray, ridge_lambda: float, intercept: bool = True):
+def fit_var1_global(x_train: np.ndarray, ridge_lambda: float, intercept: bool = True):
     """
-    Fit VAR(1) in dual form with ridge.
+    Fit VAR(1) once on the full training set using primal ridge regression.
 
-    context: [T, k], T=context_len
-    Returns: step(x)->x_next, where x is [k].
+    x_train: [T, K]
+    Returns: step(x)->x_next, where x is [K].
+
+    Solves B = (Xc.T @ Xc + lambda*I)^{-1} @ Xc.T @ Yc  [K, K]
+    Prediction: x_{t+1} = x_in @ B + mu_y
     """
-    if context.shape[0] < 2:
-        raise ValueError("Need at least 2 points to fit VAR(1).")
+    if x_train.shape[0] < 2:
+        raise ValueError("Need at least 2 rows to fit VAR(1).")
     if ridge_lambda < 0:
         raise ValueError("ridge_lambda must be >= 0.")
 
-    X = context[:-1]  # [n, k]
-    Y = context[1:]  # [n, k]
-    n = X.shape[0]
+    X = x_train[:-1]  # [T-1, K]
+    Y = x_train[1:]   # [T-1, K]
+    K = X.shape[1]
 
     if intercept:
         mu_x = X.mean(axis=0)
@@ -84,39 +87,22 @@ def fit_var1_stepper(context: np.ndarray, ridge_lambda: float, intercept: bool =
         Xc = X - mu_x
         Yc = Y - mu_y
     else:
-        mu_x = None
-        mu_y = None
+        mu_x = mu_y = None
         Xc = X
         Yc = Y
 
-    G = Xc @ Xc.T  # [n, n]
+    # Primal form: A = Xc.T @ Xc + lambda*I  [K, K]
+    A = Xc.T @ Xc
     if ridge_lambda > 0:
-        G = G + ridge_lambda * np.eye(n, dtype=G.dtype)
+        A = A + ridge_lambda * np.eye(K, dtype=A.dtype)
 
-    YT = Yc.T  # [k, n]
-
-    chol = None
-    if ridge_lambda > 0:
-        try:
-            chol = np.linalg.cholesky(G)
-        except np.linalg.LinAlgError:
-            chol = None
+    # B = A^{-1} @ (Xc.T @ Yc)  [K, K]
+    B = np.linalg.solve(A, Xc.T @ Yc)
 
     def step(x_t: np.ndarray) -> np.ndarray:
-        if intercept:
-            x_in = x_t - mu_x
-        else:
-            x_in = x_t
-        v = Xc @ x_in  # [n]
-        if chol is not None:
-            y = np.linalg.solve(chol, v)
-            w = np.linalg.solve(chol.T, y)
-        else:
-            w = np.linalg.solve(G, v)  # [n]
-        out = YT @ w  # [k]
-        if intercept:
-            out = out + mu_y
-        return out
+        x_in = (x_t - mu_x) if intercept else x_t
+        out = x_in @ B
+        return (out + mu_y) if intercept else out
 
     return step
 
@@ -173,21 +159,20 @@ def _parse_lambda_grid(s: str | None) -> list[float]:
 
 
 def _score_lambda(
-    x: np.ndarray,
+    x_train: np.ndarray,
+    x_full: np.ndarray,
     start_indices: np.ndarray,
     *,
-    context_len: int,
     horizon_len: int,
     ridge_lambda: float,
     intercept: bool,
 ) -> float:
+    step = fit_var1_global(x_train, ridge_lambda=ridge_lambda, intercept=intercept)
     sse = 0.0
     n = 0
     for s in start_indices:
-        context = x[s - context_len : s]
-        step = fit_var1_stepper(context, ridge_lambda=ridge_lambda, intercept=intercept)
-        x_t = context[-1]
-        true = x[s : s + horizon_len]
+        x_t = x_full[s - 1]
+        true = x_full[s : s + horizon_len]
         for h in range(horizon_len):
             x_t = step(x_t)
             diff = x_t.astype(np.float64, copy=False) - true[h].astype(np.float64, copy=False)
@@ -331,9 +316,9 @@ def main():
         mses = []
         for lam in cfg.lambda_grid:
             m = _score_lambda(
+                x[:split_idx],
                 x,
                 tune_indices,
-                context_len=cfg.context_len,
                 horizon_len=cfg.horizon_len,
                 ridge_lambda=float(lam),
                 intercept=use_intercept,
@@ -350,40 +335,18 @@ def main():
                 print(f"  lambda={lam:g}  mse={m:.10f}")
             print(f"selected_ridge_lambda: {ridge_lambda_run:g} (mse={float(best_mse):.10f})")
 
+    if cfg.verbose:
+        print("\n=== Fitting global VAR(1) on training set ===")
+    global_step = fit_var1_global(x[:split_idx], ridge_lambda=ridge_lambda_run, intercept=use_intercept)
+
     preds = np.zeros((nW, cfg.horizon_len, K), dtype=np.float32)
     trues = np.zeros((nW, cfg.horizon_len, K), dtype=np.float32)
     start_dates = np.zeros((nW,), dtype="datetime64[D]")
 
     for wi, s in enumerate(start_indices):
-        context = x[s - cfg.context_len : s]  # [21, K]
-        step = fit_var1_stepper(context, ridge_lambda=ridge_lambda_run, intercept=use_intercept)
-
-        x_t = context[-1]
-        if cfg.verbose and wi < cfg.debug_windows:
-            print("\n--- VAR window debug ---")
-            print(f"window_idx: {wi}")
-            print(f"start_day_index: {s} (start_date={_fmt_date(dates[s])})")
-            print(f"context_date_range: {_fmt_date(dates[s-cfg.context_len])} .. {_fmt_date(dates[s-1])}")
-            print(f"context_last_vector_l2: {float(np.linalg.norm(context[-1])):.6f}")
-
-            X = context[:-1]
-            if use_intercept:
-                X = X - X.mean(axis=0)
-            G = X @ X.T
-            if ridge_lambda_run > 0:
-                G = G + ridge_lambda_run * np.eye(G.shape[0], dtype=G.dtype)
-            try:
-                cond = float(np.linalg.cond(G))
-            except Exception:
-                cond = float("nan")
-            print(f"G_shape: {G.shape}, cond(G): {cond:.3e}")
-
-            sample_next = step(context[-1])
-            growth = float(np.linalg.norm(sample_next) / (np.linalg.norm(context[-1]) + 1e-12))
-            print(f"one_step_growth_l2: {growth:.6f}")
-
+        x_t = x[s - 1]  # last observed point before the forecast window
         for h in range(cfg.horizon_len):
-            x_t = step(x_t)
+            x_t = global_step(x_t)
             preds[wi, h, :] = x_t
 
         trues[wi, :, :] = x[s : s + cfg.horizon_len].astype(np.float32, copy=False)

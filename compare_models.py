@@ -1,361 +1,443 @@
 #!/usr/bin/env python3
 """
-Compare PatchTST vs HOT(tensor) vs Persistence on SPX surfaces.
+Benchmark comparison of SPX IV surface forecasting models.
 
-All comparisons are done on the IV grid only (400 features), in the scaled space
-using the same split + scaling as PatchTST Dataset_Custom:
-- train = first 70%
-- test  = last 20%
-- val   = remainder
-- borders for val/test include a -seq_len overlap
+Ground truth is built directly from SPX_surfaces.csv using the canonical
+70/10/20 train/val/test split (same formula as DynGWN and HOT).
 
-Models:
-- PatchTST: expects pred.npy with shape [N, pred_len, 400] (IV grid only)
-- Persistence: same shape/order as PatchTST
-- HOT: expects pred.npy with shape [N, H, W, pred_len] and start_dates.npy with dates
-       (H=20, W=20 so H*W=400 IVs). Saved from HOT pipeline.
+All predictions are expected in scaled space (StandardScaler fit on train).
+Models with start_dates.npy are aligned by date to the reference test windows.
+Models without dates (PatchTST, Persistence) are assumed to align sequentially
+from reference window 0 — see WARNING printed at runtime if T differs.
+
+Metrics (all in scaled space):
+  mse, rmse, mae, rse   standard regression metrics
+  bias                  mean signed error; positive = over-prediction
+  da                    directional accuracy: fraction where sign(pred)==sign(true)
+  ic_mean, ic_std       Spearman rank-IC averaged across (window, step) over 400 features
+
+Outputs saved to --out_dir (default: comparison_results/):
+  YYYYMMDD_HHMMSS.csv   timestamped overall metrics
+  latest.csv            always overwritten with most recent run
+  latest_horizons.csv   per-horizon ic/mse/mae for every model
+  latest_summary.json   machine-readable summary
 """
 
 import argparse
+import glob
+import json
 import os
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
 
+# ─── Constants ────────────────────────────────────────────────────────────────
 
-def _spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
-    try:
-        from scipy.stats import spearmanr
+SEQ_LEN = 21
+PRED_LEN = 63
+TRAIN_FRAC = 0.70
+TEST_FRAC = 0.20
+N_IV = 400
+REPORT_HORIZONS = [1, 5, 10, 21, 42, 63]
 
-        corr, _ = spearmanr(x, y)
-        return float(corr)
-    except Exception:
-        rx = pd.Series(x).rank(method="average").to_numpy()
-        ry = pd.Series(y).rank(method="average").to_numpy()
-        rx = rx - rx.mean()
-        ry = ry - ry.mean()
-        denom = np.sqrt((rx * rx).sum() * (ry * ry).sum())
-        if denom == 0:
-            return float("nan")
-        return float((rx * ry).sum() / denom)
+# ─── Model registry ───────────────────────────────────────────────────────────
+# Glob patterns allowed. _find_latest() picks the most recently modified match.
+# loader: "flat" expects [N, pred_len, 400]; "hot" expects [N, H_mono, W_tau, pred_len].
+
+MODELS = [
+    {
+        "name": "PatchTST",
+        "pred":  "PatchTST-main/PatchTST_supervised/results/"
+                 "SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_*/pred.npy",
+        "dates": None,
+        "loader": "flat",
+    },
+    {
+        "name": "Persistence",
+        "pred":  "PatchTST-main/PatchTST_supervised/results/"
+                 "SPX_IV_21_63_Persistence_*/pred.npy",
+        "dates": None,
+        "loader": "flat",
+    },
+    {
+        "name": "VAR1",
+        "pred":  "var_lag1_results/pred.npy",
+        "dates": "var_lag1_results/start_dates.npy",
+        "loader": "flat",
+    },
+    {
+        "name": "HOT(product)",
+        "pred":  "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_product/pred.npy",
+        "dates": "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_product/start_dates.npy",
+        "loader": "hot",
+    },
+    {
+        "name": "HOT(sum)",
+        "pred":  "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_sum/pred.npy",
+        "dates": "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_sum/start_dates.npy",
+        "loader": "hot",
+    },
+    {
+        "name": "DynGWN",
+        "pred":  "DynGWN/results/SPX_IV_21_63_DynGWN_*/pred.npy",
+        "dates": "DynGWN/results/SPX_IV_21_63_DynGWN_*/start_dates.npy",
+        "loader": "flat",
+    },
+    {
+        "name": "DLinear",
+        "pred":  "DLinear/results/SPX_IV_21_63_DLinear_*/pred.npy",
+        "dates": "DLinear/results/SPX_IV_21_63_DLinear_*/start_dates.npy",
+        "loader": "flat",
+    },
+]
 
 
-def compute_ic(pred: np.ndarray, true: np.ndarray):
-    n_samples, n_steps, _ = pred.shape
-    ic_values = np.zeros((n_samples, n_steps), dtype=np.float64)
-    for i in range(n_samples):
-        for t in range(n_steps):
-            ic_values[i, t] = _spearman_corr(pred[i, t, :], true[i, t, :])
-    overall_ic = np.nanmean(ic_values)
-    overall_std = np.nanstd(ic_values)
-    per_horizon_ic = np.nanmean(ic_values, axis=0)
-    return overall_ic, overall_std, per_horizon_ic
+# ─── Ground truth ─────────────────────────────────────────────────────────────
 
-
-def mse(pred, true):
-    diff = pred.astype(np.float64, copy=False) - true.astype(np.float64, copy=False)
-    return float(np.mean(diff * diff))
-
-
-def mae(pred, true):
-    diff = pred.astype(np.float64, copy=False) - true.astype(np.float64, copy=False)
-    return float(np.mean(np.abs(diff)))
-
-
-def rse(pred, true):
-    pred64 = pred.astype(np.float64, copy=False)
-    true64 = true.astype(np.float64, copy=False)
-    diff = true64 - pred64
-    num = np.sqrt(np.sum(diff * diff))
-    denom_diff = true64 - true64.mean()
-    den = np.sqrt(np.sum(denom_diff * denom_diff))
-    return float(num / den)
-
-
-def build_patchtst_scaled_truth_iv(
-    csv_path: str,
-    *,
-    seq_len: int,
-    pred_len: int,
-):
+def build_reference(csv_path: str, seq_len: int, pred_len: int):
+    """
+    Returns:
+      trues      [N, pred_len, 400] ground truth in scaled space
+      persist    [N, pred_len, 400] naive persistence forecast (last observed repeated)
+      ref_dates  [N] datetime64[D] start date of each prediction window
+      meta       dict of split statistics
+    """
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
 
-    iv_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("iv_")]
-    if not iv_cols:
-        raise ValueError("No iv_* columns found in CSV.")
+    iv_cols = [c for c in df.columns if c.startswith("iv_")]
+    if len(iv_cols) != N_IV:
+        raise ValueError(f"Expected {N_IV} iv_ columns, found {len(iv_cols)}")
 
     T = len(df)
-    num_train = int(T * 0.7)
-    num_test = int(T * 0.2)
+    num_train = int(T * TRAIN_FRAC)
+    num_test = int(T * TEST_FRAC)
     num_val = T - num_train - num_test
 
-    border1s = [0, num_train - seq_len, T - num_test - seq_len]
-    border2s = [num_train, num_train + num_val, T]
+    # Same border formula used by HOT and DynGWN
+    train_end = num_train
+    test_start = T - num_test - seq_len
 
+    iv_np = df[iv_cols].to_numpy(dtype=np.float32)
     scaler = StandardScaler()
-    scaler.fit(df.loc[border1s[0] : border2s[0] - 1, iv_cols].to_numpy(dtype=np.float32, copy=False))
-    iv_scaled = scaler.transform(df[iv_cols].to_numpy(dtype=np.float32, copy=False)).astype(np.float32, copy=False)
+    scaler.fit(iv_np[:train_end])
+    iv_scaled = scaler.transform(iv_np).astype(np.float32)
 
-    tb1, tb2 = border1s[2], border2s[2]
-    test_iv = iv_scaled[tb1:tb2]  # includes seq_len overlap
-
-    n_test_samples = len(test_iv) - seq_len - pred_len + 1
-    if n_test_samples <= 0:
-        raise ValueError("Not enough test data to build windows.")
-
-    trues = np.zeros((n_test_samples, pred_len, len(iv_cols)), dtype=np.float32)
-    start_dates = np.zeros((n_test_samples,), dtype="datetime64[D]")
+    test_slice = iv_scaled[test_start:]          # [num_test + seq_len, 400]
     all_dates = df["date"].to_numpy(dtype="datetime64[D]")
+    test_date_slice = all_dates[test_start:]
 
-    for i in range(n_test_samples):
-        trues[i] = test_iv[i + seq_len : i + seq_len + pred_len]
-        start_dates[i] = all_dates[tb1 + i + seq_len]
+    n = len(test_slice) - seq_len - pred_len + 1
+    trues   = np.empty((n, pred_len, N_IV), dtype=np.float32)
+    persist = np.empty((n, pred_len, N_IV), dtype=np.float32)
+    ref_dates = np.empty(n, dtype="datetime64[D]")
+
+    for i in range(n):
+        trues[i]   = test_slice[i + seq_len : i + seq_len + pred_len]
+        persist[i] = test_slice[i + seq_len - 1]   # broadcast last observed value
+        ref_dates[i] = test_date_slice[i + seq_len]
 
     meta = {
-        "T": T,
-        "num_train": num_train,
-        "num_val": num_val,
-        "num_test": num_test,
-        "border1s": border1s,
-        "border2s": border2s,
-        "n_test_samples": n_test_samples,
+        "T": T, "num_train": num_train, "num_val": num_val, "num_test": num_test,
+        "n_test": n, "seq_len": seq_len, "pred_len": pred_len,
+        "date_range": f"{ref_dates[0]} → {ref_dates[-1]}",
     }
-    return trues, start_dates, meta
+    return trues, persist, ref_dates, meta
 
 
-def load_patchtst_iv_pred(path: str) -> np.ndarray:
-    arr = np.load(path)
-    if arr.ndim != 3:
-        raise ValueError(f"Unexpected PatchTST pred shape: {arr.shape}")
-    if arr.shape[-1] != 400:
-        raise ValueError(f"Expected 400 IV features, got {arr.shape[-1]} in {path}")
-    return arr.astype(np.float32, copy=False)
+# ─── Loaders ──────────────────────────────────────────────────────────────────
+
+def load_flat(path: str) -> np.ndarray:
+    arr = np.load(path).astype(np.float32)
+    if arr.ndim != 3 or arr.shape[-1] != N_IV:
+        raise ValueError(f"Expected [N, pred, {N_IV}], got {arr.shape}")
+    return arr
 
 
-def load_hot_iv_pred(path: str) -> np.ndarray:
-    arr = np.load(path)
+def load_hot(path: str) -> np.ndarray:
+    """
+    HOT saves [N, H_mono=20, W_tau=20, pred_len=63].
+    CSV column order is (tau outer, moneyness inner), i.e. column k = i_tau*20 + i_mono.
+    Since HOT uses H=moneyness, W=tau, F-order reshape produces
+      vec[i_mono + 20*i_tau] = tensor[i_mono, i_tau]  which equals column k. ✓
+    """
+    arr = np.load(path).astype(np.float32)
     if arr.ndim != 4:
-        raise ValueError(f"Unexpected HOT pred shape: {arr.shape}")
+        raise ValueError(f"Expected HOT [N, H, W, pred], got {arr.shape}")
     n, h, w, p = arr.shape
-    if h * w != 400:
-        raise ValueError(f"Expected HOT surface grid to have 400 cells (got {h}x{w}={h*w}) in {path}")
-    arr = arr.transpose(0, 3, 1, 2)  # [N, pred, H, W]
-    vec = arr.reshape(n, p, h * w, order="F")  # moneyness varies fastest, then tau
-    return vec.astype(np.float32, copy=False)
-
-def _align_hot_to_patch_dates(
-    *,
-    hot_pred: np.ndarray,
-    hot_dates: np.ndarray,
-    patch_dates: np.ndarray,
-    hot_name: str,
-) -> np.ndarray:
-    hot_dates = hot_dates.astype("datetime64[D]")
-    hot_map = {d: i for i, d in enumerate(hot_dates)}
-    hot_idx = []
-    missing = 0
-    for d in patch_dates:
-        i = hot_map.get(d)
-        if i is None:
-            missing += 1
-            hot_idx.append(-1)
-        else:
-            hot_idx.append(i)
-    if missing:
-        raise ValueError(f"{hot_name} is missing {missing} start_dates that exist in PatchTST test set.")
-    return hot_pred[np.array(hot_idx, dtype=int)]
+    if h * w != N_IV:
+        raise ValueError(f"HOT grid {h}×{w}={h*w} ≠ {N_IV}")
+    arr = arr.transpose(0, 3, 1, 2)            # [N, pred, H_mono, W_tau]
+    return arr.reshape(n, p, h * w, order="F") # [N, pred, 400] in CSV column order
 
 
-def _align_pred_to_patch_dates(
-    *,
-    pred: np.ndarray,
-    pred_dates: np.ndarray,
-    patch_dates: np.ndarray,
-    name: str,
-) -> np.ndarray:
+LOADERS = {"flat": load_flat, "hot": load_hot}
+
+
+# ─── Date alignment ───────────────────────────────────────────────────────────
+
+def align_to_ref(pred: np.ndarray, pred_dates: np.ndarray,
+                 ref_dates: np.ndarray, name: str) -> np.ndarray:
     pred_dates = pred_dates.astype("datetime64[D]")
-    pred_map = {d: i for i, d in enumerate(pred_dates)}
-    pred_idx = []
-    missing = 0
-    for d in patch_dates:
-        i = pred_map.get(d)
+    date_to_idx = {d: i for i, d in enumerate(pred_dates)}
+    indices, missing = [], []
+    for d in ref_dates:
+        i = date_to_idx.get(d)
         if i is None:
-            missing += 1
-            pred_idx.append(-1)
+            missing.append(str(d))
         else:
-            pred_idx.append(i)
+            indices.append(i)
     if missing:
-        raise ValueError(f"{name} is missing {missing} start_dates that exist in PatchTST test set.")
-    return pred[np.array(pred_idx, dtype=int)]
+        raise ValueError(
+            f"{name}: {len(missing)}/{len(ref_dates)} reference dates not in pred "
+            f"(first missing: {missing[0]})"
+        )
+    return pred[np.array(indices)]
+
+
+# ─── Metrics ──────────────────────────────────────────────────────────────────
+
+def compute_metrics(pred: np.ndarray, true: np.ndarray) -> dict:
+    """
+    pred, true: [N, pred_len, 400] in scaled space.
+
+    Returns scalar metrics plus per-horizon arrays (keyed with '_' prefix).
+    """
+    diff    = pred - true
+    sq      = diff * diff
+    abs_d   = np.abs(diff)
+
+    mse_v  = float(np.mean(sq))
+    rmse_v = float(np.sqrt(mse_v))
+    mae_v  = float(np.mean(abs_d))
+
+    t64 = true.astype(np.float64)
+    p64 = pred.astype(np.float64)
+    rse_v = float(
+        np.sqrt(np.sum((t64 - p64) ** 2))
+        / np.sqrt(np.sum((t64 - t64.mean()) ** 2))
+    )
+
+    bias_v = float(np.mean(diff))   # positive = model over-predicts
+    da_v   = float(np.mean(np.sign(pred) == np.sign(true)))  # above/below hist mean
+
+    # Spearman IC across 400 features, per (window, step)
+    N, P, F = pred.shape
+    ic = np.full((N, P), np.nan)
+    for i in range(N):
+        for t in range(P):
+            r, _ = spearmanr(pred[i, t], true[i, t])
+            ic[i, t] = r if np.isfinite(r) else np.nan
+
+    ic_mean_v = float(np.nanmean(ic))
+    ic_std_v  = float(np.nanstd(ic))
+
+    per_h_mse = np.mean(sq,    axis=(0, 2))   # [pred_len]
+    per_h_mae = np.mean(abs_d, axis=(0, 2))   # [pred_len]
+    per_h_ic  = np.nanmean(ic, axis=0)        # [pred_len]
+
+    return {
+        "mse": mse_v, "rmse": rmse_v, "mae": mae_v, "rse": rse_v,
+        "bias": bias_v, "da": da_v,
+        "ic_mean": ic_mean_v, "ic_std": ic_std_v,
+        "_per_h_mse": per_h_mse,
+        "_per_h_mae": per_h_mae,
+        "_per_h_ic":  per_h_ic,
+    }
+
+
+# ─── Display ──────────────────────────────────────────────────────────────────
+
+OVERALL_COLS = ["mse", "rmse", "mae", "rse", "bias", "da", "ic_mean", "ic_std"]
+# fmt strings: optional leading '+' for sign flag (placed before width at render time)
+COL_FMT = {
+    "mse": ".6f", "rmse": ".6f", "mae": ".6f", "rse": ".6f",
+    "bias": "+.6f", "da": ".4f", "ic_mean": "+.4f", "ic_std": ".4f",
+}
+
+
+def _fmt(val: float, cw: int, fmt: str) -> str:
+    """Format val right-aligned in width cw, honouring optional leading '+' sign flag."""
+    if fmt.startswith("+"):
+        return format(val, f">+{cw}{fmt[1:]}")
+    return format(val, f">{cw}{fmt}")
+
+
+def _col_width(results: list[dict]) -> int:
+    return max(14, max(len(r["name"]) for r in results) + 2)
+
+
+def print_summary(results: list[dict]):
+    cw = _col_width(results)
+    rw = 10
+    names = [r["name"] for r in results]
+
+    sep   = "=" * (rw + 1 + cw * len(names))
+    hdash = "-" * (rw + 1 + cw * len(names))
+
+    print(f"\n{sep}")
+    print(f"{'Metric':<{rw}} " + "".join(f"{n:>{cw}}" for n in names))
+    print(sep)
+    for m in OVERALL_COLS:
+        fmt = COL_FMT[m]
+        row = f"{m:<{rw}} " + "".join(_fmt(r[m], cw, fmt) for r in results)
+        print(row)
+    print(sep)
+
+    # Per-horizon IC table
+    n_ref = results[0]["n_windows"]
+    print(f"\nPer-horizon Spearman IC  (N={n_ref} reference windows):")
+    print(f"{'h':<8}" + "".join(f"{n:>{cw}}" for n in names))
+    print(hdash)
+    for h in REPORT_HORIZONS:
+        idx = h - 1
+        row = f"t+{h:<6}" + "".join(_fmt(r["_per_h_ic"][idx], cw, "+.4f") for r in results)
+        print(row)
+
+    # Per-horizon MSE table
+    print(f"\nPer-horizon MSE:")
+    print(f"{'h':<8}" + "".join(f"{n:>{cw}}" for n in names))
+    print(hdash)
+    for h in REPORT_HORIZONS:
+        idx = h - 1
+        row = f"t+{h:<6}" + "".join(_fmt(r["_per_h_mse"][idx], cw, ".6f") for r in results)
+        print(row)
+    print()
+
+
+# ─── Save ─────────────────────────────────────────────────────────────────────
+
+def save_results(results: list[dict], out_dir: str):
+    os.makedirs(out_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Overall metrics CSV (one row per model)
+    scalar_rows = [
+        {k: v for k, v in r.items() if not k.startswith("_")}
+        for r in results
+    ]
+    df_overall = pd.DataFrame(scalar_rows)
+    df_overall.to_csv(os.path.join(out_dir, f"{ts}.csv"), index=False)
+    df_overall.to_csv(os.path.join(out_dir, "latest.csv"), index=False)
+
+    # Per-horizon CSV (one row per model × horizon)
+    h_rows = []
+    for r in results:
+        for h in range(1, PRED_LEN + 1):
+            h_rows.append({
+                "model":   r["name"],
+                "horizon": h,
+                "ic":      r["_per_h_ic"][h - 1],
+                "mse":     r["_per_h_mse"][h - 1],
+                "mae":     r["_per_h_mae"][h - 1],
+            })
+    pd.DataFrame(h_rows).to_csv(os.path.join(out_dir, "latest_horizons.csv"), index=False)
+
+    # JSON summary
+    summary = {
+        "timestamp": ts,
+        "models": {
+            r["name"]: {k: v for k, v in r.items() if not k.startswith("_")}
+            for r in results
+        },
+    }
+    with open(os.path.join(out_dir, "latest_summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"Saved to {out_dir}/  ({ts}.csv + latest.*)")
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+def _resolve_path(pattern: str | None) -> str | None:
+    if pattern is None:
+        return None
+    if "*" not in pattern:
+        return pattern if os.path.exists(pattern) else None
+    matches = glob.glob(pattern)
+    return max(matches, key=os.path.getmtime) if matches else None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare PatchTST vs HOT vs Persistence on SPX IV surfaces")
-    parser.add_argument("--csv_path", type=str, default="SPX_surfaces.csv")
-    parser.add_argument("--seq_len", type=int, default=21)
-    parser.add_argument("--pred_len", type=int, default=63)
-
-    parser.add_argument(
-        "--patchtst_pred",
-        type=str,
-        default="PatchTST-main/PatchTST_supervised/results/"
-        "SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_dm128_nh16_el3_dl1_df256_fc1_ebtimeF_dtTrue_Exp_0/pred.npy",
-    )
-    parser.add_argument(
-        "--persist_pred",
-        type=str,
-        default="PatchTST-main/PatchTST_supervised/results/"
-        "SPX_IV_21_63_Persistence_custom_ftM_sl21_ll0_pl63_Exp_0/pred.npy",
-    )
-    parser.add_argument(
-        "--var_pred",
-        type=str,
-        default="PatchTST-main/PatchTST_supervised/results/"
-        "SPX_IV_21_63_VAR1_ridge_intercept_custom_ftM_sl21_ll0_pl63_Exp_0/pred.npy",
-    )
-    parser.add_argument(
-        "--hot_pred_product",
-        type=str,
-        default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_product/pred.npy",
-    )
-    parser.add_argument(
-        "--hot_dates_product",
-        type=str,
-        default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_product/start_dates.npy",
-    )
-    parser.add_argument(
-        "--hot_pred_sum",
-        type=str,
-        default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_sum/pred.npy",
-    )
-    parser.add_argument(
-        "--hot_dates_sum",
-        type=str,
-        default="HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_sum/start_dates.npy",
-    )
-    parser.add_argument(
-        "--dyngwn_pred",
-        type=str,
-        default=None,
-        help="Optional DynGWN pred.npy path (shape [N, pred_len, 400] in scaled space).",
-    )
-    parser.add_argument(
-        "--dyngwn_dates",
-        type=str,
-        default=None,
-        help="Optional DynGWN start_dates.npy path to align by date.",
-    )
+    parser = argparse.ArgumentParser(description="Compare SPX IV forecasting models")
+    parser.add_argument("--csv_path", default="SPX_surfaces.csv")
+    parser.add_argument("--seq_len",  type=int, default=SEQ_LEN)
+    parser.add_argument("--pred_len", type=int, default=PRED_LEN)
+    parser.add_argument("--out_dir",  default="comparison_results")
     args = parser.parse_args()
 
-    trues_all, patch_start_dates_all, meta = build_patchtst_scaled_truth_iv(
+    print("Building reference ground truth...")
+    trues, persist, ref_dates, meta = build_reference(
         args.csv_path, seq_len=args.seq_len, pred_len=args.pred_len
     )
+    print(f"  T={meta['T']}, test windows={meta['n_test']}, {meta['date_range']}")
 
-    patch_pred = load_patchtst_iv_pred(args.patchtst_pred)
-    persist_pred = load_patchtst_iv_pred(args.persist_pred)
-    var_pred = load_patchtst_iv_pred(args.var_pred)
-    hot_pred_product = load_hot_iv_pred(args.hot_pred_product)
-    hot_dates_product = np.load(args.hot_dates_product).astype("datetime64[D]")
-    hot_pred_sum = load_hot_iv_pred(args.hot_pred_sum)
-    hot_dates_sum = np.load(args.hot_dates_sum).astype("datetime64[D]")
+    results = []
 
-    n_patch = patch_pred.shape[0]
-    trues = trues_all[:n_patch]
-    patch_dates = patch_start_dates_all[:n_patch]
+    # Reference persistence (built from CSV, always available)
+    m = compute_metrics(persist, trues)
+    m["name"] = "Persist(ref)"
+    m["n_windows"] = meta["n_test"]
+    m["source"] = "built-in"
+    results.append(m)
+    print(f"  Persist(ref): OK ({meta['n_test']} windows)")
 
-    if persist_pred.shape[0] != n_patch:
-        persist_pred = persist_pred[:n_patch]
-    if var_pred.shape[0] != n_patch:
-        var_pred = var_pred[:n_patch]
-    if patch_pred.shape[1:] != trues.shape[1:]:
-        raise ValueError(f"PatchTST pred shape {patch_pred.shape} != truth {trues.shape}")
-    if persist_pred.shape[1:] != trues.shape[1:]:
-        raise ValueError(f"Persistence pred shape {persist_pred.shape} != truth {trues.shape}")
-    if var_pred.shape[1:] != trues.shape[1:]:
-        raise ValueError(f"VAR pred shape {var_pred.shape} != truth {trues.shape}")
+    for spec in MODELS:
+        name = spec["name"]
+        pred_path  = _resolve_path(spec["pred"])
+        dates_path = _resolve_path(spec["dates"])
 
-    hot_product_aligned = _align_hot_to_patch_dates(
-        hot_pred=hot_pred_product,
-        hot_dates=hot_dates_product,
-        patch_dates=patch_dates,
-        hot_name="HOT(product)",
-    )
-    hot_sum_aligned = _align_hot_to_patch_dates(
-        hot_pred=hot_pred_sum,
-        hot_dates=hot_dates_sum,
-        patch_dates=patch_dates,
-        hot_name="HOT(sum)",
-    )
+        if pred_path is None:
+            print(f"  {name}: no results found — skipping")
+            continue
 
-    preds = {
-        "PatchTST": patch_pred,
-        "HOT(product)": hot_product_aligned,
-        "HOT(sum)": hot_sum_aligned,
-        "VAR1": var_pred,
-        "Persistence": persist_pred,
-    }
+        try:
+            pred = LOADERS[spec["loader"]](pred_path)
+        except Exception as e:
+            print(f"  {name}: load error — {e}")
+            continue
 
-    if args.dyngwn_pred:
-        dyngwn_pred = load_patchtst_iv_pred(args.dyngwn_pred)
-        if args.dyngwn_dates:
-            dyngwn_dates = np.load(args.dyngwn_dates).astype("datetime64[D]")
-            dyngwn_pred = _align_pred_to_patch_dates(
-                pred=dyngwn_pred,
-                pred_dates=dyngwn_dates,
-                patch_dates=patch_dates,
-                name="DynGWN",
-            )
+        if dates_path is not None:
+            pred_dates = np.load(dates_path).astype("datetime64[D]")
+            try:
+                pred = align_to_ref(pred, pred_dates, ref_dates, name)
+            except ValueError as e:
+                print(f"  {name}: date alignment failed — {e}")
+                continue
+            n_windows = len(ref_dates)
+            true_aligned = trues
         else:
-            dyngwn_pred = dyngwn_pred[:n_patch]
-        preds["DynGWN"] = dyngwn_pred
+            # No dates saved — sequential alignment assumption
+            n_windows = min(len(pred), len(trues))
+            if n_windows < len(trues):
+                print(
+                    f"  {name}: WARNING — no start_dates.npy; assuming sequential "
+                    f"alignment from window 0 (model has {len(pred)}, ref has {len(trues)}). "
+                    f"Dates may be misaligned if model was run on a different CSV."
+                )
+            pred = pred[:n_windows]
+            true_aligned = trues[:n_windows]
 
-    rows = []
-    for name, arr in preds.items():
-        ic_mean, ic_std, ic_h = compute_ic(arr, trues)
-        rows.append(
-            {
-                "name": name,
-                "mse": mse(arr, trues),
-                "mae": mae(arr, trues),
-                "rse": rse(arr, trues),
-                "ic_mean": ic_mean,
-                "ic_std": ic_std,
-                "ic_h": ic_h,
-            }
-        )
+        if pred.shape[1:] != (args.pred_len, N_IV):
+            print(f"  {name}: unexpected pred shape {pred.shape} — skipping")
+            continue
 
-    by_name = {r["name"]: r for r in rows}
-    model_order = ["PatchTST", "HOT(product)", "HOT(sum)", "VAR1", "Persistence"]
-    if "DynGWN" in by_name and "DynGWN" not in model_order:
-        model_order.insert(3, "DynGWN")
+        m = compute_metrics(pred, true_aligned)
+        m["name"] = name
+        m["n_windows"] = n_windows
+        m["source"] = pred_path
+        results.append(m)
+        print(f"  {name}: OK ({n_windows} windows, {pred_path})")
 
-    display = {"HOT(product)": "HOT(prod)", "HOT(sum)": "HOT(sum)", "Persistence": "Persistence"}
-    colw = 14
-    line_w = 12 + 1 + (colw + 1) * len(model_order)
-    print("=" * line_w)
-    print(f"{'Metric':<12} " + " ".join([f"{display.get(m, m):>{colw}}" for m in model_order]))
-    print("=" * line_w)
-    for metric in ["mse", "mae", "rse", "ic_mean", "ic_std"]:
-        print(f"{metric:<12} " + " ".join([f"{by_name[m][metric]:>{colw}.10f}" for m in model_order]))
-    print("=" * line_w)
+    if len(results) == 1:
+        print("\nOnly baseline available — nothing to compare.")
+        return
 
-    horizons_to_show = [1, 5, 10, 21, 42, 63]
-    print(f"\nPer-horizon IC (averaged across {trues.shape[0]} test windows):")
-    ic_colw = 12
-    ic_line_w = 10 + 1 + (ic_colw + 1) * len(model_order)
-    display_ic = {**display, "Persistence": "Persist"}
-    print(f"{'Horizon':<10} " + " ".join([f"{display_ic.get(m, m):>{ic_colw}}" for m in model_order]))
-    print("-" * ic_line_w)
-    for h in horizons_to_show:
-        if 1 <= h <= args.pred_len:
-            idx = h - 1
-            print(
-                f"t+{h:<7} "
-                + " ".join([f"{by_name[m]['ic_h'][idx]:>{ic_colw}.6f}" for m in model_order])
-            )
-    print("-" * 74)
+    print_summary(results)
+    save_results(results, args.out_dir)
 
 
 if __name__ == "__main__":

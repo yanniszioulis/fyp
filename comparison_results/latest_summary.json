@@ -1,0 +1,109 @@
+{
+  "timestamp": "20260430_101730",
+  "models": {
+    "Persist(ref)": {
+      "mse": 0.1974482536315918,
+      "rmse": 0.44435149783880756,
+      "mae": 0.3059016466140747,
+      "rse": 0.7195097909782804,
+      "bias": 0.05518697202205658,
+      "da": 0.8537321019473081,
+      "ic_mean": 0.5207828038181357,
+      "ic_std": 0.3924840215727008,
+      "name": "Persist(ref)",
+      "n_windows": 776,
+      "source": "built-in"
+    },
+    "PatchTST": {
+      "mse": 0.17886729538440704,
+      "rmse": 0.4229270568128824,
+      "mae": 0.294689804315567,
+      "rse": 0.6819520622068111,
+      "bias": 0.03008432872593403,
+      "da": 0.8587569754464286,
+      "ic_mean": 0.5217746679521754,
+      "ic_std": 0.38936101153813324,
+      "name": "PatchTST",
+      "n_windows": 768,
+      "source": "PatchTST-main/PatchTST_supervised/results/SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_dm128_nh16_el3_dl1_df256_fc1_ebtimeF_dtTrue_Exp_0/pred.npy"
+    },
+    "Persistence": {
+      "mse": 0.19843989610671997,
+      "rmse": 0.44546593147705466,
+      "mae": 0.3061692714691162,
+      "rse": 0.7182952160543181,
+      "bias": 0.052948180586099625,
+      "da": 0.8559159019510582,
+      "ic_mean": 0.5185495961838451,
+      "ic_std": 0.3935362393067162,
+      "name": "Persistence",
+      "n_windows": 768,
+      "source": "PatchTST-main/PatchTST_supervised/results/SPX_IV_21_63_Persistence_custom_ftM_sl21_ll0_pl63_Exp_0/pred.npy"
+    },
+    "VAR1": {
+      "mse": 0.1476743072271347,
+      "rmse": 0.3842841490708857,
+      "mae": 0.2718929350376129,
+      "rse": 0.6222461440521696,
+      "bias": 0.028560923412442207,
+      "da": 0.8759430228276878,
+      "ic_mean": 0.4936243866614286,
+      "ic_std": 0.43084843407622225,
+      "name": "VAR1",
+      "n_windows": 776,
+      "source": "var_lag1_results/pred.npy"
+    },
+    "HOT(product)": {
+      "mse": 0.23587562143802643,
+      "rmse": 0.4856702805793519,
+      "mae": 0.3152519464492798,
+      "rse": 0.7864142613213367,
+      "bias": -0.04995119199156761,
+      "da": 0.8704088426607757,
+      "ic_mean": 0.4788666231842412,
+      "ic_std": 0.417285777901469,
+      "name": "HOT(product)",
+      "n_windows": 776,
+      "source": "HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_product/pred.npy"
+    },
+    "HOT(sum)": {
+      "mse": 0.17534032464027405,
+      "rmse": 0.41873658144503456,
+      "mae": 0.28747397661209106,
+      "rse": 0.6780326625337464,
+      "bias": -0.004437322728335857,
+      "da": 0.8699683971526755,
+      "ic_mean": 0.5164163936725163,
+      "ic_std": 0.38912567112905594,
+      "name": "HOT(sum)",
+      "n_windows": 776,
+      "source": "HOT/results/SPX_IV_21_63_HOT_tensor_dh128_mlp512_b4_h8_p4_kronecker_sum/pred.npy"
+    },
+    "DynGWN": {
+      "mse": 0.15621596574783325,
+      "rmse": 0.39524165487437335,
+      "mae": 0.2717401385307312,
+      "rse": 0.6399887981842999,
+      "bias": -0.03694147989153862,
+      "da": 0.872029536900671,
+      "ic_mean": 0.5231507218274227,
+      "ic_std": 0.3907862028443924,
+      "name": "DynGWN",
+      "n_windows": 776,
+      "source": "DynGWN/results/SPX_IV_21_63_DynGWN_grid_plus_adaptive_sl21_pl63_nh32_b4_l2_lr0.001_Exp_1/pred.npy"
+    },
+    "DLinear": {
+      "mse": 0.149139404296875,
+      "rmse": 0.3861857121863457,
+      "mae": 0.2774379551410675,
+      "rse": 0.6253252509979319,
+      "bias": 0.022687148302793503,
+      "da": 0.863336197021764,
+      "ic_mean": 0.5580345086303524,
+      "ic_std": 0.32679865246113615,
+      "name": "DLinear",
+      "n_windows": 776,
+      "source": "DLinear/results/SPX_IV_21_63_DLinear_individual_k13_ep5/pred.npy"
+    }
+  }
+}

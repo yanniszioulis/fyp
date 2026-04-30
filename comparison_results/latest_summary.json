@@ -1,5 +1,5 @@
 {
-  "timestamp": "20260430_101730",
+  "timestamp": "20260430_114036",
   "models": {
     "Persist(ref)": {
       "mse": 0.1974482536315918,
@@ -41,17 +41,17 @@
       "source": "PatchTST-main/PatchTST_supervised/results/SPX_IV_21_63_Persistence_custom_ftM_sl21_ll0_pl63_Exp_0/pred.npy"
     },
     "VAR1": {
-      "mse": 0.1476743072271347,
-      "rmse": 0.3842841490708857,
-      "mae": 0.2718929350376129,
-      "rse": 0.6222461440521696,
-      "bias": 0.028560923412442207,
-      "da": 0.8759430228276878,
-      "ic_mean": 0.4936243866614286,
-      "ic_std": 0.43084843407622225,
+      "mse": 0.15691569447517395,
+      "rmse": 0.39612585686265667,
+      "mae": 0.2843427360057831,
+      "rse": 0.6414207420615826,
+      "bias": 0.04303726926445961,
+      "da": 0.8659025732286042,
+      "ic_mean": 0.11057137235141136,
+      "ic_std": 0.5598221919696187,
       "name": "VAR1",
       "n_windows": 776,
-      "source": "var_lag1_results/pred.npy"
+      "source": "VAR1/results/SPX_IV_21_63_VAR1_tuned/pred.npy"
     },
     "HOT(product)": {
       "mse": 0.23587562143802643,
@@ -93,17 +93,17 @@
       "source": "DynGWN/results/SPX_IV_21_63_DynGWN_grid_plus_adaptive_sl21_pl63_nh32_b4_l2_lr0.001_Exp_1/pred.npy"
     },
     "DLinear": {
-      "mse": 0.149139404296875,
-      "rmse": 0.3861857121863457,
-      "mae": 0.2774379551410675,
-      "rse": 0.6253252509979319,
-      "bias": 0.022687148302793503,
-      "da": 0.863336197021764,
-      "ic_mean": 0.5580345086303524,
-      "ic_std": 0.32679865246113615,
+      "mse": 0.14781759679317474,
+      "rmse": 0.3844705408651939,
+      "mae": 0.2751525640487671,
+      "rse": 0.6225479786719749,
+      "bias": 0.026805173605680466,
+      "da": 0.8641390013909344,
+      "ic_mean": 0.5705272891916223,
+      "ic_std": 0.3251519711008097,
       "name": "DLinear",
       "n_windows": 776,
-      "source": "DLinear/results/SPX_IV_21_63_DLinear_individual_k13_ep5/pred.npy"
+      "source": "DLinear/results/SPX_IV_21_63_DLinear_individual_k13_ep100/pred.npy"
     }
   }
 }

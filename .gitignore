@@ -21,19 +21,19 @@ SPX_calls_surfaces.csv
 SPX_puts_surfaces.csv
 data_prep/*.csv
 
-# Generated outputs
-results/*
-!results/metrics/
-!results/metrics/**
-!results/tuning/
-!results/tuning/**
+# Generated model outputs (reproducible by re-training; small artifacts kept)
+# Keeps: start_dates.npy, train_log.csv, meta.json — tiny and useful for alignment.
+pred.npy
+true.npy
+best_model.pt
+checkpoint.pt
+*.ckpt
 
-# DynGWN generated data / artifacts (reproducible, large)
+# Legacy DynGWN data / artifacts
 DynGWN/data/**
 DynGWN/logs/**
 
-
-# HOT (reference implementation at root level only)
+# Reference implementations not part of the active pipeline
 /PI-ConvTF/
 /viz_stuff/
 

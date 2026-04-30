@@ -50,9 +50,12 @@ REPORT_HORIZONS = [1, 5, 10, 21, 42, 63]
 MODELS = [
     {
         "name": "PatchTST",
-        "pred":  "PatchTST-main/PatchTST_supervised/results/"
-                 "SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_*/pred.npy",
-        "dates": None,
+        # New canonical path first, then legacy PatchTST-main fallback.
+        "pred":  ["PatchTST/results/SPX_IV_21_63_PatchTST_*/pred.npy",
+                  "PatchTST-main/PatchTST_supervised/results/"
+                  "SPX_IV_21_63_PatchTST_custom_ftM_sl21_ll0_pl63_*/pred.npy"],
+        "dates": ["PatchTST/results/SPX_IV_21_63_PatchTST_*/start_dates.npy",
+                  None],
         "loader": "flat",
     },
     {
@@ -64,8 +67,11 @@ MODELS = [
     },
     {
         "name": "VAR1",
-        "pred":  "var_lag1_results/pred.npy",
-        "dates": "var_lag1_results/start_dates.npy",
+        # New canonical path first, then legacy fallback.
+        "pred":  ["VAR1/results/SPX_IV_21_63_VAR1_*/pred.npy",
+                  "var_lag1_results/pred.npy"],
+        "dates": ["VAR1/results/SPX_IV_21_63_VAR1_*/start_dates.npy",
+                  "var_lag1_results/start_dates.npy"],
         "loader": "flat",
     },
     {
@@ -352,13 +358,20 @@ def save_results(results: list[dict], out_dir: str):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-def _resolve_path(pattern: str | None) -> str | None:
-    if pattern is None:
-        return None
-    if "*" not in pattern:
-        return pattern if os.path.exists(pattern) else None
-    matches = glob.glob(pattern)
-    return max(matches, key=os.path.getmtime) if matches else None
+def _resolve_path(pattern) -> str | None:
+    """Resolve a glob pattern (or list of patterns) to the most-recently-modified match."""
+    patterns = pattern if isinstance(pattern, list) else [pattern]
+    for p in patterns:
+        if p is None:
+            continue
+        if "*" not in p:
+            if os.path.exists(p):
+                return p
+        else:
+            matches = glob.glob(p)
+            if matches:
+                return max(matches, key=os.path.getmtime)
+    return None
 
 
 def main():

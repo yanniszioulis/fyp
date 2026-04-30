@@ -4,228 +4,134 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **time series forecasting research project** comparing multiple deep learning models for forecasting SPX (S&P 500) implied volatility (IV) surfaces. The codebase integrates 5+ different forecasting architectures (PatchTST, HOT, DLinear, DynGWN, VAR) to benchmark their performance on financial data.
+SPX IV surface forecasting research project. Five models — VAR(1), DLinear,
+PatchTST, HOT, DynGWN — each compressed into one self-contained training
+script with the same input/output contract, dispatched via a single
+`train.py`, and benchmarked by `compare_models.py`.
 
-**Primary data**: SPX IV surface (400-feature grid: 20 moneyness × 20 time-to-maturity levels)
-**Task**: Multi-step ahead forecasting (seq_len=21, pred_len=63)
-**Main output script**: `compare_models.py` - unified evaluation harness for all models
+**Data**: SPX IV surface, 400 features (20 moneyness × 20 tau), ~4191 days.
+**Task**: seq_len=21 → pred_len=63 (3-month horizon from 1-month context).
+**Split**: canonical 70/10/20 (train/val/test) — identical across all models.
 
-## Directory Structure
+## Directory layout
 
 ```
-/fyp
-├── compare_models.py           # Main evaluation script (model comparison)
-├── var_lag1_rollout.py         # VAR(1) baseline implementation
-├── SPX_surfaces.csv            # Raw data (400 IV features, ~2500 trading days)
-├── requirements.txt            # Base dependencies (numpy, pandas, torch, scipy, etc.)
+fyp/
+├── train.py                       # Master dispatcher
+├── compare_models.py              # Unified evaluation harness
+├── SPX_surfaces.csv               # Raw data (400 iv_* columns + date)
 │
-├── PatchTST-main/              # Patch-based Transformer (ICLR 2023)
-│   ├── PatchTST_supervised/    # Main supervised learning implementation
-│   │   ├── run_longExp.py      # Training entry point
-│   │   ├── models/             # Model implementations (PatchTST, DLinear, NLinear)
-│   │   ├── exp/                # Experiment runner (dataset loading, training loop)
-│   │   └── data_provider/      # Custom data loaders
-│   └── results/                # Saved predictions (pred.npy format)
+├── VAR1/var1_spx_iv.py            # VAR(1) baseline (ridge, optional tuning)
+├── DLinear/dlinear_spx_iv.py      # Channel-independent DLinear (einsum)
+├── PatchTST/patchtst_spx_iv.py    # PatchTST + RevIN, fully inlined
+├── HOT/hot_spx_iv.py              # Kronecker-attention transformer, inlined
+├── DynGWN/dyngwn_spx_iv.py        # Graph WaveNet, adaptive adjacency only
 │
-├── HOT/                        # Higher-Order Transformers (TMLR 2025)
-│   ├── timeseries_main.py      # Entry point (Lightning-based training)
-│   ├── src/
-│   │   ├── models/             # HOT implementations (ts.py, ts_tensor.py for surfaces)
-│   │   ├── modules/            # Kronecker attention, positional encodings
-│   │   └── ts_data.py          # Lightning DataModule for TS/surfaces
-│   └── results/                # Saved predictions + dates
-│
-├── DynGWN/                     # Dynamic Graph Wavenet (ICAIF 2023)
-│   ├── main_dyngwn.py          # Entry point with domain-specific defaults
-│   ├── model.py                # Graph neural network + temporal modeling
-│   ├── engine.py               # Training/validation loop
-│   ├── generate_spx_iv_data.py # Data pipeline (CSV → windowed arrays)
-│   └── results/                # Predictions + dates
-│
-├── DLinear/                    # Linear baseline (AAAI 2022)
-│   ├── run_longExp.py          # Training script
-│   ├── models/
-│   │   ├── DLinear.py          # Simple decomposition + 2 linear layers
-│   │   ├── Autoformer.py       # Baseline Transformer variants
-│   │   └── Transformer.py
-│   ├── exp/exp_main.py         # Experiment runner
-│   └── Pyraformer/,FEDformer/  # Additional Transformer implementations
-│
-├── PI-ConvTF/                  # Placeholder (not actively used)
-├── data_prep/                  # Data preprocessing utilities
-└── var_lag1_results/           # VAR(1) outputs (created by script)
+├── PatchTST-main/                 # Legacy reference impl (kept for old results)
+├── DynGWN/main_dyngwn.py, ...     # Legacy reference impl (npz-based pipeline)
+└── HOT/timeseries_main.py, ...    # Legacy reference impl (Lightning-based)
 ```
 
-## Key Data Format & Pipeline
+The standalone `*_spx_iv.py` scripts inline every model definition — there
+is no shared model/util library between them. Each script can be deleted
+without affecting the others.
 
-### Input Data: SPX_surfaces.csv
-- **Shape**: [T=~2500 days, 400 IV features + metadata]
-- **IV columns**: Named `iv_<moneyness>_<tau>` (e.g., `iv_0.9_0.04`)
-- **Grid**: 20×20 structured (20 moneyness levels × 20 time-to-maturity)
-- **Sorting**: Column order is (tau outer, moneyness inner) - critical for grid reshaping
+## Data contract
 
-### Standard Train/Val/Test Split
-```
-train: 0-70% → used to fit scaler
-val:   70-80%
-test:  80-100%
-```
-Each model window uses: `[seq_len=21 past steps] → [pred_len=63 future steps]`
+Every standalone script implements the **same** pipeline:
 
-### Output Formats
-All models save to standardized numpy format in `results/` subdirectories:
-- **pred.npy**: [N, pred_len=63, n_features] - predictions in scaled space
-- **start_dates.npy**: [N] - datetime64[D] for each window (for alignment)
-- **true.npy** (VAR only): Ground truth
+1. Load `SPX_surfaces.csv`, sort iv_ columns alphabetically.
+2. Canonical split: `n_train = int(T*0.70)`, `n_test = int(T*0.20)`.
+3. Fit `StandardScaler` on `iv[:n_train]`, transform all rows.
+4. Window: train uses `[0, n_train)`, val uses `[n_train-seq_len, n_train+n_val)`,
+   test uses `[T-n_test-seq_len, T)`.
+5. Test predictions saved as `pred.npy` in **scaled space**.
+6. Test window start dates saved as `start_dates.npy` (datetime64[D]).
 
-## Running Models
+This invariant is what allows `compare_models.py` to align predictions by
+date and compare them on a common ground truth.
 
-### VAR(1) Baseline
-```bash
-python var_lag1_rollout.py \
-  --csv_path SPX_surfaces.csv \
-  --context_len 21 \
-  --horizon_len 63 \
-  --out_dir var_lag1_results \
-  --tune_ridge                    # Optional: grid-search regularization
-```
-**Output**: `var_lag1_results/{pred.npy, true.npy, start_dates.npy}`
+## Output format
 
-### PatchTST
-```bash
-cd PatchTST-main/PatchTST_supervised
-python run_longExp.py \
-  --is_training 1 \
-  --model PatchTST \
-  --data SPX_IV \
-  --root_path ./dataset \
-  --data_path SPX_surfaces.csv \
-  --seq_len 21 \
-  --pred_len 63 \
-  --enc_in 400 --dec_in 400 --c_out 400 \
-  --batch_size 32 \
-  --train_epochs 50
-```
-**Default result path**: `results/SPX_IV_21_63_PatchTST_custom_ftM_sl21_...`
+All `pred.npy` files are float32 in scaled space:
 
-### HOT (Higher-Order Transformers)
-```bash
-cd HOT
-python timeseries_main.py \
-  --name spx_iv \
-  --csv_path ../SPX_surfaces.csv \
-  --d_hidden 128 \
-  --d_mlp 512 \
-  --num_blocks 4 \
-  --num_heads 8 \
-  --patch_size 4 \
-  --attention_type kronecker_product \
-  --num_epochs 50
-```
-**Note**: Automatically reshapes 400 features into [H=20, W=20] tensor using grid order from `generate_spx_iv_data.py`
+| Script | pred.npy shape | Loader in compare_models |
+|--------|----------------|--------------------------|
+| var1, dlinear, patchtst, dyngwn | `[N, 63, 400]` | `flat` |
+| hot | `[N, 20, 20, 63]` (H_mono × W_tau) | `hot` (F-order reshape to flat) |
 
-### DynGWN
-```bash
-cd DynGWN
-python main_dyngwn.py \
-  --domain spx_iv \
-  --data SPX_surfaces.csv \
-  --epochs 500 \
-  --batch_size 8 \
-  --save_preds
-```
-**Domain defaults applied**: Sets SPX IV grid adjacency, normalizes, uses date-aligned windowing
+HOT is the only tensorized model; F-order reshape is correct because
+CSV column k = i_tau\*20 + i_mono and HOT uses H=moneyness, W=tau.
 
-### DLinear
-```bash
-cd DLinear
-python run_longExp.py \
-  --is_training 1 \
-  --model DLinear \
-  --data ETTm1 \
-  --enc_in 400 --dec_in 400 --c_out 400 \
-  --seq_len 21 --pred_len 63 \
-  --individual           # Use per-channel linear layers
-```
+## Running
 
-## Model Comparison
-
-### Main Evaluation Script: `compare_models.py`
-Unified benchmarking harness that loads predictions from all models and compares:
+### Master dispatcher
 
 ```bash
-python compare_models.py \
-  --csv_path SPX_surfaces.csv \
-  --seq_len 21 --pred_len 63 \
-  --patchtst_pred PatchTST-main/.../pred.npy \
-  --hot_pred_product HOT/results/.../pred.npy \
-  --hot_dates_product HOT/results/.../start_dates.npy \
-  --dyngwn_pred DynGWN/results/.../pred.npy \
-  --dyngwn_dates DynGWN/results/.../start_dates.npy
+# All models, then comparison
+python train.py --models all --device cuda --compare
+
+# Subset
+python train.py --models var1 dlinear patchtst
+
+# Pass model-specific args (only routed if the model accepts them)
+python train.py --models hot --attention_type kronecker_sum --epochs 200
+python train.py --models dyngwn --nhid 64 --epochs 500
+python train.py --models var1 --tune_ridge
 ```
 
-**Metrics computed**:
-- **MSE, MAE, RSE**: Standard regression metrics
-- **IC (Information Coefficient)**: Spearman rank correlation per timestep
-- **Per-horizon breakdown**: Metrics for [t+1, t+5, t+10, t+21, t+42, t+63]
+### Individual scripts
 
-**Key alignment logic**: All predictions are date-aligned to PatchTST test set. If a model has missing dates, it raises an error.
-
-## Architecture Patterns
-
-### Shared Data Pipeline
-- **StandardScaler**: Fit on train set, applied uniformly across all models
-- **Data format**: [batch, seq_len/pred_len, n_features] or [batch, H, W, pred_len] (for HOT)
-- **Handling NaN**: VAR(1) uses ridge regression to handle ill-conditioned matrices
-
-### Model Base Classes
-- **PatchTST/DLinear**: `torch.nn.Module` with custom `Exp_Main` runner (handles dataloading, training)
-- **HOT**: PyTorch Lightning `LightningModule` for modular training
-- **DynGWN**: Custom trainer loop in `engine.py`; graph construction in `main_dyngwn.py`
-
-### Grid Representation
-- **Linear models** (PatchTST, DLinear, VAR): Treat 400 features as flat vector
-- **Graph models** (DynGWN): Grid adjacency [20×20] with self-loops, nearest-neighbor connectivity
-- **Tensor models** (HOT): Reshape to [H=20, W=20] and apply structured attention (Kronecker products)
-
-## Dependencies & Setup
+Each script is fully standalone and can be invoked directly:
 
 ```bash
-pip install -r requirements.txt
-# Base: numpy, pandas, matplotlib, scipy, torch, einops, scikit-learn
-
-# Model-specific (optional, installed locally):
-cd HOT && pip install -r requirements.txt    # PyTorch Lightning
-cd DynGWN && pip install -r requirements.txt # Optuna (for hyperparameter tuning)
-cd DLinear && pip install -r requirements.txt
-cd PatchTST-main && pip install -r requirements.txt
+python VAR1/var1_spx_iv.py --tune_ridge
+python DLinear/dlinear_spx_iv.py --epochs 100 --device cuda
+python PatchTST/patchtst_spx_iv.py --d_model 128 --n_heads 16 --epochs 100
+python HOT/hot_spx_iv.py --d_hidden 128 --attention_type kronecker_product
+python DynGWN/dyngwn_spx_iv.py --nhid 32 --epochs 300
 ```
 
-## Development Notes
+All scripts must be invoked **from the project root** (output paths are
+relative to it). Each script auto-generates an output directory under its
+respective `results/` subfolder and saves `pred.npy`, `start_dates.npy`,
+`train_log.csv`, `best_model.pt`.
 
-### Active Scripts
-- `compare_models.py` - Recently updated; compares all model outputs
-- `var_lag1_rollout.py` - Recently updated; VAR(1) baseline with ridge tuning
-- Both accept CSV path and output directory arguments (no hardcoded paths)
+### Comparison
 
-### Data Access
-- SPX data is loaded from `.csv` (not pickled) for transparency
-- All models use consistent train/val/test split (70/10/20)
-- Scaler parameters are not saved; re-fit on each run
+```bash
+python compare_models.py
+```
 
-### Key Decision Points
-1. **Scaling strategy**: Train-only (fit on train, apply to all splits) - prevents data leakage
-2. **Grid ordering**: `iv_columns` must be sorted by (tau, moneyness) for correct 20×20 reshaping
-3. **Date alignment**: All models save `start_dates.npy` to enable cross-model comparison
-4. **Horizon evaluation**: 63-step ahead forecasts evaluated on held-out test set (last 20%)
+Auto-discovers the most recent results matching each glob pattern in
+`MODELS`. Builds a fresh ground truth from CSV (does not depend on any
+saved `true.npy`). Writes timestamped CSV + `latest.{csv,horizons.csv,summary.json}`
+under `comparison_results/`.
 
-### Common Issues & Fixes
-- **Missing IV columns**: Check CSV header; script expects `iv_<float>_<float>` pattern
-- **Shape mismatch on HOT**: Verify 400 features; wrong grid dimensions will cause reshape errors
-- **VAR divergence**: Use `--tune_ridge` to regularize; helps with ill-conditioned covariance
-- **Date misalignment**: Ensure `start_dates.npy` files are saved; `compare_models.py` uses these for matching windows
+Metrics: MSE, RMSE, MAE, RSE, signed bias, directional accuracy, Spearman IC
+(mean & std across 400 features per window-step). Per-horizon breakdown at
+t+{1, 5, 10, 21, 42, 63}.
 
-## Code Style & Structure
-- **Model implementations**: Keep in `models/` subdirs; follow `__init__` → `forward` pattern
-- **Experiments**: Use `exp/exp_main.py` pattern (dataset, trainer, logger in one class)
-- **Reproducibility**: Set random seeds in entry points; PyTorch Lightning handles device placement
+## Implementation details
+
+- **Train-only scaler**: every script fits `StandardScaler` on `iv[:n_train]`.
+  Means and stds are not saved; they are re-derived deterministically.
+- **HOT reshape**: `iv.reshape(-1, 20, 20, order="F")` maps CSV column k to
+  `[i_mono, i_tau]`. Verified against the loader in `compare_models.load_hot`.
+- **DynGWN graph mode**: standalone uses adaptive adjacency only (the
+  legacy `main_dyngwn.py` supported `grid_plus_adaptive` and dynamic GCN).
+  Receptive field with blocks=4, layers=2, kernel=2 is 13.
+- **PatchTST**: patch_len=stride=7 → 3 patches over seq_len=21. RevIN with
+  affine=True. Residual scaled-dot-product attention with learnable scale.
+- **VAR1**: global VAR(1) fit by ridge regression on all of train (one fit,
+  not rolling window). `--tune_ridge` does a logspace search.
+
+## Editing rules
+
+- Don't reintroduce shared model code across scripts; the standalone-per-model
+  contract is intentional. Each script must be deletable without affecting
+  the others.
+- Keep the data pipeline in every script byte-identical (sort iv_ cols,
+  same border formula, same scaler). If you change one, change all.
+- New result paths must match the glob patterns in `compare_models.MODELS`.
+- HOT must save `[N, H, W, pred_len]`; flat models save `[N, pred_len, 400]`.

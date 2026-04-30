@@ -153,12 +153,22 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
 def _compute_loss(pred_scaled: torch.Tensor, y_scaled: torch.Tensor,
                   loss_kind: str, mean: torch.Tensor = None,
                   std: torch.Tensor = None) -> torch.Tensor:
-    """Compute training loss either in scaled space (mse) or in original IV space (mae)."""
+    """
+    Loss options:
+      mse           — MSE in scaled space (default).
+      mae_original  — MAE on inverse-transformed pred vs y (original IV space).
+                       Mathematically equivalent to std-weighted MAE in scaled space:
+                       channels with higher historical std contribute more.
+      mae_scaled    — Plain MAE in scaled space. Equivalent to (1/std)-weighted MAE
+                       in original space, i.e. all channels weighted uniformly.
+                       Tests the hypothesis that mae_original's std-weighting hurts
+                       short-horizon performance on low-vol channels.
+    """
     if loss_kind == 'mse':
         return nn.functional.mse_loss(pred_scaled, y_scaled)
+    if loss_kind == 'mae_scaled':
+        return nn.functional.l1_loss(pred_scaled, y_scaled)
     if loss_kind == 'mae_original':
-        # Inverse-transform both pred and y to original IV, then masked-MAE.
-        # Broadcast mean/std (shape [400]) over [B, pred_len, 400].
         pred_orig = pred_scaled * std + mean
         y_orig    = y_scaled    * std + mean
         return masked_mae(pred_orig, y_orig, null_val=float('nan'))
@@ -232,7 +242,11 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
         w.writeheader(); w.writerows(log_rows)
 
     model.load_state_dict(torch.load(ckpt, map_location=device))
-    label = {'mse': 'MSE (scaled)', 'mae_original': 'MAE (original IV)'}[args.loss]
+    label = {
+        'mse':           'MSE (scaled)',
+        'mae_original':  'MAE (original IV)',
+        'mae_scaled':    'MAE (scaled)',
+    }[args.loss]
     print(f'  best val {label}: {best_val:.6f}')
     return model
 
@@ -260,10 +274,13 @@ def main():
                     help='Skip training; load best_model.pt + config.json from --out_dir, '
                          'run inference, write pred.npy.')
     ap.add_argument('--loss', default='mse',
-                    choices=['mse', 'mae_original'],
+                    choices=['mse', 'mae_original', 'mae_scaled'],
                     help='Training loss. mse: MSE in scaled space (default). '
                          'mae_original: masked MAE in original IV space '
-                         '(predictions inverse-transformed before comparison).')
+                         '(implicitly std-weights by channel: high-std channels '
+                         'matter more). mae_scaled: plain MAE in scaled space '
+                         '(uniform per-channel weighting; tests whether removing '
+                         'std-weighting recovers short-horizon performance).')
     args = ap.parse_args()
 
     # Device
@@ -303,8 +320,12 @@ def main():
         print(f'[predict_only] {cfg_path}')
 
     if args.out_dir is None:
-        # Append _lossmae for non-default loss so MSE and MAE runs coexist.
-        loss_suffix = '' if args.loss == 'mse' else '_lossmae'
+        # Append distinct suffix for non-default loss so runs coexist on disk.
+        loss_suffix = {
+            'mse':           '',
+            'mae_original':  '_lossmae',
+            'mae_scaled':    '_lossmaescaled',
+        }[args.loss]
         args.out_dir = (
             f'DLinear/results/'
             f'SPX_IV_{args.seq_len}_{args.pred_len}'

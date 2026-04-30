@@ -77,7 +77,7 @@ MODELS = [
     {
         "name":         "DLinear",
         "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*",
-        "name_filter":  lambda n: not n.endswith("_lossmae"),  # MSE only
+        "name_filter":  lambda n: "_loss" not in n,  # MSE only
         "regen_script": "DLinear/dlinear_spx_iv.py",
         "loader":       "flat",
     },
@@ -88,9 +88,15 @@ MODELS = [
         "loader":       "flat",
     },
     {
+        "name":         "DLinear(MAE-s)",
+        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_lossmaescaled",
+        "regen_script": "DLinear/dlinear_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
         "name":         "DCISMv0",
         "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*",
-        "name_filter":  lambda n: not n.endswith("_lossmae"),  # MSE only
+        "name_filter":  lambda n: "_loss" not in n,  # MSE only
         "regen_script": "DCISM/dcism_spx_iv.py",
         "loader":       "flat",
     },

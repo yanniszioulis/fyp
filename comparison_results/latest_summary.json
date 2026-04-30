@@ -1,5 +1,5 @@
 {
-  "timestamp": "20260430_151453",
+  "timestamp": "20260430_160459",
   "models": {
     "Persist(ref)": {
       "mse": 0.1974482536315918,
@@ -39,6 +39,45 @@
       "name": "DLinear",
       "n_windows": 776,
       "source": "DLinear/results/SPX_IV_21_63_DLinear_individual_k13_ep100/pred.npy"
+    },
+    "DLinear(MAE)": {
+      "mse": 0.159407377243042,
+      "rmse": 0.39925853433964564,
+      "mae": 0.2837715148925781,
+      "rse": 0.6464933625479216,
+      "bias": -0.013913415372371674,
+      "da": 0.8627654536900671,
+      "ic_mean": 0.5305464443757785,
+      "ic_std": 0.32667061961499977,
+      "name": "DLinear(MAE)",
+      "n_windows": 776,
+      "source": "DLinear/results/SPX_IV_21_63_DLinear_individual_k13_ep100_lossmae/pred.npy"
+    },
+    "DCISMv0": {
+      "mse": 0.15008845925331116,
+      "rmse": 0.3874125181938642,
+      "mae": 0.28047141432762146,
+      "rse": 0.6273117989126686,
+      "bias": 0.033848945051431656,
+      "da": 0.8625617227131402,
+      "ic_mean": 0.5685684191431771,
+      "ic_std": 0.33148342627568167,
+      "name": "DCISMv0",
+      "n_windows": 776,
+      "source": "DCISM/results/SPX_IV_21_63_DCISMv0_k13_ck3_ep100/pred.npy"
+    },
+    "DCISMv0(MAE)": {
+      "mse": 0.1526661515235901,
+      "rmse": 0.3907251611089182,
+      "mae": 0.2643601596355438,
+      "rse": 0.6326755536485661,
+      "bias": -0.07664083689451218,
+      "da": 0.8826886966126657,
+      "ic_mean": 0.5757867092192125,
+      "ic_std": 0.33227473408095276,
+      "name": "DCISMv0(MAE)",
+      "n_windows": 776,
+      "source": "DCISM/results/SPX_IV_21_63_DCISMv0_k13_ck3_ep100_lossmae/pred.npy"
     },
     "PatchTST": {
       "mse": 0.17286717891693115,

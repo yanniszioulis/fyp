@@ -1,0 +1,8 @@
+{
+  "model": "VAR1",
+  "csv_path": "SPX_surfaces.csv",
+  "seq_len": 21,
+  "pred_len": 63,
+  "ridge_lambda_used": 1.0,
+  "tuned": false
+}

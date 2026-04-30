@@ -1,5 +1,5 @@
 {
-  "timestamp": "20260430_124314",
+  "timestamp": "20260430_130448",
   "models": {
     "Persist(ref)": {
       "mse": 0.1974482536315918,
@@ -54,17 +54,30 @@
       "source": "PatchTST/results/SPX_IV_21_63_PatchTST_pl7_s7_dm128_nh16_nl3_ep100/pred.npy"
     },
     "HOT(product)": {
-      "mse": 0.16848130524158478,
-      "rmse": 0.4104647429945534,
-      "mae": 0.2860245406627655,
-      "rse": 0.6646384929644349,
-      "bias": -0.020993048325181007,
-      "da": 0.867584529945999,
-      "ic_mean": 0.48819123536827236,
-      "ic_std": 0.39562758417604726,
+      "mse": 0.16831324994564056,
+      "rmse": 0.41025997848393714,
+      "mae": 0.28636056184768677,
+      "rse": 0.6643072887124386,
+      "bias": -0.014256192371249199,
+      "da": 0.8674570446735396,
+      "ic_mean": 0.4883715865936502,
+      "ic_std": 0.39694772564684533,
       "name": "HOT(product)",
       "n_windows": 776,
       "source": "HOT/results/SPX_IV_21_63_HOT_tensor_dh128_nb4_nh8_ps4_kronecker_product_perope_ep100/pred.npy"
+    },
+    "HOT(sum)": {
+      "mse": 0.1691960096359253,
+      "rmse": 0.41133442554194916,
+      "mae": 0.2881472110748291,
+      "rse": 0.6660468585612052,
+      "bias": -0.006480635143816471,
+      "da": 0.8664708619702176,
+      "ic_mean": 0.4981095087486656,
+      "ic_std": 0.3944734376926309,
+      "name": "HOT(sum)",
+      "n_windows": 776,
+      "source": "HOT/results/SPX_IV_21_63_HOT_tensor_dh128_nb4_nh8_ps4_kronecker_sum_perope_ep100/pred.npy"
     },
     "DynGWN": {
       "mse": 0.18854106962680817,

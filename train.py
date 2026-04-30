@@ -29,6 +29,7 @@ MODELS = {
     "patchtst": "PatchTST/patchtst_spx_iv.py",
     "hot":      "HOT/hot_spx_iv.py",
     "dyngwn":   "DynGWN/dyngwn_spx_iv.py",
+    "dcism":    "DCISM/dcism_spx_iv.py",
 }
 
 # Args passed to every model script (if the script accepts them)
@@ -39,7 +40,8 @@ MODEL_ARGS = {
     "var1":     [],   # plain OLS — no hyperparameters
     "dlinear":  [("--epochs", "epochs"), ("--batch_size", "batch_size"),
                  ("--lr", "lr"), ("--patience", "patience"),
-                 ("--kernel_size", "kernel_size")],
+                 ("--kernel_size", "kernel_size"),
+                 ("--loss", "loss")],
     "patchtst": [("--epochs", "epochs"), ("--batch_size", "batch_size"),
                  ("--lr", "lr"), ("--patience", "patience"),
                  ("--patch_len", "patch_len"), ("--stride", "stride"),
@@ -60,6 +62,12 @@ MODEL_ARGS = {
                  ("--layers", "layers"),
                  ("--graph_mode", "graph_mode"),
                  ("--dropout", "dropout")],
+    "dcism":    [("--epochs", "epochs"), ("--batch_size", "batch_size"),
+                 ("--lr", "lr"), ("--patience", "patience"),
+                 ("--kernel_size", "kernel_size"),
+                 ("--conv_kernel", "conv_kernel"),
+                 ("--conv_dropout", "conv_dropout"),
+                 ("--loss", "loss")],
 }
 
 
@@ -120,8 +128,14 @@ def main():
     ap.add_argument("--device",   default="auto")
     ap.add_argument("--seed",     type=int, default=42)
 
-    # DLinear
+    # DLinear / DCISM
     ap.add_argument("--kernel_size",  type=int, default=None)
+    ap.add_argument("--loss",         default=None,
+                    choices=["mse", "mae_original"])
+
+    # DCISM
+    ap.add_argument("--conv_kernel",  type=int,   default=None)
+    ap.add_argument("--conv_dropout", type=float, default=None)
 
     # PatchTST
     ap.add_argument("--patch_len",    type=int,   default=None)

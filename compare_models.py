@@ -77,7 +77,27 @@ MODELS = [
     {
         "name":         "DLinear",
         "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*",
+        "name_filter":  lambda n: not n.endswith("_lossmae"),  # MSE only
         "regen_script": "DLinear/dlinear_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
+        "name":         "DLinear(MAE)",
+        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_lossmae",
+        "regen_script": "DLinear/dlinear_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
+        "name":         "DCISMv0",
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*",
+        "name_filter":  lambda n: not n.endswith("_lossmae"),  # MSE only
+        "regen_script": "DCISM/dcism_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
+        "name":         "DCISMv0(MAE)",
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_lossmae",
+        "regen_script": "DCISM/dcism_spx_iv.py",
         "loader":       "flat",
     },
     {
@@ -368,14 +388,20 @@ def _maybe_regen(spec: dict, name: str) -> str | None:
     """
     Resolve a model's pred.npy by regeneration from a checkpoint dir.
 
-    Looks at every dir matching spec["regen_dir"], picks the most-recent one
-    that has config.json (and best_model.pt for neural models), and:
+    Looks at every dir matching spec["regen_dir"], optionally filtered by
+    spec["name_filter"](basename) → bool, picks the most-recent one that has
+    config.json (and best_model.pt for neural models), and:
       • returns its pred.npy if already present;
       • otherwise calls regen_script with --predict_only to produce pred.npy.
 
     Returns the path to pred.npy if successful, else None.
     """
     matches = glob.glob(spec["regen_dir"])
+    if not matches:
+        return None
+    name_filter = spec.get("name_filter")
+    if name_filter is not None:
+        matches = [d for d in matches if name_filter(os.path.basename(d.rstrip("/")))]
     if not matches:
         return None
 

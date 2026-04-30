@@ -94,35 +94,57 @@ MODELS = [
         "loader":       "flat",
     },
     {
-        "name":         "DLinear(Huber)",
-        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_losshuberscaled_*",
+        "name":         "DLinear(Hub-1)",
+        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_losshuberscaled_d1",
+        "regen_script": "DLinear/dlinear_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
+        "name":         "DLinear(Hub-0.3)",
+        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_losshuberscaled_d0.3",
         "regen_script": "DLinear/dlinear_spx_iv.py",
         "loader":       "flat",
     },
     {
         "name":         "DCISMv0",
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*",
-        "name_filter":  lambda n: "_loss" not in n,  # MSE only
+        # Default ck=3 MSE.
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*",
+        "name_filter":  lambda n: "_loss" not in n,
         "regen_script": "DCISM/dcism_spx_iv.py",
         "loader":       "flat",
     },
     {
         "name":         "DCISMv0(MAE)",
-        # MAE-original (without BC): exact suffix "_lossmae".
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_lossmae",
+        # ck=3 MAE-original (without BC).
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*_lossmae",
         "name_filter":  lambda n: not n.endswith("_bc"),
         "regen_script": "DCISM/dcism_spx_iv.py",
         "loader":       "flat",
     },
     {
         "name":         "DCISMv0(MAE+BC)",
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_lossmae_bc",
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*_lossmae_bc",
         "regen_script": "DCISM/dcism_spx_iv.py",  # unused; auto-regen uses BC script
         "loader":       "flat",
     },
     {
-        "name":         "DCISMv0(Huber)",
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_losshuberscaled_*",
+        "name":         "DCISMv0(Hub-1)",
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*_losshuberscaled_d1",
+        "regen_script": "DCISM/dcism_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
+        "name":         "DCISMv0-ck5",
+        # Larger-kernel DCISM ablation, MSE.
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck5_*",
+        "name_filter":  lambda n: "_loss" not in n,
+        "regen_script": "DCISM/dcism_spx_iv.py",
+        "loader":       "flat",
+    },
+    {
+        "name":         "DCISMv0-ck5(MAE)",
+        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck5_*_lossmae",
+        "name_filter":  lambda n: not n.endswith("_bc"),
         "regen_script": "DCISM/dcism_spx_iv.py",
         "loader":       "flat",
     },

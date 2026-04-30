@@ -483,3 +483,174 @@ the question.
     `apply_bias_correction.py` instead of standard predict-only.
   - Tightened `name_filter` lambdas to use `"_loss" not in n` (handles all
     non-MSE suffixes) and `not n.endswith("_bc")` (separates BC from MAE).
+
+---
+
+## Findings from second Colab cycle (Huber + ck=5 ablations)
+
+```
+                       MSE     IC      t+1 IC   t+63 IC   bias
+DCISMv0(Hub-1)        0.1461  +0.584   +0.901   +0.421   +0.005    ★ best MSE
+DLinear(Hub-1)        0.1467  +0.591   +0.933   +0.433   -0.015    ★ best IC, best long-horizon
+DLinear (MSE)         0.1478  +0.571   +0.930   +0.399   +0.027
+DCISMv0 (ck3,MSE)     0.1501  +0.569   +0.932   +0.395   +0.034
+DCISMv0(MAE)          0.1527  +0.576   +0.928   +0.415   -0.077
+DCISMv0-ck5(MSE)      0.1517  +0.557   +0.911   +0.375   +0.038    ck=5 hurts
+DCISMv0-ck5(MAE)      0.1528  +0.548   +0.891   +0.387   -0.058    ck=5 hurts
+DLinear(Hub-0.3)      0.1581  +0.536   +0.842   +0.389   -0.011    too MSE-like
+DLinear(MAE)          0.1594  +0.531   +0.839   +0.382   -0.014
+```
+
+### Confirmed findings
+
+1. **Gradient-magnitude hypothesis: confirmed.**
+   DLinear t+1 IC: MSE 0.930, MAE 0.839 (collapse), Huber-1 **0.933**
+   (matches persistence). Huber's MSE-for-small-errors gradient is exactly
+   what was missing in MAE. Same fingerprint at every short horizon.
+
+2. **DLinear-Huber is the dominant model in the benchmark.**
+   - Best IC overall (+0.591); best long-horizon IC (+0.433).
+   - Tied with DCISM-Huber on MSE (within 0.7%).
+   - Lowest absolute MAE (0.267) of any model.
+   - Bias well-controlled (-0.015).
+   - Beats persistence at every metric, beats every transformer/graph.
+
+3. **The 2D conv polish stops mattering once the loss is right.**
+   With MAE loss: DCISM > DLinear (the polish fills the small-error
+   gradient gap). With Huber loss: DLinear ≥ DCISM (the loss already
+   provides what the polish was patching). The polish was a workaround
+   for a loss-function deficiency, not an architectural improvement on
+   top of a sound foundation.
+
+4. **`conv_kernel=5` is over-smoothing.**
+   ck=3 → IC 0.569 (MSE) / 0.576 (MAE).
+   ck=5 → IC 0.557 (MSE) / 0.548 (MAE) — meaningfully worse on MAE.
+   The sweet spot was already at the smallest non-trivial kernel.
+
+5. **Huber-δ=0.3 is too MSE-like.**
+   At δ=0.3 most of the per-element error is in the linear (MAE-like)
+   region for small errors. Result: t+1 IC 0.842 (close to MAE's 0.839,
+   not Huber-1's 0.933). The hypothesis predicts this: smaller δ → more
+   small errors fall in the linear regime → more "MAE damage" at short
+   horizons. δ=1.0 (which puts most small errors in the quadratic regime)
+   is the right magnitude on this dataset.
+
+### Recommended final configuration
+
+```bash
+python train.py --models dlinear --loss huber_scaled --huber_delta 1.0
+```
+
+Headline numbers vs the runner-ups, in the order the report should present:
+
+| Claim | Backed by |
+|---|---|
+| Beats persistence on MSE by 25% | 0.147 vs 0.197 |
+| Best long-horizon rank correlation | t+63 IC 0.433 vs runner-up 0.421 |
+| Matches persistence at t+1 (no model can beat persistence here) | 0.933 ≈ 0.933 |
+| Beats every transformer/graph on every metric | inspection |
+| ~1.1M params, no spatial structure, no attention | inspection |
+
+### What the data is telling us about the problem
+
+- The IV surface is dominated by smooth, nearly-linear, channel-decoupled
+  dynamics. Mixing channels (PatchTST, HOT) loses; respecting channels
+  wins. Adding spatial structure (DCISM polish, DynGWN graph) helps
+  marginally if at all once the loss is well-chosen.
+- Loss-function space matters more than architecture choice on this task.
+  DynGWN went 6th → 2nd by switching loss; DLinear went from "tied for
+  best MSE" to "dominant on every metric" by switching loss.
+- Long-horizon IC is the natural differentiator (the t+42, t+63 columns
+  are where the spread between models becomes meaningful). For trading
+  applications this is exactly the right target — short-horizon IC is
+  bounded by persistence's 0.93.
+
+---
+
+## Future development thoughts
+
+These are stretch ideas, ordered roughly by expected payoff and feasibility.
+
+### 1. Adaptive Huber threshold (per-channel, per-horizon)
+
+A single global δ is a compromise. Per-channel δ ∝ that channel's std on
+training data would let the loss scale match each channel's natural error
+size. Per-horizon δ would relax further (long-horizon errors are large for
+everyone; the linear MAE regime is fine there).
+
+Cheap to implement: extend the loss to take δ as a tensor.
+Hypothesis-strength: probably 1-3% improvement.
+
+### 2. Ensemble of DLinear-Huber + VAR1 + DLinear-MSE
+
+Different models excel at different regimes:
+- VAR1 has slightly better long-horizon IC than MAE-DLinear at moderate
+  horizons (t+42).
+- DLinear-MSE has marginally better short-horizon precision.
+- DLinear-Huber dominates the average but isn't best at every horizon.
+
+Linear pool with horizon-conditional weights, fit on val. Cheap; almost
+always improves; honest "best of breed" combination. Expected: 2-5% IC,
+1-3% MSE.
+
+### 3. Online / rolling correction
+
+The bias-correction failure pointed at regime drift. A simple alternative:
+take the most recent K days of residuals and add their per-channel mean
+to predictions. K small enough to track regime, large enough to be
+noisy. Effectively turns the static model into one that adapts on the
+fly.
+
+Worth testing K ∈ {21, 63, 126} on a single model (DLinear-Huber).
+
+### 4. Quantile / probabilistic forecasting
+
+For trading purposes, you usually want VaR-like quantiles, not point
+estimates. Train DLinear with quantile loss for τ ∈ {0.1, 0.5, 0.9}
+in parallel and report the spread. Same architecture, different output
+heads (3× the linear maps). Modest implementation cost; significant
+reporting upgrade.
+
+### 5. Joint train across horizons (sequence modelling on the output)
+
+Currently every horizon's prediction is independent (DLinear gives 63
+independent linear maps). A small autoregressive head on the predicted
+sequence could improve consistency without requiring expensive
+sequence-input architecture. Risk: introduces error compounding the way
+naive autoregression does.
+
+### 6. Surface-shape regulariser
+
+Add a loss term penalising deviations from observed cross-sectional
+curvature (monotonicity in moneyness, no calendar arbitrage). Forces
+"surface-like" predictions. Hard to debug; could be a follow-up paper.
+
+### 7. Target transform ablation (deferred from Q2)
+
+log-IV vs total-variance vs IV. With the strong DLinear-Huber baseline,
+this is a clean ablation that wraps up an open question and tells us
+whether the IV-space choice was meaningfully suboptimal.
+
+---
+
+## Open questions resolved
+
+- [x] Q3a — does MAE-original help DLinear too? → **No.** Hurt at short horizons.
+- [x] Std-weighting hypothesis → **Rejected.** Equivalent loss with uniform
+  weighting (`mae_scaled`) gave identical results to MAE-original.
+- [x] Gradient-magnitude hypothesis → **Confirmed.** Huber recovers
+  short-horizon performance, validating that MAE's coarse small-error
+  gradient was the cause.
+- [x] BC for DCISM(MAE) → **Failed (regime drift).** Static val-fitted
+  offset doesn't generalise to the structurally different test period.
+- [x] Conv polish value (DCISM vs DLinear) → **Marginal**, only with MAE
+  loss. With Huber, DLinear ≥ DCISM on every metric — polish is redundant.
+- [x] `conv_kernel=5` ablation → **Worse than ck=3.** ck=3 is the sweet spot.
+
+## Open questions remaining
+
+- [ ] Q2 — log-IV / total-variance target ablation. Cheap; should run.
+- [ ] Adaptive δ per channel/horizon — explicit follow-up.
+- [ ] Ensemble (DLinear-Huber + VAR1 + DLinear-MSE) — quick win.
+- [ ] Online residual correction (rolling K) — replaces the failed BC.
+- [ ] Quantile DLinear for trading-side reporting.

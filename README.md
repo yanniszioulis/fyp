@@ -1,10 +1,9 @@
 # SPX IV Surface Forecasting
 
-Research project on the SPX implied-volatility surface. Five reference
-baselines (VAR(1), DLinear, PatchTST, HOT, DynGWN) plus our proposed model
-**DCISM**, each compressed into one self-contained training script with a
-uniform input/output contract, dispatched via a single `train.py`, and
-benchmarked by `compare_models.py`.
+Research project on the SPX implied-volatility surface. Five baselines —
+VAR(1), DLinear, PatchTST, HOT, DynGWN — each compressed into one
+self-contained training script with a uniform input/output contract,
+dispatched via a single `train.py`, and benchmarked by `compare_models.py`.
 
 **Data**: SPX IV surface, 400 features (20 moneyness × 20 tau), 4191 days.
 **Task**: seq_len=21 → pred_len=63 (1-month context → 3-month horizon).
@@ -15,16 +14,13 @@ benchmarked by `compare_models.py`.
 `DLinear` trained with **Huber loss** (`--loss huber_scaled --huber_delta 1.0`)
 is the dominant model in the benchmark:
 
-- Best overall Spearman IC (+0.591 vs runner-up DCISM-Huber +0.584)
-- Best long-horizon IC at t+63 (+0.433 vs +0.421)
+- Best overall Spearman IC (+0.591)
+- Best long-horizon IC at t+63 (+0.433)
 - Matches persistence at t+1 (IC 0.933)
-- MSE 0.147 — within noise of the best (0.146 from DCISM-Huber)
+- MSE 0.147
 
-The architectural conv-polish in DCISM helps when the loss is MAE, but its
-value disappears once Huber is used: DLinear-Huber matches/exceeds DCISM-Huber
-on every metric. **The right loss matters more than added architecture.**
-
-See `thoughts.md` for the full ablation walkthrough and rejected hypotheses.
+**The right loss matters more than added architecture.** See `thoughts.md`
+for the full ablation walkthrough and rejected hypotheses.
 
 ## Directory layout
 
@@ -40,9 +36,6 @@ fyp/
 ├── PatchTST/patchtst_spx_iv.py    # Patch-based Transformer + RevIN
 ├── HOT/hot_spx_iv.py              # Kronecker-attention transformer
 ├── DynGWN/dyngwn_spx_iv.py        # Graph WaveNet
-├── DCISM/                         # OUR proposed model
-│   ├── dcism_spx_iv.py            # DLinear core + identity-init 2D conv polish
-│   └── apply_bias_correction.py   # Post-hoc per-channel bias correction utility
 │
 └── comparison_results/            # Compare-models CSV/JSON outputs
 ```
@@ -93,19 +86,24 @@ python train.py --models var1 dlinear patchtst
 python train.py --models hot --attention_type kronecker_sum --epochs 200
 python train.py --models dyngwn --nhid 64 --graph_mode adaptive_only
 
-# Loss-function ablation (DLinear & DCISM accept --loss / --huber_delta)
+# Loss-function ablation (--loss / --huber_delta)
 python train.py --models dlinear --loss huber_scaled --huber_delta 1.0
-python train.py --models dcism   --loss mae_original
-python train.py --models dlinear --loss mae_scaled        # uniform-weight MAE
+python train.py --models dlinear --loss mae_original
+python train.py --models dyngwn  --loss huber_original --huber_delta 0.02
 ```
 
-Available `--loss` choices for DLinear and DCISM:
-- `mse` (default) — MSE in scaled space
-- `mae_original` — masked-MAE on inverse-transformed predictions vs raw IV;
-  equivalent to std-weighted MAE in scaled space
-- `mae_scaled` — plain MAE in scaled space (uniform per-channel weighting)
-- `huber_scaled` — Huber/smooth-L1 in scaled space; quadratic for `|err| < δ`,
-  linear above. Threshold via `--huber_delta` (default 1.0).
+Available `--loss` choices vary per model:
+- DLinear: `mse` (default), `mae_original`, `mae_scaled`, `huber_scaled`
+- PatchTST, HOT: `mse` (default), `huber_scaled`
+- DynGWN: `mae_original` (default, matches legacy), `huber_original`
+- VAR1: no loss option (closed-form OLS)
+
+Notes on the loss families:
+- `mse` / `huber_scaled` — operate in scaled space; `huber_delta` (default 1.0)
+  is in stdev units.
+- `mae_original` / `huber_original` — inverse-transform model output and
+  compare against raw IV; `huber_delta` is in vol-points (~0.02 = 2 pts).
+- `mae_scaled` — plain MAE in scaled space (uniform per-channel weighting).
 
 Each model script writes to its own `<Model>/results/<auto-named-dir>/`:
 - `pred.npy`         — scaled-space predictions (gitignored)
@@ -145,26 +143,11 @@ Used automatically by `compare_models.py` when a `pred.npy` is missing.
 
 VAR1 has no checkpoint; `--predict_only` re-fits OLS from the CSV (~2 sec).
 
-### Bias correction (post-hoc)
-
-```bash
-python DCISM/apply_bias_correction.py \
-    --src_dir DCISM/results/SPX_IV_21_63_DCISMv0_k13_ck3_ep100_lossmae
-```
-
-Reads `<src_dir>` (must contain `config.json` + `best_model.pt`), fits a
-per-channel additive offset on the validation set, applies it to test
-predictions, and writes a sibling `<src_dir>_bc/` containing copies of
-checkpoint/config plus `bias.npy` and bias-corrected `pred.npy`.
-
-`compare_models.py` auto-runs this when a `*_bc` dir is missing `pred.npy`
-but its source dir has the checkpoint.
-
-> **Note:** in our benchmark a static per-channel offset fit on val
-> *over-corrected* the test set due to regime drift between val (~2021-22)
-> and test (2022-04 → 2025-06, includes the 2022-23 vol regime change).
-> The utility is kept for ablation and for cleaner-distribution use cases,
-> but is not part of the recommended pipeline. See `thoughts.md`.
+> **Bias-correction note:** an earlier ablation tried a static per-channel
+> offset fit on val and applied at test. It *over-corrected* due to regime
+> drift between val (~2021-22) and test (2022-04 → 2025-06, includes the
+> 2022-23 vol regime change). Naive bias correction is not part of the
+> recommended pipeline. See `thoughts.md`.
 
 ## Colab roundtrip
 
@@ -218,13 +201,8 @@ Architectural details:
   ORIGINAL IV space. Inputs `x` are scaled; targets `y` are kept in
   original space; the model output is inverse-transformed inside the loss.
   `pred.npy` is still saved in scaled space (compare_models contract).
-- **DCISM** (proposed): DLinear core (boundary-padded MA decomposition +
-  channel-independent einsum maps for trend and season components) followed
-  by an identity-initialised 2D convolution (default `--conv_kernel 3`)
-  applied to the predicted surface reshaped as `[H_mono=20, W_tau=20, pred_len]`.
-  The polish layer starts as exactly the identity and only learns to deviate
-  if the data supports it. ~1.14M parameters (≈ DLinear's 1.11M + ~35K conv).
-  Optional `--loss {mse, mae_original, mae_scaled, huber_scaled}`.
+  `--loss huber_original` switches MAE → Huber while keeping the same
+  loss-space.
 
 ## Recommended configuration (this benchmark)
 
@@ -232,10 +210,7 @@ Architectural details:
 python train.py --models dlinear --loss huber_scaled --huber_delta 1.0
 ```
 
-Best overall IC, best long-horizon IC, matches persistence at t+1, MSE
-within 0.5% of the best. `DCISMv0(Hub-1)` is statistically tied on MSE
-but loses slightly on IC — not worth the architectural complexity once
-Huber is in place.
+Best overall IC, best long-horizon IC, matches persistence at t+1, lowest MSE.
 
 ## Implementation details
 

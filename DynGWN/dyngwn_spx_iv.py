@@ -307,7 +307,22 @@ def _denorm(out_scaled: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> 
     return out_scaled * std.view(1, -1, 1) + mean.view(1, -1, 1)
 
 
-def _epoch(model, loader, opt, device, mean, std, clip: float = 5.0):
+def _compute_loss(pred, real, loss_kind: str, huber_delta: float = 0.02):
+    """
+    DynGWN losses operate in ORIGINAL IV space (pred and real are inverse-
+    transformed before this is called):
+      mae_original   — masked-MAE (legacy default).
+      huber_original — Huber/smooth-L1 with threshold `huber_delta`. δ should
+                        be on the order of typical IV-space errors (default 0.02).
+    """
+    if loss_kind == "mae_original":
+        return masked_mae(pred, real, null_val=float("nan"))
+    if loss_kind == "huber_original":
+        return F.smooth_l1_loss(pred, real, beta=huber_delta)
+    raise ValueError(f"unknown loss_kind: {loss_kind!r}")
+
+
+def _epoch(model, loader, opt, device, mean, std, loss_kind, huber_delta, clip: float = 5.0):
     model.train()
     total, n = 0.0, 0
     for xb, yb in loader:
@@ -316,7 +331,7 @@ def _epoch(model, loader, opt, device, mean, std, clip: float = 5.0):
         out  = out.squeeze(-1).permute(0, 2, 1)             # [B, nodes, pred] scaled
         pred = _denorm(out, mean, std)                      # [B, nodes, pred] original
         real = yb[:, 0, :, :]                               # [B, nodes, pred] original
-        loss = masked_mae(pred, real, null_val=float("nan"))
+        loss = _compute_loss(pred, real, loss_kind, huber_delta)
         opt.zero_grad(); loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), clip)
         opt.step()
@@ -325,7 +340,7 @@ def _epoch(model, loader, opt, device, mean, std, clip: float = 5.0):
 
 
 @torch.no_grad()
-def _val_loss(model, loader, device, mean, std):
+def _val_loss(model, loader, device, mean, std, loss_kind, huber_delta):
     model.eval()
     total, n = 0.0, 0
     for xb, yb in loader:
@@ -333,7 +348,7 @@ def _val_loss(model, loader, device, mean, std):
         out  = model(xb).squeeze(-1).permute(0, 2, 1)
         pred = _denorm(out, mean, std)
         real = yb[:, 0, :, :]
-        total += masked_mae(pred, real, null_val=float("nan")).item() * len(xb)
+        total += _compute_loss(pred, real, loss_kind, huber_delta).item() * len(xb)
         n     += len(xb)
     return total / n
 
@@ -350,8 +365,8 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
     log_rows = []
 
     for epoch in range(1, args.epochs + 1):
-        tr_loss = _epoch(model, tr_loader, opt, device, mean, std)
-        va_loss = _val_loss(model, va_loader, device, mean, std)
+        tr_loss = _epoch(model, tr_loader, opt, device, mean, std, args.loss, args.huber_delta)
+        va_loss = _val_loss(model, va_loader, device, mean, std, args.loss, args.huber_delta)
         log_rows.append({"epoch": epoch, "train_loss": tr_loss, "val_loss": va_loss})
 
         if va_loss < best_val:
@@ -405,6 +420,13 @@ def main():
     ap.add_argument("--predict_only", action="store_true",
                     help="Skip training; load best_model.pt + config.json from --out_dir, "
                          "run inference, write pred.npy.")
+    ap.add_argument("--loss",         default="mae_original",
+                    choices=["mae_original", "huber_original"],
+                    help="Training loss in ORIGINAL IV space (model output is "
+                         "inverse-transformed before computing the loss). "
+                         "Default mae_original matches legacy DynGWN engine.py.")
+    ap.add_argument("--huber_delta",  type=float, default=0.02,
+                    help="Threshold for huber_original; in IV vol-points (default 0.02 = 2 vol pts).")
     args = ap.parse_args()
 
     if args.device == "auto":
@@ -427,16 +449,27 @@ def main():
         with open(cfg_path) as f:
             cfg = json.load(f)
         for k in ("csv_path", "seq_len", "pred_len", "graph_mode", "nhid",
-                  "blocks", "layers", "kernel_size", "dropout", "batch_size"):
+                  "blocks", "layers", "kernel_size", "dropout", "batch_size",
+                  "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
+        # Backwards compat: configs from before --loss was added used
+        # mae_original implicitly. Keep that as the fallback.
+        if "loss" not in cfg:
+            args.loss = "mae_original"
         print(f"[predict_only] {cfg_path}")
 
     if args.out_dir is None:
+        # Default loss (mae_original) keeps the historical no-suffix dir name,
+        # so existing trained checkpoints continue to resolve cleanly.
+        loss_suffix = {
+            "mae_original":   "",
+            "huber_original": f"_losshuberoriginal_d{args.huber_delta:g}",
+        }[args.loss]
         args.out_dir = (f"DynGWN/results/SPX_IV_{args.seq_len}_{args.pred_len}"
                         f"_DynGWN_{args.graph_mode}"
                         f"_nh{args.nhid}_b{args.blocks}_l{args.layers}"
-                        f"_ep{args.epochs}")
+                        f"_ep{args.epochs}{loss_suffix}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     print(f"Device     : {device}")
@@ -484,6 +517,8 @@ def main():
             "weight_decay":  args.weight_decay,
             "patience":      args.patience,
             "seed":          args.seed,
+            "loss":          args.loss,
+            "huber_delta":   args.huber_delta,
         }
         with open(os.path.join(args.out_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=2)

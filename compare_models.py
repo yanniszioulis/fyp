@@ -44,10 +44,10 @@ from sklearn.preprocessing import StandardScaler
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-SEQ_LEN = 21
-PRED_LEN = 63
+DEFAULT_SEQ_LEN  = 21
+DEFAULT_PRED_LEN = 63
 TRAIN_FRAC = 0.70
-TEST_FRAC = 0.20
+TEST_FRAC  = 0.20
 N_IV = 400
 REPORT_HORIZONS = [1, 5, 10, 21, 42, 63]
 
@@ -66,113 +66,110 @@ REPORT_HORIZONS = [1, 5, 10, 21, 42, 63]
 # Persistence is not listed as a model: `Persist(ref)` is built fresh from the
 # CSV inside build_reference(), which is exactly the persistence baseline.
 
-MODELS = [
-    {
-        "name":         "VAR1",
-        # No trailing `_` because the new dir name is plain "SPX_IV_21_63_VAR1".
-        "regen_dir":    "VAR1/results/SPX_IV_21_63_VAR1*",
-        "regen_script": "VAR1/var1_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DLinear",
-        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*",
-        "name_filter":  lambda n: "_loss" not in n,  # MSE only
-        "regen_script": "DLinear/dlinear_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DLinear(MAE)",
-        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_lossmae",
-        "regen_script": "DLinear/dlinear_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DLinear(MAE-s)",
-        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_lossmaescaled",
-        "regen_script": "DLinear/dlinear_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DLinear(Hub-1)",
-        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_losshuberscaled_d1",
-        "regen_script": "DLinear/dlinear_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DLinear(Hub-0.3)",
-        "regen_dir":    "DLinear/results/SPX_IV_21_63_DLinear_*_losshuberscaled_d0.3",
-        "regen_script": "DLinear/dlinear_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DCISMv0",
-        # Default ck=3 MSE.
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*",
-        "name_filter":  lambda n: "_loss" not in n,
-        "regen_script": "DCISM/dcism_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DCISMv0(MAE)",
-        # ck=3 MAE-original (without BC).
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*_lossmae",
-        "name_filter":  lambda n: not n.endswith("_bc"),
-        "regen_script": "DCISM/dcism_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DCISMv0(MAE+BC)",
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*_lossmae_bc",
-        "regen_script": "DCISM/dcism_spx_iv.py",  # unused; auto-regen uses BC script
-        "loader":       "flat",
-    },
-    {
-        "name":         "DCISMv0(Hub-1)",
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck3_*_losshuberscaled_d1",
-        "regen_script": "DCISM/dcism_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DCISMv0-ck5",
-        # Larger-kernel DCISM ablation, MSE.
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck5_*",
-        "name_filter":  lambda n: "_loss" not in n,
-        "regen_script": "DCISM/dcism_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "DCISMv0-ck5(MAE)",
-        "regen_dir":    "DCISM/results/SPX_IV_21_63_DCISMv0_*_ck5_*_lossmae",
-        "name_filter":  lambda n: not n.endswith("_bc"),
-        "regen_script": "DCISM/dcism_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "PatchTST",
-        "regen_dir":    "PatchTST/results/SPX_IV_21_63_PatchTST_*",
-        "regen_script": "PatchTST/patchtst_spx_iv.py",
-        "loader":       "flat",
-    },
-    {
-        "name":         "HOT(product)",
-        "regen_dir":    "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_product*",
-        "regen_script": "HOT/hot_spx_iv.py",
-        "loader":       "hot",
-    },
-    {
-        "name":         "HOT(sum)",
-        "regen_dir":    "HOT/results/SPX_IV_21_63_HOT_tensor_*_kronecker_sum*",
-        "regen_script": "HOT/hot_spx_iv.py",
-        "loader":       "hot",
-    },
-    {
-        "name":         "DynGWN",
-        "regen_dir":    "DynGWN/results/SPX_IV_21_63_DynGWN_*",
-        "regen_script": "DynGWN/dyngwn_spx_iv.py",
-        "loader":       "flat",
-    },
-]
+def build_models(seq_len: int, pred_len: int) -> list[dict]:
+    """Build the MODELS registry for a specific (seq_len, pred_len) pair.
+
+    Result-dir glob patterns include the tag `SPX_IV_{seq_len}_{pred_len}` so
+    that compare_models is restricted to the matching sweep configuration.
+    """
+    tag = f"SPX_IV_{seq_len}_{pred_len}"
+    return [
+        {
+            "name":         "VAR1",
+            "regen_dir":    f"VAR1/results/{tag}_VAR1*",
+            "regen_script": "VAR1/var1_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "DLinear",
+            "regen_dir":    f"DLinear/results/{tag}_DLinear_*",
+            "name_filter":  lambda n: "_loss" not in n,  # MSE only
+            "regen_script": "DLinear/dlinear_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "DLinear(MAE)",
+            "regen_dir":    f"DLinear/results/{tag}_DLinear_*_lossmae",
+            "regen_script": "DLinear/dlinear_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "DLinear(MAE-s)",
+            "regen_dir":    f"DLinear/results/{tag}_DLinear_*_lossmaescaled",
+            "regen_script": "DLinear/dlinear_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "DLinear(Hub-1)",
+            "regen_dir":    f"DLinear/results/{tag}_DLinear_*_losshuberscaled_d1",
+            "regen_script": "DLinear/dlinear_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "DLinear(Hub-0.3)",
+            "regen_dir":    f"DLinear/results/{tag}_DLinear_*_losshuberscaled_d0.3",
+            "regen_script": "DLinear/dlinear_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "PatchTST",
+            "regen_dir":    f"PatchTST/results/{tag}_PatchTST_*",
+            "name_filter":  lambda n: "_loss" not in n,  # MSE only
+            "regen_script": "PatchTST/patchtst_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "PatchTST(Hub-1)",
+            "regen_dir":    f"PatchTST/results/{tag}_PatchTST_*_losshuberscaled_d1",
+            "regen_script": "PatchTST/patchtst_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "HOT(product)",
+            "regen_dir":    f"HOT/results/{tag}_HOT_tensor_*_kronecker_product*",
+            "name_filter":  lambda n: "_loss" not in n,
+            "regen_script": "HOT/hot_spx_iv.py",
+            "loader":       "hot",
+        },
+        {
+            "name":         "HOT(prod,Hub-1)",
+            "regen_dir":    f"HOT/results/{tag}_HOT_tensor_*_kronecker_product*_losshuberscaled_d1",
+            "regen_script": "HOT/hot_spx_iv.py",
+            "loader":       "hot",
+        },
+        {
+            "name":         "HOT(sum)",
+            "regen_dir":    f"HOT/results/{tag}_HOT_tensor_*_kronecker_sum*",
+            "name_filter":  lambda n: "_loss" not in n,
+            "regen_script": "HOT/hot_spx_iv.py",
+            "loader":       "hot",
+        },
+        {
+            "name":         "HOT(sum,Hub-1)",
+            "regen_dir":    f"HOT/results/{tag}_HOT_tensor_*_kronecker_sum*_losshuberscaled_d1",
+            "regen_script": "HOT/hot_spx_iv.py",
+            "loader":       "hot",
+        },
+        {
+            "name":         "DynGWN",
+            # Default-loss (mae_original) keeps the historical no-suffix dir.
+            "regen_dir":    f"DynGWN/results/{tag}_DynGWN_*",
+            "name_filter":  lambda n: "_loss" not in n,
+            "regen_script": "DynGWN/dyngwn_spx_iv.py",
+            "loader":       "flat",
+        },
+        {
+            "name":         "DynGWN(Hub-orig)",
+            "regen_dir":    f"DynGWN/results/{tag}_DynGWN_*_losshuberoriginal_*",
+            "regen_script": "DynGWN/dyngwn_spx_iv.py",
+            "loader":       "flat",
+        },
+    ]
+
+
+# Convenience for default (seq_len=21, pred_len=63), preserved for backward
+# import compatibility. main() rebuilds the list from CLI args.
+MODELS = build_models(DEFAULT_SEQ_LEN, DEFAULT_PRED_LEN)
 
 
 # ─── Ground truth ─────────────────────────────────────────────────────────────
@@ -390,9 +387,15 @@ def print_summary(results: list[dict]):
 
 # ─── Save ─────────────────────────────────────────────────────────────────────
 
-def save_results(results: list[dict], out_dir: str):
+def save_results(results: list[dict], out_dir: str, seq_len: int, pred_len: int):
+    """
+    Filenames are tagged with `_sl<sl>_pl<pl>` so different sweep configurations
+    don't overwrite each other. The `latest_*` aliases for the default
+    (sl=21, pl=63) are also written without the tag, for backward compat.
+    """
     os.makedirs(out_dir, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = f"sl{seq_len}_pl{pred_len}"
 
     # Overall metrics CSV (one row per model)
     scalar_rows = [
@@ -400,13 +403,15 @@ def save_results(results: list[dict], out_dir: str):
         for r in results
     ]
     df_overall = pd.DataFrame(scalar_rows)
-    df_overall.to_csv(os.path.join(out_dir, f"{ts}.csv"), index=False)
-    df_overall.to_csv(os.path.join(out_dir, "latest.csv"), index=False)
+    df_overall.to_csv(os.path.join(out_dir, f"{ts}_{tag}.csv"), index=False)
+    df_overall.to_csv(os.path.join(out_dir, f"latest_{tag}.csv"), index=False)
+    if seq_len == DEFAULT_SEQ_LEN and pred_len == DEFAULT_PRED_LEN:
+        df_overall.to_csv(os.path.join(out_dir, "latest.csv"), index=False)
 
     # Per-horizon CSV (one row per model × horizon)
     h_rows = []
     for r in results:
-        for h in range(1, PRED_LEN + 1):
+        for h in range(1, pred_len + 1):
             h_rows.append({
                 "model":   r["name"],
                 "horizon": h,
@@ -414,20 +419,27 @@ def save_results(results: list[dict], out_dir: str):
                 "mse":     r["_per_h_mse"][h - 1],
                 "mae":     r["_per_h_mae"][h - 1],
             })
-    pd.DataFrame(h_rows).to_csv(os.path.join(out_dir, "latest_horizons.csv"), index=False)
+    pd.DataFrame(h_rows).to_csv(os.path.join(out_dir, f"latest_horizons_{tag}.csv"), index=False)
+    if seq_len == DEFAULT_SEQ_LEN and pred_len == DEFAULT_PRED_LEN:
+        pd.DataFrame(h_rows).to_csv(os.path.join(out_dir, "latest_horizons.csv"), index=False)
 
     # JSON summary
     summary = {
         "timestamp": ts,
+        "seq_len":   seq_len,
+        "pred_len":  pred_len,
         "models": {
             r["name"]: {k: v for k, v in r.items() if not k.startswith("_")}
             for r in results
         },
     }
-    with open(os.path.join(out_dir, "latest_summary.json"), "w") as f:
+    with open(os.path.join(out_dir, f"latest_summary_{tag}.json"), "w") as f:
         json.dump(summary, f, indent=2)
+    if seq_len == DEFAULT_SEQ_LEN and pred_len == DEFAULT_PRED_LEN:
+        with open(os.path.join(out_dir, "latest_summary.json"), "w") as f:
+            json.dump(summary, f, indent=2)
 
-    print(f"Saved to {out_dir}/  ({ts}.csv + latest.*)")
+    print(f"Saved to {out_dir}/  (tagged {tag})")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -470,25 +482,6 @@ def _maybe_regen(spec: dict, name: str) -> str | None:
 
     import subprocess, sys as _sys
 
-    # Special case: bias-corrected DCISM dirs (suffix `_bc`).
-    # apply_bias_correction.py reads the source (`<out_dir>` minus `_bc`) and
-    # rewrites the BC output dir from scratch.
-    if out_dir.endswith("_bc"):
-        src_dir = out_dir[:-3]
-        if (os.path.exists(os.path.join(src_dir, "best_model.pt"))
-                and os.path.exists(os.path.join(src_dir, "config.json"))):
-            print(f"  {name}: pred.npy missing in {out_dir}; "
-                  f"applying bias correction from {src_dir} ...")
-            rc = subprocess.run(
-                [_sys.executable, "DCISM/apply_bias_correction.py", "--src_dir", src_dir]
-            ).returncode
-            if rc == 0 and os.path.exists(pred_path):
-                return pred_path
-            print(f"  {name}: BC regeneration failed (exit {rc})")
-            return None
-        print(f"  {name}: source dir {src_dir} missing ckpt/config — skipping")
-        return None
-
     print(f"  {name}: pred.npy missing → regenerating from {out_dir} ...")
     rc = subprocess.run(
         [_sys.executable, spec["regen_script"], "--predict_only", "--out_dir", out_dir]
@@ -502,12 +495,15 @@ def _maybe_regen(spec: dict, name: str) -> str | None:
 def main():
     parser = argparse.ArgumentParser(description="Compare SPX IV forecasting models")
     parser.add_argument("--csv_path", default="SPX_surfaces.csv")
-    parser.add_argument("--seq_len",  type=int, default=SEQ_LEN)
-    parser.add_argument("--pred_len", type=int, default=PRED_LEN)
+    parser.add_argument("--seq_len",  type=int, default=DEFAULT_SEQ_LEN)
+    parser.add_argument("--pred_len", type=int, default=DEFAULT_PRED_LEN)
     parser.add_argument("--out_dir",  default="comparison_results")
     args = parser.parse_args()
 
-    print("Building reference ground truth...")
+    # Build the MODELS registry restricted to this (seq_len, pred_len).
+    models_for_run = build_models(args.seq_len, args.pred_len)
+
+    print(f"Building reference ground truth (seq_len={args.seq_len}, pred_len={args.pred_len})...")
     trues, persist, ref_dates, meta = build_reference(
         args.csv_path, seq_len=args.seq_len, pred_len=args.pred_len
     )
@@ -523,7 +519,7 @@ def main():
     results.append(m)
     print(f"  Persist(ref): OK ({meta['n_test']} windows)")
 
-    for spec in MODELS:
+    for spec in models_for_run:
         name = spec["name"]
         # Canonical: load pred.npy from the new dir, or regenerate it from
         # config.json + best_model.pt (or refit for VAR1). No legacy fallback.
@@ -580,7 +576,7 @@ def main():
         return
 
     print_summary(results)
-    save_results(results, args.out_dir)
+    save_results(results, args.out_dir, args.seq_len, args.pred_len)
 
 
 if __name__ == "__main__":

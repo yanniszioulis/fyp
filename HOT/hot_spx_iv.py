@@ -327,24 +327,34 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 
-def _epoch(model, loader, opt, device):
+def _compute_loss(pred, y, loss_kind: str, huber_delta: float = 1.0):
+    """mse: MSE in scaled space. huber_scaled: Huber in scaled space."""
+    if loss_kind == "mse":
+        return F.mse_loss(pred, y)
+    if loss_kind == "huber_scaled":
+        return F.smooth_l1_loss(pred, y, beta=huber_delta)
+    raise ValueError(f"unknown loss_kind: {loss_kind!r}")
+
+
+def _epoch(model, loader, opt, device, loss_kind, huber_delta):
     model.train()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        loss = F.mse_loss(model(xb), yb)
+        loss = _compute_loss(model(xb), yb, loss_kind, huber_delta)
         opt.zero_grad(); loss.backward(); opt.step()
         total += loss.item() * len(xb); n += len(xb)
     return total / n
 
 
 @torch.no_grad()
-def _val_loss(model, loader, device):
+def _val_loss(model, loader, device, loss_kind, huber_delta):
     model.eval()
     total, n = 0.0, 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        total += F.mse_loss(model(xb), yb).item() * len(xb); n += len(xb)
+        total += _compute_loss(model(xb), yb, loss_kind, huber_delta).item() * len(xb)
+        n += len(xb)
     return total / n
 
 
@@ -360,8 +370,8 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
     log_rows = []
 
     for epoch in range(1, args.epochs + 1):
-        tr_loss = _epoch(model, tr_loader, opt, device)
-        va_loss = _val_loss(model, va_loader, device)
+        tr_loss = _epoch(model, tr_loader, opt, device, args.loss, args.huber_delta)
+        va_loss = _val_loss(model, va_loader, device, args.loss, args.huber_delta)
         log_rows.append({"epoch": epoch, "train_loss": tr_loss, "val_loss": va_loss})
 
         if va_loss < best_val:
@@ -417,6 +427,11 @@ def main():
     ap.add_argument("--predict_only",    action="store_true",
                     help="Skip training; load best_model.pt + config.json from --out_dir, "
                          "run inference, write pred.npy.")
+    ap.add_argument("--loss",            default="mse",
+                    choices=["mse", "huber_scaled"],
+                    help="Training loss in scaled space.")
+    ap.add_argument("--huber_delta",     type=float, default=1.0,
+                    help="Threshold for huber_scaled (default 1.0 = ~1 stdev).")
     args = ap.parse_args()
 
     if args.device == "auto":
@@ -440,16 +455,20 @@ def main():
             cfg = json.load(f)
         for k in ("csv_path", "seq_len", "pred_len", "d_hidden", "d_mlp",
                   "n_blocks", "n_head", "patch_size", "attention_type",
-                  "pe", "dropout", "batch_size"):
+                  "pe", "dropout", "batch_size", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
         print(f"[predict_only] {cfg_path}")
 
     if args.out_dir is None:
+        loss_suffix = {
+            "mse":          "",
+            "huber_scaled": f"_losshuberscaled_d{args.huber_delta:g}",
+        }[args.loss]
         args.out_dir = (f"HOT/results/SPX_IV_{args.seq_len}_{args.pred_len}"
                         f"_HOT_tensor_dh{args.d_hidden}_nb{args.n_blocks}"
                         f"_nh{args.n_head}_ps{args.patch_size}_{args.attention_type}"
-                        f"_pe{args.pe}_ep{args.epochs}")
+                        f"_pe{args.pe}_ep{args.epochs}{loss_suffix}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     print(f"Device     : {device}")
@@ -495,6 +514,8 @@ def main():
             "weight_decay":   args.weight_decay,
             "patience":       args.patience,
             "seed":           args.seed,
+            "loss":           args.loss,
+            "huber_delta":    args.huber_delta,
         }
         with open(os.path.join(args.out_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=2)

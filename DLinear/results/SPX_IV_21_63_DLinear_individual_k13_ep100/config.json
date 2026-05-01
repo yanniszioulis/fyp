@@ -8,5 +8,7 @@
   "batch_size": 64,
   "lr": 0.001,
   "patience": 15,
-  "seed": 42
+  "seed": 42,
+  "loss": "mse",
+  "huber_delta": 1.0
 }

@@ -38,11 +38,12 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-TRAIN_FRAC       = 0.70
-TEST_FRAC        = 0.20
-PRECOVID_END     = "2019-12-31"
-DATASET_CHOICES  = ["full", "precovid"]
-CRITERION_CHOICES = ["aic", "bic", "hqic"]
+TRAIN_FRAC          = 0.70
+TEST_FRAC           = 0.20
+PRECOVID_END        = "2019-12-31"
+DATASET_CHOICES     = ["full", "precovid"]
+TARGET_SPACE_CHOICES = ["level", "logdiff"]
+CRITERION_CHOICES   = ["aic", "bic", "hqic"]
 
 
 def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
@@ -54,18 +55,34 @@ def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
 
 
-def _load(csv_path: str, dataset: str):
+def _apply_target_space(iv_raw: np.ndarray, dates_full: np.ndarray, target_space: str):
+    """
+    Returns (data, dates) for the chosen target space.
+      level   → data = iv_raw, dates = dates_full
+      logdiff → data = log(iv)[1:] - log(iv)[:-1], dates = dates_full[1:]
+    For logdiff, asserts iv > 0 (preprocessing guarantees this).
+    """
+    if target_space == "level":
+        return iv_raw, dates_full
+    if target_space == "logdiff":
+        if (iv_raw <= 0).any():
+            raise ValueError("logdiff target_space requires all IV > 0")
+        log_iv = np.log(iv_raw)
+        return log_iv[1:] - log_iv[:-1], dates_full[1:]
+    raise ValueError(f"Unknown target_space {target_space!r}; choose from {TARGET_SPACE_CHOICES}")
+
+
+def _load(csv_path: str, dataset: str, target_space: str):
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
     df = _slice_dataset(df, dataset)
     iv_cols = [c for c in df.columns if c.startswith("iv_")]
     if not iv_cols:
         raise ValueError(f"No iv_* columns found in {csv_path}")
-    return (
-        df["date"].to_numpy(dtype="datetime64[D]"),
-        df[iv_cols].to_numpy(dtype=np.float64),
-        iv_cols,
-    )
+    iv_raw = df[iv_cols].to_numpy(dtype=np.float64)
+    dates_full = df["date"].to_numpy(dtype="datetime64[D]")
+    data, dates = _apply_target_space(iv_raw, dates_full, target_space)
+    return dates, data, iv_cols
 
 
 # ── VAR(p) fit ──────────────────────────────────────────────────────────────
@@ -152,6 +169,7 @@ def _build_config(args, n_iv: int, n_train: int, n_val: int, n_test: int,
     return {
         "model":           "VAR",
         "dataset":         args.dataset,
+        "target_space":    args.target_space,
         "csv_path":        args.csv_path,
         "seq_len":         args.seq_len,
         "pred_len":        args.pred_len,
@@ -177,6 +195,9 @@ def main():
     ap.add_argument("--csv_path",     default="SPX_surfaces.csv")
     ap.add_argument("--dataset",      default="full", choices=DATASET_CHOICES,
                     help="full = entire CSV; precovid = dates <= 2019-12-31")
+    ap.add_argument("--target_space", default="level", choices=TARGET_SPACE_CHOICES,
+                    help="level = train on raw IV (default); logdiff = train on "
+                         "log(IV)[1:]-log(IV)[:-1]. logdiff loses one day at the front.")
     ap.add_argument("--seq_len",      type=int, default=21)
     ap.add_argument("--pred_len",     type=int, default=63)
     ap.add_argument("--max_lag",      type=int, default=6,
@@ -204,19 +225,21 @@ def main():
             raise SystemExit(f"--predict_only: config.json not found at {cfg_path}")
         with open(cfg_path) as f:
             cfg = json.load(f)
-        args.csv_path  = cfg.get("csv_path",  args.csv_path)
-        args.dataset   = cfg.get("dataset",   args.dataset)
-        args.seq_len   = cfg.get("seq_len",   args.seq_len)
-        args.pred_len  = cfg.get("pred_len",  args.pred_len)
-        args.criterion = cfg.get("criterion", args.criterion)
-        args.max_lag   = cfg.get("max_lag",   args.max_lag)
-        forced_lag     = int(cfg["selected_lag"])
+        args.csv_path     = cfg.get("csv_path",     args.csv_path)
+        args.dataset      = cfg.get("dataset",      args.dataset)
+        args.target_space = cfg.get("target_space", args.target_space)
+        args.seq_len      = cfg.get("seq_len",      args.seq_len)
+        args.pred_len     = cfg.get("pred_len",     args.pred_len)
+        args.criterion    = cfg.get("criterion",    args.criterion)
+        args.max_lag      = cfg.get("max_lag",      args.max_lag)
+        forced_lag        = int(cfg["selected_lag"])
         print(f"[predict_only] loaded config from {cfg_path} (selected_lag={forced_lag})")
 
     # Defer out_dir choice until selected_lag is known so it lands in the name.
     print(f"Dataset    : {args.dataset}")
+    print(f"Target     : {args.target_space}")
 
-    dates, iv, iv_cols = _load(args.csv_path, args.dataset)
+    dates, iv, iv_cols = _load(args.csv_path, args.dataset, args.target_space)
     n_iv = len(iv_cols)
     T = len(iv)
     n_train = int(T * TRAIN_FRAC)
@@ -263,7 +286,8 @@ def main():
         print(f"Selected lag p={selected_lag} by {args.criterion.upper()}")
 
     if args.out_dir is None:
-        args.out_dir = (f"VAR/results/{args.dataset}_SPX_IV_"
+        args.out_dir = (f"VAR/results/"
+                        f"{args.dataset}_{args.target_space}_SPX_IV_"
                         f"{args.seq_len}_{args.pred_len}_VAR_"
                         f"p{selected_lag}_{args.criterion}")
     os.makedirs(args.out_dir, exist_ok=True)

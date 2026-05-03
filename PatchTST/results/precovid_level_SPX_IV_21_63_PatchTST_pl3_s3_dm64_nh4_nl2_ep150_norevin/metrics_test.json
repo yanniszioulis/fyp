@@ -1,6 +1,7 @@
 {
   "model": "PatchTST(no-RevIN)",
   "dataset": "precovid",
+  "target_space": "level",
   "seq_len": 21,
   "pred_len": 63,
   "n_windows": 491,
@@ -46,5 +47,5 @@
       "mae": 0.45192426443099976
     }
   },
-  "timestamp": "20260503_195023"
+  "timestamp": "20260503_214352"
 }

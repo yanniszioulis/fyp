@@ -44,7 +44,8 @@ from scipy.stats import norm
 
 from compare_models import (
     DATASET_CHOICES, DEFAULT_PRED_LEN, DEFAULT_SEQ_LEN, LOADERS,
-    REPORT_HORIZONS, _maybe_regen, align_to_ref, build_models, build_reference,
+    REPORT_HORIZONS, TARGET_SPACE_CHOICES, _maybe_regen, align_to_ref,
+    build_models, build_reference,
 )
 
 TRIM_LEVELS = [0.01, 0.05, 0.10]
@@ -121,7 +122,8 @@ def _holm_adjust(pvals: list[float]) -> list[float]:
 
 # ─── Loading ──────────────────────────────────────────────────────────────────
 
-def load_all_preds(dataset: str, seq_len: int, pred_len: int, csv_path: str):
+def load_all_preds(dataset: str, target_space: str, seq_len: int, pred_len: int,
+                   csv_path: str):
     """
     Build reference and load every registered model's pred.npy. Returns:
         ref_dates  [N]
@@ -129,15 +131,17 @@ def load_all_preds(dataset: str, seq_len: int, pred_len: int, csv_path: str):
         preds      dict[name → [N, pred_len, n_iv]]   includes 'Persist(ref)'
         meta       reference meta dict
     """
-    print(f"Building reference (dataset={dataset}, seq_len={seq_len}, pred_len={pred_len})...")
-    trues, persist, ref_dates, meta = build_reference(csv_path, dataset, seq_len, pred_len)
+    print(f"Building reference (dataset={dataset}, target_space={target_space}, "
+          f"seq_len={seq_len}, pred_len={pred_len})...")
+    trues, persist, ref_dates, meta = build_reference(
+        csv_path, dataset, target_space, seq_len, pred_len)
     n_iv = meta["n_iv"]
     print(f"  T={meta['T']}, n_iv={n_iv}, test windows={meta['n_test']}, "
           f"{meta['date_range']}")
 
     preds = {"Persist(ref)": persist}
 
-    for spec in build_models(dataset, seq_len, pred_len):
+    for spec in build_models(dataset, target_space, seq_len, pred_len):
         name = spec["name"]
         pred_path = _maybe_regen(spec, name)
         if pred_path is None:
@@ -375,13 +379,16 @@ def main():
     ap = argparse.ArgumentParser(description="DM significance + trimmed MSE for SPX IV models")
     ap.add_argument("--csv_path", default="SPX_surfaces.csv")
     ap.add_argument("--dataset",  default="full", choices=DATASET_CHOICES)
+    ap.add_argument("--target_space", default="level", choices=TARGET_SPACE_CHOICES,
+                    help="level or logdiff. Persist baseline becomes "
+                         "predict-zero-change in logdiff space.")
     ap.add_argument("--seq_len",  type=int, default=DEFAULT_SEQ_LEN)
     ap.add_argument("--pred_len", type=int, default=DEFAULT_PRED_LEN)
     ap.add_argument("--out_dir",  default="comparison_results")
     args = ap.parse_args()
 
     ref_dates, trues, preds, meta = load_all_preds(
-        args.dataset, args.seq_len, args.pred_len, args.csv_path,
+        args.dataset, args.target_space, args.seq_len, args.pred_len, args.csv_path,
     )
     if len(preds) <= 1:
         print("\nNo non-baseline models loaded — nothing to test.")
@@ -428,7 +435,7 @@ def main():
 
     # ── Save ──
     os.makedirs(args.out_dir, exist_ok=True)
-    tag = f"{args.dataset}_sl{args.seq_len}_pl{args.pred_len}"
+    tag = f"{args.dataset}_{args.target_space}_sl{args.seq_len}_pl{args.pred_len}"
 
     sig_path   = os.path.join(args.out_dir, f"{tag}_significance.csv")
     dm_path    = os.path.join(args.out_dir, f"{tag}_dm_tests.csv")

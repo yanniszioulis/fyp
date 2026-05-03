@@ -64,13 +64,14 @@ import torch.nn.functional as F
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-TRAIN_FRAC       = 0.70
-TEST_FRAC        = 0.20
-PRECOVID_END     = "2019-12-31"
-DATASET_CHOICES  = ["full", "precovid"]
-H_TAU            = 10    # tau axis (grid H dim, OUTER — matches CSV outer index)
-W_DELTA          = 17    # delta axis (grid W dim, INNER — matches CSV inner index)
-N_IV_EXPECTED    = H_TAU * W_DELTA   # 170; checked against CSV at load time
+TRAIN_FRAC           = 0.70
+TEST_FRAC            = 0.20
+PRECOVID_END         = "2019-12-31"
+DATASET_CHOICES      = ["full", "precovid"]
+TARGET_SPACE_CHOICES = ["level", "logdiff"]
+H_TAU                = 10    # tau axis (grid H dim, OUTER — matches CSV outer index)
+W_DELTA              = 17    # delta axis (grid W dim, INNER — matches CSV inner index)
+N_IV_EXPECTED        = H_TAU * W_DELTA   # 170; checked against CSV at load time
 
 
 # ─── Loss (legacy masked_mae from DynGWN/util.py) ─────────────────────────────
@@ -283,7 +284,20 @@ def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
 
 
-def load_splits(csv_path: str, dataset: str, seq_len: int, pred_len: int):
+def _apply_target_space(iv_raw: np.ndarray, dates_full: np.ndarray, target_space: str):
+    """level → unchanged; logdiff → log(IV)[1:]-log(IV)[:-1], dates trimmed by 1."""
+    if target_space == "level":
+        return iv_raw, dates_full
+    if target_space == "logdiff":
+        if (iv_raw <= 0).any():
+            raise ValueError("logdiff target_space requires all IV > 0")
+        log_iv = np.log(iv_raw)
+        return (log_iv[1:] - log_iv[:-1]).astype(iv_raw.dtype), dates_full[1:]
+    raise ValueError(f"Unknown target_space {target_space!r}; choose from {TARGET_SPACE_CHOICES}")
+
+
+def load_splits(csv_path: str, dataset: str, target_space: str,
+                seq_len: int, pred_len: int):
     """
     Returns BOTH x and y in SCALED space (uniform with VAR/DLinear/PatchTST/HOT).
     Original-space losses (mae_original, huber_original) denorm internally inside
@@ -301,7 +315,11 @@ def load_splits(csv_path: str, dataset: str, seq_len: int, pred_len: int):
             f"found {n_iv}. Update H_TAU/W_DELTA if the data spec changed."
         )
 
-    T = len(df)
+    iv_raw     = df[iv_cols].to_numpy(dtype=np.float32)
+    dates_full = df["date"].to_numpy(dtype="datetime64[D]")
+    data, dates = _apply_target_space(iv_raw, dates_full, target_space)
+
+    T = len(data)
     n_train = int(T * TRAIN_FRAC)
     n_test  = int(T * TEST_FRAC)
     n_val   = T - n_train - n_test
@@ -309,10 +327,8 @@ def load_splits(csv_path: str, dataset: str, seq_len: int, pred_len: int):
     b1 = [0,           n_train - seq_len,  T - n_test - seq_len]
     b2 = [n_train,     n_train + n_val,    T]
 
-    iv_raw = df[iv_cols].to_numpy(dtype=np.float32)
-    scaler = StandardScaler().fit(iv_raw[b1[0]:b2[0]])
-    iv_sc  = scaler.transform(iv_raw).astype(np.float32)
-    dates  = df["date"].to_numpy(dtype="datetime64[D]")
+    scaler = StandardScaler().fit(data[b1[0]:b2[0]])
+    iv_sc  = scaler.transform(data).astype(np.float32)
 
     def _windows(start, end):
         sl = iv_sc[start:end]                                       # SCALED for both x and y
@@ -462,6 +478,7 @@ def _build_config(args, info: dict) -> dict:
     return {
         "model":          "DynGWN",
         "dataset":        args.dataset,
+        "target_space":   args.target_space,
         "csv_path":       args.csv_path,
         "seq_len":        args.seq_len,
         "pred_len":       args.pred_len,
@@ -497,6 +514,12 @@ def main():
     ap.add_argument("--csv_path",     default="SPX_surfaces.csv")
     ap.add_argument("--dataset",      default="full", choices=DATASET_CHOICES,
                     help="full = entire CSV; precovid = dates <= 2019-12-31")
+    ap.add_argument("--target_space", default="level", choices=TARGET_SPACE_CHOICES,
+                    help="level = train on raw IV (default); logdiff = train on "
+                         "log(IV)[1:]-log(IV)[:-1]. logdiff loses one day at the front. "
+                         "NOTE: with --loss mae_original/huber_original AND "
+                         "target_space=logdiff, the 'original' space the loss denorms "
+                         "to is raw log-diff (not vol-points).")
     ap.add_argument("--seq_len",      type=int,   default=21)
     ap.add_argument("--pred_len",     type=int,   default=63)
     ap.add_argument("--graph_mode",   default="grid_plus_adaptive",
@@ -549,8 +572,8 @@ def main():
             raise SystemExit(f"--predict_only: need config.json and best_model.pt in {args.out_dir}")
         with open(cfg_path) as f:
             cfg = json.load(f)
-        for k in ("csv_path", "dataset", "seq_len", "pred_len", "graph_mode",
-                  "nhid", "blocks", "layers", "kernel_size", "dropout",
+        for k in ("csv_path", "dataset", "target_space", "seq_len", "pred_len",
+                  "graph_mode", "nhid", "blocks", "layers", "kernel_size", "dropout",
                   "batch_size", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
@@ -564,13 +587,15 @@ def main():
             "huber_original": f"_losshuberoriginal_d{args.huber_delta:g}",
         }[args.loss]
         args.out_dir = (f"DynGWN/results/"
-                        f"{args.dataset}_SPX_IV_{args.seq_len}_{args.pred_len}"
+                        f"{args.dataset}_{args.target_space}_SPX_IV_"
+                        f"{args.seq_len}_{args.pred_len}"
                         f"_DynGWN_{args.graph_mode}"
                         f"_nh{args.nhid}_b{args.blocks}_l{args.layers}"
                         f"_ep{args.epochs}{loss_suffix}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     print(f"Dataset    : {args.dataset}")
+    print(f"Target     : {args.target_space}")
     print(f"Device     : {device}")
     print(f"Output dir : {args.out_dir}")
     print(f"Loss       : {args.loss}"
@@ -578,7 +603,7 @@ def main():
 
     print("\nLoading data...")
     X_tr, y_tr, X_va, y_va, X_te, test_dates, info, scaler = load_splits(
-        args.csv_path, args.dataset, args.seq_len, args.pred_len)
+        args.csv_path, args.dataset, args.target_space, args.seq_len, args.pred_len)
     print(f"  T={info['T']}  n_iv={info['n_iv']}  "
           f"train={info['train_windows']}  "
           f"val={info['val_windows']}  test={info['test_windows']} windows")

@@ -1,6 +1,7 @@
 {
   "model": "HOT(sum,no-norm)",
   "dataset": "precovid",
+  "target_space": "level",
   "seq_len": 21,
   "pred_len": 63,
   "n_windows": 491,
@@ -46,5 +47,5 @@
       "mae": 0.3959478437900543
     }
   },
-  "timestamp": "20260503_195032"
+  "timestamp": "20260503_214400"
 }

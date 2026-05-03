@@ -56,13 +56,14 @@ from sklearn.preprocessing import StandardScaler
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-DEFAULT_SEQ_LEN  = 21
-DEFAULT_PRED_LEN = 63
-TRAIN_FRAC       = 0.70
-TEST_FRAC        = 0.20
-PRECOVID_END     = "2019-12-31"
-DATASET_CHOICES  = ["full", "precovid"]
-REPORT_HORIZONS  = [1, 5, 10, 21, 42, 63]
+DEFAULT_SEQ_LEN      = 21
+DEFAULT_PRED_LEN     = 63
+TRAIN_FRAC           = 0.70
+TEST_FRAC            = 0.20
+PRECOVID_END         = "2019-12-31"
+DATASET_CHOICES      = ["full", "precovid"]
+TARGET_SPACE_CHOICES = ["level", "logdiff"]
+REPORT_HORIZONS      = [1, 5, 10, 21, 42, 63]
 
 # ─── Model registry ───────────────────────────────────────────────────────────
 # Glob patterns: `{dataset}_SPX_IV_{seq_len}_{pred_len}_{Model}*`. Loss variants
@@ -79,8 +80,9 @@ REPORT_HORIZONS  = [1, 5, 10, 21, 42, 63]
 # Persistence is not listed as a model: `Persist(ref)` is built fresh from the
 # CSV inside build_reference(), which is exactly the persistence baseline.
 
-def build_models(dataset: str, seq_len: int, pred_len: int) -> list[dict]:
-    tag = f"{dataset}_SPX_IV_{seq_len}_{pred_len}"
+def build_models(dataset: str, target_space: str,
+                 seq_len: int, pred_len: int) -> list[dict]:
+    tag = f"{dataset}_{target_space}_SPX_IV_{seq_len}_{pred_len}"
     return [
         {
             "name":         "VAR(BIC)",
@@ -182,13 +184,28 @@ def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
 
 
-def build_reference(csv_path: str, dataset: str, seq_len: int, pred_len: int):
+def _apply_target_space(iv_raw: np.ndarray, dates_full: np.ndarray, target_space: str):
+    """level → unchanged; logdiff → log(IV)[1:]-log(IV)[:-1], dates trimmed by 1."""
+    if target_space == "level":
+        return iv_raw, dates_full
+    if target_space == "logdiff":
+        if (iv_raw <= 0).any():
+            raise ValueError("logdiff target_space requires all IV > 0")
+        log_iv = np.log(iv_raw)
+        return (log_iv[1:] - log_iv[:-1]).astype(iv_raw.dtype), dates_full[1:]
+    raise ValueError(f"Unknown target_space {target_space!r}; choose from {TARGET_SPACE_CHOICES}")
+
+
+def build_reference(csv_path: str, dataset: str, target_space: str,
+                    seq_len: int, pred_len: int):
     """
     Returns:
-      trues      [N, pred_len, n_iv] ground truth in scaled space
-      persist    [N, pred_len, n_iv] naive persistence forecast (last observed repeated)
+      trues      [N, pred_len, n_iv] ground truth in scaled target-space
+      persist    [N, pred_len, n_iv] naive persistence baseline:
+                   - level    → repeat last observed scaled value
+                   - logdiff  → predict zero change (= level persistence after recon)
       ref_dates  [N] datetime64[D] start date of each prediction window
-      meta       dict of split statistics (includes n_iv)
+      meta       dict of split statistics (includes n_iv, target_space)
     """
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
@@ -199,7 +216,11 @@ def build_reference(csv_path: str, dataset: str, seq_len: int, pred_len: int):
         raise ValueError(f"No iv_* columns found in {csv_path}")
     n_iv = len(iv_cols)
 
-    T = len(df)
+    iv_raw     = df[iv_cols].to_numpy(dtype=np.float32)
+    dates_full = df["date"].to_numpy(dtype="datetime64[D]")
+    data, all_dates = _apply_target_space(iv_raw, dates_full, target_space)
+
+    T = len(data)
     num_train = int(T * TRAIN_FRAC)
     num_test  = int(T * TEST_FRAC)
     num_val   = T - num_train - num_test
@@ -207,13 +228,11 @@ def build_reference(csv_path: str, dataset: str, seq_len: int, pred_len: int):
     train_end  = num_train
     test_start = T - num_test - seq_len
 
-    iv_np  = df[iv_cols].to_numpy(dtype=np.float32)
     scaler = StandardScaler()
-    scaler.fit(iv_np[:train_end])
-    iv_scaled = scaler.transform(iv_np).astype(np.float32)
+    scaler.fit(data[:train_end])
+    iv_scaled = scaler.transform(data).astype(np.float32)
 
     test_slice      = iv_scaled[test_start:]
-    all_dates       = df["date"].to_numpy(dtype="datetime64[D]")
     test_date_slice = all_dates[test_start:]
 
     n = len(test_slice) - seq_len - pred_len + 1
@@ -222,15 +241,18 @@ def build_reference(csv_path: str, dataset: str, seq_len: int, pred_len: int):
     ref_dates = np.empty(n, dtype="datetime64[D]")
 
     for i in range(n):
-        trues[i]   = test_slice[i + seq_len : i + seq_len + pred_len]
-        persist[i] = test_slice[i + seq_len - 1]
+        trues[i] = test_slice[i + seq_len : i + seq_len + pred_len]
+        if target_space == "logdiff":
+            persist[i] = 0.0   # predict zero log-change (= level persistence)
+        else:
+            persist[i] = test_slice[i + seq_len - 1]
         ref_dates[i] = test_date_slice[i + seq_len]
 
     meta = {
         "T": T, "num_train": num_train, "num_val": num_val, "num_test": num_test,
         "n_iv": n_iv, "n_test": n,
         "seq_len": seq_len, "pred_len": pred_len,
-        "dataset": dataset,
+        "dataset": dataset, "target_space": target_space,
         "train_end_date": str(all_dates[num_train - 1]),
         "date_range": f"{ref_dates[0]} → {ref_dates[-1]}",
     }
@@ -400,14 +422,14 @@ def print_summary(results: list[dict]):
 # ─── Save ─────────────────────────────────────────────────────────────────────
 
 def save_results(results: list[dict], out_dir: str, dataset: str,
-                 seq_len: int, pred_len: int):
+                 target_space: str, seq_len: int, pred_len: int):
     """
-    Filenames are tagged with `_{dataset}_sl<sl>_pl<pl>` so different sweep
-    configurations and datasets don't overwrite each other.
+    Filenames are tagged with `{dataset}_{target_space}_sl<sl>_pl<pl>` so
+    different sweep configurations, datasets, and target spaces don't overwrite.
     """
     os.makedirs(out_dir, exist_ok=True)
     ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tag = f"{dataset}_sl{seq_len}_pl{pred_len}"
+    tag = f"{dataset}_{target_space}_sl{seq_len}_pl{pred_len}"
 
     scalar_rows = [
         {k: v for k, v in r.items() if not k.startswith("_")}
@@ -431,10 +453,11 @@ def save_results(results: list[dict], out_dir: str, dataset: str,
         os.path.join(out_dir, f"latest_horizons_{tag}.csv"), index=False)
 
     summary = {
-        "timestamp": ts,
-        "dataset":   dataset,
-        "seq_len":   seq_len,
-        "pred_len":  pred_len,
+        "timestamp":    ts,
+        "dataset":      dataset,
+        "target_space": target_space,
+        "seq_len":      seq_len,
+        "pred_len":     pred_len,
         "models": {
             r["name"]: {k: v for k, v in r.items() if not k.startswith("_")}
             for r in results
@@ -447,14 +470,15 @@ def save_results(results: list[dict], out_dir: str, dataset: str,
 
 
 def write_per_model_metrics(model_dir: str, name: str, dataset: str,
-                            seq_len: int, pred_len: int, m: dict):
+                            target_space: str, seq_len: int, pred_len: int, m: dict):
     """Write a self-describing metrics_test.json into the model's result dir."""
     payload = {
-        "model":      name,
-        "dataset":    dataset,
-        "seq_len":    seq_len,
-        "pred_len":   pred_len,
-        "n_windows":  m["n_windows"],
+        "model":        name,
+        "dataset":      dataset,
+        "target_space": target_space,
+        "seq_len":      seq_len,
+        "pred_len":     pred_len,
+        "n_windows":    m["n_windows"],
         "metrics":    {k: v for k, v in m.items()
                        if not k.startswith("_") and k not in ("name", "n_windows", "source")},
         "per_horizon": {
@@ -519,17 +543,23 @@ def main():
     parser.add_argument("--csv_path", default="SPX_surfaces.csv")
     parser.add_argument("--dataset",  default="full", choices=DATASET_CHOICES,
                         help="full = entire CSV; precovid = dates <= 2019-12-31")
+    parser.add_argument("--target_space", default="level", choices=TARGET_SPACE_CHOICES,
+                        help="level = compare on raw IV (default); logdiff = compare "
+                             "on log(IV)[1:]-log(IV)[:-1]. Persist baseline becomes "
+                             "predict-zero-change in logdiff space.")
     parser.add_argument("--seq_len",  type=int, default=DEFAULT_SEQ_LEN)
     parser.add_argument("--pred_len", type=int, default=DEFAULT_PRED_LEN)
     parser.add_argument("--out_dir",  default="comparison_results")
     args = parser.parse_args()
 
-    models_for_run = build_models(args.dataset, args.seq_len, args.pred_len)
+    models_for_run = build_models(args.dataset, args.target_space,
+                                  args.seq_len, args.pred_len)
 
     print(f"Building reference ground truth "
-          f"(dataset={args.dataset}, seq_len={args.seq_len}, pred_len={args.pred_len})...")
+          f"(dataset={args.dataset}, target_space={args.target_space}, "
+          f"seq_len={args.seq_len}, pred_len={args.pred_len})...")
     trues, persist, ref_dates, meta = build_reference(
-        args.csv_path, dataset=args.dataset,
+        args.csv_path, dataset=args.dataset, target_space=args.target_space,
         seq_len=args.seq_len, pred_len=args.pred_len,
     )
     n_iv = meta["n_iv"]
@@ -549,8 +579,8 @@ def main():
         name = spec["name"]
         pred_path = _maybe_regen(spec, name)
         if pred_path is None:
-            print(f"  {name}: no regen-eligible dir for dataset={args.dataset!r}"
-                  f" — skipping")
+            print(f"  {name}: no regen-eligible dir for dataset={args.dataset!r}, "
+                  f"target_space={args.target_space!r} — skipping")
             continue
 
         sibling_dates = os.path.join(os.path.dirname(pred_path), "start_dates.npy")
@@ -591,7 +621,7 @@ def main():
         m["source"] = pred_path
         results.append(m)
         write_per_model_metrics(os.path.dirname(pred_path), name, args.dataset,
-                                args.seq_len, args.pred_len, m)
+                                args.target_space, args.seq_len, args.pred_len, m)
         print(f"  {name}: OK ({n_windows} windows, {pred_path})")
 
     if len(results) == 1:
@@ -599,7 +629,8 @@ def main():
         return
 
     print_summary(results)
-    save_results(results, args.out_dir, args.dataset, args.seq_len, args.pred_len)
+    save_results(results, args.out_dir, args.dataset, args.target_space,
+                 args.seq_len, args.pred_len)
 
 
 if __name__ == "__main__":

@@ -38,10 +38,10 @@ MODELS = {
 # VAR1 is OLS — no loss option, single run per (seq_len, pred_len).
 LOSS_VARIANTS = {
     "var1":     [],                            # no loss (closed-form OLS)
-    "dlinear":  ["mse", "huber_scaled"],
-    "patchtst": ["mse", "huber_scaled"],
-    "hot":      ["mse", "huber_scaled"],
-    "dyngwn":   ["mae_original", "huber_original"],
+    "dlinear":  ["mse"],
+    "patchtst": ["mse"],
+    "hot":      ["mse"],
+    "dyngwn":   ["mae_original"],
 }
 
 # Args passed to every model script (if the script accepts them)
@@ -224,7 +224,7 @@ def main():
     def _label(m, attn, loss):
         parts = []
         if attn: parts.append(attn.split("_")[1])
-        if loss: parts.append(loss.split("_")[0])  # "mse" / "huber" / "mae"
+        if loss: parts.append(loss.split("_")[0])  # "mse" 
         return f"{m}({','.join(parts)})" if parts else m
 
     print(f"Models to train: {[_label(m, a, l) for m, a, l in expanded]}")

@@ -2,16 +2,40 @@
 """
 HOT (Higher-Order Transformer) training script for SPX IV surface forecasting.
 
-Treats the 400 IV features as a 20×20 structured tensor (moneyness × tau)
-and applies Kronecker-product attention across both spatial axes.
+Treats the 170 IV cells as a 17×10 structured tensor (delta × tau) and applies
+Kronecker attention across both spatial axes plus the temporal patches.
+
+Layout:
+    H = DELTA = 17  (call-equivalent delta axis, 0.10 → 0.90 in 0.05 steps)
+    W = TAU   = 10  (maturities 30, 60, 91, 122, 152, 182, 273, 365, 547, 730 d)
+
+CSV column order is (T outer, D inner): col k = i_T·17 + i_D. The F-order
+reshape `iv.reshape(-1, 17, 10, order='F')` produces `result[i_D, i_T] = col k`,
+giving H=delta on axis 0 and W=tau on axis 1. compare_models.load_hot
+mirror-reshapes with the same F-order to recover the flat CSV column order.
+
+Dataset selection:
+    --dataset full      use the full CSV (default).
+    --dataset precovid  slice to date <= 2019-12-31 before splitting.
+
+Per-cell normalisation (--norm):
+    --norm on           HOT.forward normalises each (H,W) cell by its context-window
+                        mean/std and denormalises the prediction with the same stats
+                        (legacy behaviour). Strips level information per cell.
+    --norm off          Skip the per-cell normalisation/denormalisation. Model sees
+                        StandardScaler-scaled inputs and produces predictions directly
+                        in scaled space. Typically reduces long-horizon bias on this
+                        dataset (cf. PatchTST --revin off).
 
 Requires:  pip install einops
 
-Outputs (in --out_dir):
-    pred.npy          [N_test, H=20, W=20, pred_len]  HOT tensor format
+Outputs (in --out_dir; default
+`HOT/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_HOT_tensor_dh{dh}_nb{nb}_nh{nh}_ps{ps}_{attention_type}_pe{pe}_ep{ep}{loss_suffix}{norm_suffix}`):
+    pred.npy          [N_test, H=17, W=10, pred_len]   HOT tensor format  (gitignored)
     start_dates.npy   [N_test]                          datetime64[D]
     train_log.csv     epoch, train_loss, val_loss
     best_model.pt     checkpoint of best validation weights
+    config.json       full hyperparam + split + git record
 """
 
 import argparse
@@ -20,21 +44,24 @@ import json
 import math
 import os
 import random
+import subprocess
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import einsum, rearrange
+from einops import einsum
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-TRAIN_FRAC = 0.70
-TEST_FRAC  = 0.20
-N_IV       = 400
-H_MONO     = 20   # moneyness axis (HOT H dim)
-W_TAU      = 20   # tau axis       (HOT W dim)
+TRAIN_FRAC       = 0.70
+TEST_FRAC        = 0.20
+PRECOVID_END     = "2019-12-31"
+DATASET_CHOICES  = ["full", "precovid"]
+H_DELTA          = 17    # delta axis (HOT H dim)
+W_TAU            = 10    # maturity axis (HOT W dim)
+N_IV_EXPECTED    = H_DELTA * W_TAU  # 170; checked against CSV at load time
 
 
 # ─── Positional Encoding / Embeddings ─────────────────────────────────────────
@@ -189,27 +216,29 @@ class HOT(nn.Module):
     """
     Higher-Order Transformer for structured IV surface forecasting.
 
-    Input:  [B, H=20, W=20, context_length=21]
-    Output: [B, H=20, W=20, prediction_length=63]
+    Input:  [B, H=17, W=10, context_length=21]
+    Output: [B, H=17, W=10, prediction_length=63]
 
-    Internally normalises each (H,W) point over the context window.
+    If `norm=True` (legacy), normalises each (H,W) point over the context window
+    inside forward() and denormalises the prediction with the same stats. This
+    strips per-cell level information in the same way RevIN does for PatchTST —
+    consider `norm=False` if long-horizon bias is observed.
     """
     def __init__(self, d_hidden: int = 128, d_mlp: int = 512, n_blocks: int = 4,
                  n_head: int = 8, patch_size: int = 4,
                  context_length: int = 21, prediction_length: int = 63,
                  attention_type: str = "kronecker_product", dropout: float = 0.0,
-                 pe: str = "rope"):
+                 pe: str = "rope", norm: bool = True):
         super().__init__()
         assert pe in ("rope", "nope"), f"pe must be 'rope' or 'nope', got {pe!r}"
         self.patch_size        = patch_size
         self.context_length    = context_length
         self.prediction_length = prediction_length
         self.pe                = pe
+        self.norm              = norm
 
         t_patches = math.ceil(context_length / patch_size)
 
-        # 'nope' and 'rope' both set the additive pos_emb to zero. RoPE is applied
-        # inside the attention layer along the temporal dim (rope_dims=[3]).
         self.pos_emb = lambda x: torch.zeros_like(x).to(x.device)
 
         self.emb = nn.Sequential(
@@ -219,7 +248,7 @@ class HOT(nn.Module):
         )
         self.emb_norm = nn.LayerNorm(d_hidden)
 
-        # Input to transformer blocks: [B, H=20, W=20, Tp', d]
+        # Input to transformer blocks: [B, H, W, Tp', d]
         # KroneckerAttention iterates dims 1..3 (H, W, Tp') → 3 modes.
         num_modes = 3
         rope_dims = [3] if pe == "rope" else []
@@ -241,15 +270,18 @@ class HOT(nn.Module):
         # x: [B, H, W, T]
         bs, H, W, T = x.shape
 
-        mu  = x.mean(dim=-1, keepdim=True)
-        std = torch.sqrt(torch.var(x, dim=-1, keepdim=True, unbiased=False) + 1e-5)
-        x_norm = (x - mu) / std
+        if self.norm:
+            mu  = x.mean(dim=-1, keepdim=True)
+            std = torch.sqrt(torch.var(x, dim=-1, keepdim=True, unbiased=False) + 1e-5)
+            x_input = (x - mu) / std
+        else:
+            x_input = x
 
         if T % self.patch_size != 0:
             pad   = self.patch_size - (T % self.patch_size)
-            x_pad = torch.cat([x_norm, x_norm[..., -1:].repeat(1, 1, 1, pad)], dim=-1)
+            x_pad = torch.cat([x_input, x_input[..., -1:].repeat(1, 1, 1, pad)], dim=-1)
         else:
-            x_pad = x_norm
+            x_pad = x_input
 
         Tp = x_pad.shape[-1]
         h = x_pad.reshape(bs * H * W, Tp).unsqueeze(1)  # [B*H*W, 1, Tp]
@@ -264,29 +296,46 @@ class HOT(nn.Module):
             h = block(h)
 
         logits = self.head(h.mean(dim=3))                # [B, H, W, pred]
-        return (logits * std) + mu
+
+        if self.norm:
+            return (logits * std) + mu
+        return logits
 
 
 # ─── Data ─────────────────────────────────────────────────────────────────────
 
+def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
+    if dataset == "full":
+        return df
+    if dataset == "precovid":
+        end = pd.Timestamp(PRECOVID_END)
+        return df[df["date"] <= end].reset_index(drop=True)
+    raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
+
+
 def _to_grid(iv: np.ndarray) -> np.ndarray:
     """
-    Reshape [N, 400] → [N, H_MONO=20, W_TAU=20] using F-order.
+    Reshape [N, 170] → [N, H=17 (delta), W=10 (tau)] using F-order.
 
-    CSV columns are sorted (tau outer, moneyness inner): col k = i_tau*20 + i_mono.
-    F-order reshape: result[i_mono, i_tau] = flat[i_mono + 20*i_tau] = flat[k]. ✓
+    CSV columns are sorted (T outer, D inner): col k = i_T·17 + i_D.
+    F-order reshape with shape (17, 10): result[i_D, i_T] = flat[i_D + 17·i_T] = col k. ✓
+    Mirror-reshape lives in compare_models.load_hot.
     """
-    return iv.reshape(-1, H_MONO, W_TAU, order="F")
+    return iv.reshape(-1, H_DELTA, W_TAU, order="F")
 
 
-def load_splits(csv_path: str, seq_len: int, pred_len: int):
+def load_splits(csv_path: str, dataset: str, seq_len: int, pred_len: int):
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
-    # CSV column order = (tau outer, moneyness inner). Required for the F-order
-    # reshape `iv.reshape(-1, 20, 20, order='F')` → [i_mono, i_tau] mapping.
-    # Do NOT sort — alphabetical order scrambles the surface.
+    df = _slice_dataset(df, dataset)
+
     iv_cols = [c for c in df.columns if c.startswith("iv_")]
-    assert len(iv_cols) == N_IV
+    n_iv = len(iv_cols)
+    if n_iv != N_IV_EXPECTED:
+        raise ValueError(
+            f"HOT expects {N_IV_EXPECTED} = {H_DELTA}×{W_TAU} iv_ columns; "
+            f"found {n_iv}. Update H_DELTA/W_TAU if the data spec changed."
+        )
 
     T = len(df)
     n_train = int(T * TRAIN_FRAC)
@@ -301,11 +350,10 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     iv = scaler.transform(iv).astype(np.float32)
     dates = df["date"].to_numpy(dtype="datetime64[D]")
 
-    # Convert to grid: [T, H, W]
-    iv_grid = _to_grid(iv)
+    iv_grid = _to_grid(iv)   # [T, H, W]
 
     def _windows(start, end):
-        sl = iv_grid[start:end]  # [T_slice, H, W]
+        sl = iv_grid[start:end]
         n  = len(sl) - seq_len - pred_len + 1
         # X: [N, H, W, seq_len]  y: [N, H, W, pred_len]
         X = np.stack([sl[i : i+seq_len].transpose(1, 2, 0)         for i in range(n)])
@@ -320,15 +368,15 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     test_start_dates = np.array([test_slice_dates[i + seq_len] for i in range(len(X_te))])
 
     return X_tr, y_tr, X_va, y_va, X_te, test_start_dates, dict(
-        T=T, n_train=n_train, n_val=n_val, n_test=n_test,
-        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te)
+        T=T, n_iv=n_iv, n_train=n_train, n_val=n_val, n_test=n_test,
+        train_end_date=str(dates[n_train - 1]),
+        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te),
     )
 
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 
 def _compute_loss(pred, y, loss_kind: str, huber_delta: float = 1.0):
-    """mse: MSE in scaled space. huber_scaled: Huber in scaled space."""
     if loss_kind == "mse":
         return F.mse_loss(pred, y)
     if loss_kind == "huber_scaled":
@@ -380,7 +428,7 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
         else:
             wait += 1
 
-        if epoch % 10 == 0 or epoch == 1:
+        if epoch % 5 == 0 or epoch == 1:
             print(f"  epoch {epoch:4}/{args.epochs}  "
                   f"train={tr_loss:.6f}  val={va_loss:.6f}  best={best_val:.6f}")
 
@@ -393,8 +441,56 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
         w.writeheader(); w.writerows(log_rows)
 
     model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
-    print(f"  best val MSE: {best_val:.6f}")
+    print(f"  best val loss: {best_val:.6f}")
     return model
+
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+
+def _git_commit() -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=2,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _build_config(args, info: dict) -> dict:
+    return {
+        "model":          "HOT",
+        "dataset":        args.dataset,
+        "csv_path":       args.csv_path,
+        "seq_len":        args.seq_len,
+        "pred_len":       args.pred_len,
+        "d_hidden":       args.d_hidden,
+        "d_mlp":          args.d_mlp,
+        "n_blocks":       args.n_blocks,
+        "n_head":         args.n_head,
+        "patch_size":     args.patch_size,
+        "attention_type": args.attention_type,
+        "pe":             args.pe,
+        "norm":           args.norm,
+        "dropout":        args.dropout,
+        "epochs":         args.epochs,
+        "batch_size":     args.batch_size,
+        "lr":             args.lr,
+        "weight_decay":   args.weight_decay,
+        "patience":       args.patience,
+        "seed":           args.seed,
+        "loss":           args.loss,
+        "huber_delta":    args.huber_delta,
+        "n_iv":           info["n_iv"],
+        "h_delta":        H_DELTA,
+        "w_tau":          W_TAU,
+        "n_train":        info["n_train"],
+        "n_val":          info["n_val"],
+        "n_test":         info["n_test"],
+        "train_end_date": info["train_end_date"],
+        "git_commit":     _git_commit(),
+    }
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -402,6 +498,8 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
 def main():
     ap = argparse.ArgumentParser(description="Train HOT on SPX IV surface")
     ap.add_argument("--csv_path",        default="SPX_surfaces.csv")
+    ap.add_argument("--dataset",         default="full", choices=DATASET_CHOICES,
+                    help="full = entire CSV; precovid = dates <= 2019-12-31")
     ap.add_argument("--seq_len",         type=int,   default=21)
     ap.add_argument("--pred_len",        type=int,   default=63)
     ap.add_argument("--d_hidden",        type=int,   default=128)
@@ -414,7 +512,11 @@ def main():
     ap.add_argument("--pe",              default="rope",
                     choices=["rope", "nope"],
                     help="Positional encoding: 'rope' applies RoPE on the temporal "
-                         "dim (matches legacy ts_tensor.py default); 'nope' disables it.")
+                         "dim (legacy default); 'nope' disables it.")
+    ap.add_argument("--norm",            default="on", choices=["on", "off"],
+                    help="Per-cell window norm/denorm inside HOT.forward. "
+                         "'on' = legacy. 'off' = pass scaled inputs through directly "
+                         "(typically reduces long-horizon bias on this dataset).")
     ap.add_argument("--dropout",         type=float, default=0.1)
     ap.add_argument("--epochs",          type=int,   default=100)
     ap.add_argument("--batch_size",      type=int,   default=32)
@@ -428,10 +530,8 @@ def main():
                     help="Skip training; load best_model.pt + config.json from --out_dir, "
                          "run inference, write pred.npy.")
     ap.add_argument("--loss",            default="mse",
-                    choices=["mse", "huber_scaled"],
-                    help="Training loss in scaled space.")
-    ap.add_argument("--huber_delta",     type=float, default=1.0,
-                    help="Threshold for huber_scaled (default 1.0 = ~1 stdev).")
+                    choices=["mse", "huber_scaled"])
+    ap.add_argument("--huber_delta",     type=float, default=1.0)
     args = ap.parse_args()
 
     if args.device == "auto":
@@ -453,9 +553,9 @@ def main():
             raise SystemExit(f"--predict_only: need config.json and best_model.pt in {args.out_dir}")
         with open(cfg_path) as f:
             cfg = json.load(f)
-        for k in ("csv_path", "seq_len", "pred_len", "d_hidden", "d_mlp",
+        for k in ("csv_path", "dataset", "seq_len", "pred_len", "d_hidden", "d_mlp",
                   "n_blocks", "n_head", "patch_size", "attention_type",
-                  "pe", "dropout", "batch_size", "loss", "huber_delta"):
+                  "pe", "norm", "dropout", "batch_size", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
         print(f"[predict_only] {cfg_path}")
@@ -465,28 +565,32 @@ def main():
             "mse":          "",
             "huber_scaled": f"_losshuberscaled_d{args.huber_delta:g}",
         }[args.loss]
-        args.out_dir = (f"HOT/results/SPX_IV_{args.seq_len}_{args.pred_len}"
+        norm_suffix = "" if args.norm == "on" else "_nonorm"
+        args.out_dir = (f"HOT/results/{args.dataset}_SPX_IV_{args.seq_len}_{args.pred_len}"
                         f"_HOT_tensor_dh{args.d_hidden}_nb{args.n_blocks}"
                         f"_nh{args.n_head}_ps{args.patch_size}_{args.attention_type}"
-                        f"_pe{args.pe}_ep{args.epochs}{loss_suffix}")
+                        f"_pe{args.pe}_ep{args.epochs}{loss_suffix}{norm_suffix}")
     os.makedirs(args.out_dir, exist_ok=True)
 
+    print(f"Dataset    : {args.dataset}")
     print(f"Device     : {device}")
     print(f"Output dir : {args.out_dir}")
-    print(f"Attention  : {args.attention_type}  pe={args.pe}")
+    print(f"Attention  : {args.attention_type}  pe={args.pe}  norm={args.norm}")
 
     print("\nLoading data...")
     X_tr, y_tr, X_va, y_va, X_te, test_dates, info = load_splits(
-        args.csv_path, args.seq_len, args.pred_len)
-    print(f"  T={info['T']}  train={info['train_windows']}  "
+        args.csv_path, args.dataset, args.seq_len, args.pred_len)
+    print(f"  T={info['T']}  n_iv={info['n_iv']}  "
+          f"train={info['train_windows']}  "
           f"val={info['val_windows']}  test={info['test_windows']} windows")
-    print(f"  X shape (per split): {X_tr.shape}  [N, H={H_MONO}, W={W_TAU}, seq]")
+    print(f"  Train ends {info['train_end_date']}")
+    print(f"  X shape (per split): {X_tr.shape}  [N, H={H_DELTA}, W={W_TAU}, seq]")
 
     model = HOT(d_hidden=args.d_hidden, d_mlp=args.d_mlp, n_blocks=args.n_blocks,
                 n_head=args.n_head, patch_size=args.patch_size,
                 context_length=args.seq_len, prediction_length=args.pred_len,
                 attention_type=args.attention_type, dropout=args.dropout,
-                pe=args.pe).to(device)
+                pe=args.pe, norm=(args.norm == "on")).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
 
@@ -495,28 +599,7 @@ def main():
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
         print(f"  Loaded checkpoint from {ckpt_path}")
     else:
-        config = {
-            "model":          "HOT",
-            "csv_path":       args.csv_path,
-            "seq_len":        args.seq_len,
-            "pred_len":       args.pred_len,
-            "d_hidden":       args.d_hidden,
-            "d_mlp":          args.d_mlp,
-            "n_blocks":       args.n_blocks,
-            "n_head":         args.n_head,
-            "patch_size":     args.patch_size,
-            "attention_type": args.attention_type,
-            "pe":             args.pe,
-            "dropout":        args.dropout,
-            "epochs":         args.epochs,
-            "batch_size":     args.batch_size,
-            "lr":             args.lr,
-            "weight_decay":   args.weight_decay,
-            "patience":       args.patience,
-            "seed":           args.seed,
-            "loss":           args.loss,
-            "huber_delta":    args.huber_delta,
-        }
+        config = _build_config(args, info)
         with open(os.path.join(args.out_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=2)
 
@@ -531,12 +614,12 @@ def main():
     with torch.no_grad():
         for (xb,) in te_loader:
             preds.append(model(xb.to(device)).cpu().numpy())
-    # preds: [N, H, W, pred_len]
     preds = np.concatenate(preds, axis=0).astype(np.float32)
+    # preds: [N, H, W, pred_len]
 
     np.save(os.path.join(args.out_dir, "pred.npy"),        preds)
     np.save(os.path.join(args.out_dir, "start_dates.npy"), test_dates)
-    print(f"  pred.npy        shape={preds.shape}  (HOT format [N, H, W, pred])")
+    print(f"  pred.npy        shape={preds.shape}  (HOT format [N, H={H_DELTA}, W={W_TAU}, pred])")
     print(f"  start_dates.npy range={test_dates[0]} → {test_dates[-1]}")
     print(f"\nDone. Results in {args.out_dir}/")
 

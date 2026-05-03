@@ -2,18 +2,21 @@
 """
 DLinear training script for SPX IV surface forecasting.
 
-Trains a channel-independent DLinear (trend + seasonality decomposition) on
-SPX_surfaces.csv using the canonical 70/10/20 split and StandardScaler.
-Saves predictions in scaled space to match compare_models.py expectations.
+Channel-independent DLinear (trend + seasonality decomposition), trained on
+the 170-cell SPX surface CSV using the canonical 70/10/20 split and
+StandardScaler. Saves predictions in scaled space to match compare_models.
 
-Quick start (Colab):
-    python dlinear_spx_iv.py --device cuda
+Dataset selection:
+    --dataset full      use the full CSV (default).
+    --dataset precovid  slice to date <= 2019-12-31 before splitting.
 
-Outputs (in --out_dir):
-    pred.npy          [N_test, pred_len, 400]  scaled-space predictions
-    start_dates.npy   [N_test]                  datetime64[D] start of each window
+Outputs (in --out_dir; default
+`DLinear/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_DLinear_individual_k{ks}_ep{ep}{loss_suffix}`):
+    pred.npy          [N_test, pred_len, n_iv]   scaled-space predictions  (gitignored)
+    start_dates.npy   [N_test]                   datetime64[D] start of each window
     train_log.csv     epoch, train_loss, val_loss
     best_model.pt     checkpoint of best validation weights
+    config.json       full hyperparam + split + git record
 """
 
 import argparse
@@ -21,6 +24,7 @@ import csv
 import json
 import os
 import random
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -29,9 +33,10 @@ import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-TRAIN_FRAC = 0.70
-TEST_FRAC  = 0.20
-N_IV       = 400
+TRAIN_FRAC       = 0.70
+TEST_FRAC        = 0.20
+PRECOVID_END     = "2019-12-31"
+DATASET_CHOICES  = ["full", "precovid"]
 
 
 # ─── Model ────────────────────────────────────────────────────────────────────
@@ -49,16 +54,16 @@ class _MovingAvg(nn.Module):
             x,
             x[:, -1:].expand(-1, self.pad, -1),
         ], dim=1)
-        return self.avg(x.permute(0, 2, 1)).permute(0, 2, 1)  # [B, T, C]
+        return self.avg(x.permute(0, 2, 1)).permute(0, 2, 1)
 
 
 class DLinear(nn.Module):
     """
     Channel-independent DLinear.
 
-    Each of the 400 IV features gets its own pair of linear maps (seasonal and
-    trend). Implemented as a vectorised batched matmul over channels — equivalent
-    to 400 independent nn.Linear layers but ~100× faster than a ModuleList loop.
+    Each IV feature gets its own pair of linear maps (seasonal and trend).
+    Vectorised batched matmul over channels — equivalent to n_channels
+    independent nn.Linear layers but ~100× faster than a ModuleList loop.
 
     Input:  [B, seq_len, C]
     Output: [B, pred_len, C]
@@ -66,29 +71,27 @@ class DLinear(nn.Module):
     def __init__(self, seq_len: int, pred_len: int, n_channels: int, kernel_size: int = 13):
         super().__init__()
         self.decomp = _MovingAvg(kernel_size)
-        # Initialise to "predict the mean" (same as the original paper)
         w0 = (1.0 / seq_len) * torch.ones(n_channels, pred_len, seq_len)
-        self.W_s = nn.Parameter(w0.clone())   # seasonal weights [C, P, S]
-        self.W_t = nn.Parameter(w0.clone())   # trend weights    [C, P, S]
+        self.W_s = nn.Parameter(w0.clone())
+        self.W_t = nn.Parameter(w0.clone())
         self.b_s = nn.Parameter(torch.zeros(n_channels, pred_len))
         self.b_t = nn.Parameter(torch.zeros(n_channels, pred_len))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # [B, S, C]
         trend = self.decomp(x)
         seas  = x - trend
-        # [B, C, S] batched linear: out[b,c,p] = sum_s( x[b,c,s] * W[c,p,s] ) + b[c,p]
         s = seas.permute(0, 2, 1)
         t = trend.permute(0, 2, 1)
         out = (torch.einsum('bcs,cps->bcp', s, self.W_s) + self.b_s +
                torch.einsum('bcs,cps->bcp', t, self.W_t) + self.b_t)
-        return out.permute(0, 2, 1)  # [B, P, C]
+        return out.permute(0, 2, 1)
 
 
 # ─── Loss helpers ────────────────────────────────────────────────────────────
 
 def masked_mae(preds: torch.Tensor, labels: torch.Tensor, null_val=float("nan")) -> torch.Tensor:
     """Masked-MAE (DynGWN legacy). For SPX (no NaNs) reduces to plain MAE."""
-    if null_val != null_val:  # NaN
+    if null_val != null_val:
         mask = ~torch.isnan(labels)
     else:
         mask = labels != null_val
@@ -102,7 +105,16 @@ def masked_mae(preds: torch.Tensor, labels: torch.Tensor, null_val=float("nan"))
 
 # ─── Data ─────────────────────────────────────────────────────────────────────
 
-def load_splits(csv_path: str, seq_len: int, pred_len: int):
+def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
+    if dataset == "full":
+        return df
+    if dataset == "precovid":
+        end = pd.Timestamp(PRECOVID_END)
+        return df[df["date"] <= end].reset_index(drop=True)
+    raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
+
+
+def load_splits(csv_path: str, dataset: str, seq_len: int, pred_len: int):
     """
     Returns scaled-space windows and the StandardScaler. The scaler is used
     by the MAE-original loss path to inverse-transform model output before
@@ -110,9 +122,12 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     """
     df = pd.read_csv(csv_path, low_memory=False)
     df['date'] = pd.to_datetime(df['date'])
+    df = _slice_dataset(df, dataset)
 
     iv_cols = [c for c in df.columns if c.startswith('iv_')]
-    assert len(iv_cols) == N_IV, f'Expected {N_IV} iv_ columns, found {len(iv_cols)}'
+    if not iv_cols:
+        raise ValueError(f"No iv_* columns found in {csv_path}")
+    n_iv = len(iv_cols)
 
     T       = len(df)
     n_train = int(T * TRAIN_FRAC)
@@ -142,9 +157,11 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     test_slice_dates = dates[b1[2]:b2[2]]
     test_start_dates = np.array([test_slice_dates[i + seq_len] for i in range(len(X_te))])
 
-    split_info = dict(T=T, n_train=n_train, n_val=n_val, n_test=n_test,
-                      train_windows=len(X_tr), val_windows=len(X_va),
-                      test_windows=len(X_te))
+    split_info = dict(
+        T=T, n_iv=n_iv, n_train=n_train, n_val=n_val, n_test=n_test,
+        train_end_date=str(dates[n_train - 1]),
+        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te),
+    )
     return X_tr, y_tr, X_va, y_va, X_te, y_te, test_start_dates, split_info, scaler
 
 
@@ -153,17 +170,6 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
 def _compute_loss(pred_scaled: torch.Tensor, y_scaled: torch.Tensor,
                   loss_kind: str, mean: torch.Tensor = None,
                   std: torch.Tensor = None, huber_delta: float = 1.0) -> torch.Tensor:
-    """
-    Loss options:
-      mse           — MSE in scaled space (default).
-      mae_original  — MAE on inverse-transformed pred vs y (original IV space).
-                       Equivalent to std-weighted MAE in scaled space.
-      mae_scaled    — Plain MAE in scaled space. Uniform per-channel weighting.
-      huber_scaled  — Huber loss in scaled space. Quadratic for |err| < delta,
-                       linear above. Interpolates MSE (small err) and MAE (large err)
-                       — tests whether MAE's coarse small-error gradient is what
-                       hurts short-horizon performance.
-    """
     if loss_kind == 'mse':
         return nn.functional.mse_loss(pred_scaled, y_scaled)
     if loss_kind == 'mae_scaled':
@@ -211,7 +217,6 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
     )
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    # Scaler tensors live on-device for the MAE-original path; unused for MSE.
     mean = torch.tensor(scaler.mean_,  dtype=torch.float32, device=device)
     std  = torch.tensor(scaler.scale_, dtype=torch.float32, device=device)
 
@@ -254,11 +259,50 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
     return model
 
 
+# ─── Misc ────────────────────────────────────────────────────────────────────
+
+def _git_commit() -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=2,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _build_config(args, info: dict) -> dict:
+    return {
+        'model':          'DLinear',
+        'dataset':        args.dataset,
+        'csv_path':       args.csv_path,
+        'seq_len':        args.seq_len,
+        'pred_len':       args.pred_len,
+        'kernel_size':    args.kernel_size,
+        'epochs':         args.epochs,
+        'batch_size':     args.batch_size,
+        'lr':             args.lr,
+        'patience':       args.patience,
+        'seed':           args.seed,
+        'loss':           args.loss,
+        'huber_delta':    args.huber_delta,
+        'n_iv':           info['n_iv'],
+        'n_train':        info['n_train'],
+        'n_val':          info['n_val'],
+        'n_test':         info['n_test'],
+        'train_end_date': info['train_end_date'],
+        'git_commit':     _git_commit(),
+    }
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     ap = argparse.ArgumentParser(description='Train DLinear on SPX IV surface')
     ap.add_argument('--csv_path',    default='SPX_surfaces.csv')
+    ap.add_argument('--dataset',     default='full', choices=DATASET_CHOICES,
+                    help='full = entire CSV; precovid = dates <= 2019-12-31')
     ap.add_argument('--seq_len',     type=int,   default=21)
     ap.add_argument('--pred_len',    type=int,   default=63)
     ap.add_argument('--kernel_size', type=int,   default=13,
@@ -267,7 +311,7 @@ def main():
     ap.add_argument('--batch_size',  type=int,   default=64)
     ap.add_argument('--lr',          type=float, default=1e-3)
     ap.add_argument('--patience',    type=int,   default=15,
-                    help='Early stopping patience (val MSE epochs without improvement)')
+                    help='Early stopping patience (val loss epochs without improvement)')
     ap.add_argument('--device',      default='auto',
                     help='"auto" | "cuda" | "mps" | "cpu"')
     ap.add_argument('--seed',        type=int,   default=42)
@@ -277,15 +321,10 @@ def main():
                     help='Skip training; load best_model.pt + config.json from --out_dir, '
                          'run inference, write pred.npy.')
     ap.add_argument('--loss', default='mse',
-                    choices=['mse', 'mae_original', 'mae_scaled', 'huber_scaled'],
-                    help='Training loss in scaled space unless suffix says otherwise. '
-                         'huber_scaled interpolates MSE (small err) → MAE (large err) '
-                         'at the threshold given by --huber_delta.')
-    ap.add_argument('--huber_delta', type=float, default=1.0,
-                    help='Threshold for huber_scaled (default 1.0 = ~1 stdev).')
+                    choices=['mse', 'mae_original', 'mae_scaled', 'huber_scaled'])
+    ap.add_argument('--huber_delta', type=float, default=1.0)
     args = ap.parse_args()
 
-    # Device
     if args.device == 'auto':
         if torch.cuda.is_available():
             device = torch.device('cuda')
@@ -302,7 +341,6 @@ def main():
     if device.type == 'cuda':
         torch.cuda.manual_seed_all(args.seed)
 
-    # ── Predict-only: load config, rebuild model, load checkpoint, predict. ──
     if args.predict_only:
         if args.out_dir is None:
             raise SystemExit('--predict_only requires --out_dir <dir with config.json + best_model.pt>')
@@ -313,17 +351,16 @@ def main():
         with open(cfg_path) as f:
             cfg = json.load(f)
         args.csv_path    = cfg.get('csv_path',    args.csv_path)
+        args.dataset     = cfg.get('dataset',     args.dataset)
         args.seq_len     = cfg.get('seq_len',     args.seq_len)
         args.pred_len    = cfg.get('pred_len',    args.pred_len)
         args.kernel_size = cfg.get('kernel_size', args.kernel_size)
         args.batch_size  = cfg.get('batch_size',  args.batch_size)
-        # 'loss' irrelevant for inference, but kept for label consistency.
         args.loss        = cfg.get('loss',        args.loss)
         args.huber_delta = cfg.get('huber_delta', args.huber_delta)
         print(f'[predict_only] {cfg_path}')
 
     if args.out_dir is None:
-        # Append distinct suffix for non-default loss so runs coexist on disk.
         loss_suffix = {
             'mse':           '',
             'mae_original':  '_lossmae',
@@ -332,7 +369,7 @@ def main():
         }[args.loss]
         args.out_dir = (
             f'DLinear/results/'
-            f'SPX_IV_{args.seq_len}_{args.pred_len}'
+            f'{args.dataset}_SPX_IV_{args.seq_len}_{args.pred_len}'
             f'_DLinear_individual'
             f'_k{args.kernel_size}'
             f'_ep{args.epochs}'
@@ -340,19 +377,22 @@ def main():
         )
     os.makedirs(args.out_dir, exist_ok=True)
 
+    print(f'Dataset    : {args.dataset}')
     print(f'Device     : {device}')
     print(f'Output dir : {args.out_dir}')
 
     print('\nLoading data...')
     X_tr, y_tr, X_va, y_va, X_te, _y_te, test_dates, info, scaler = load_splits(
-        args.csv_path, args.seq_len, args.pred_len,
+        args.csv_path, args.dataset, args.seq_len, args.pred_len,
     )
-    print(f'  T={info["T"]}  '
+    print(f'  T={info["T"]}  n_iv={info["n_iv"]}  '
           f'train={info["train_windows"]}  '
           f'val={info["val_windows"]}  '
           f'test={info["test_windows"]} windows')
+    print(f'  Train ends {info["train_end_date"]}')
 
-    model = DLinear(args.seq_len, args.pred_len, N_IV, args.kernel_size).to(device)
+    n_iv = info['n_iv']
+    model = DLinear(args.seq_len, args.pred_len, n_iv, args.kernel_size).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f'  Parameters: {n_params:,}')
 
@@ -361,21 +401,7 @@ def main():
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
         print(f'  Loaded checkpoint from {ckpt_path}')
     else:
-        # Save reproducibility config alongside the checkpoint.
-        config = {
-            'model':       'DLinear',
-            'csv_path':    args.csv_path,
-            'seq_len':     args.seq_len,
-            'pred_len':    args.pred_len,
-            'kernel_size': args.kernel_size,
-            'epochs':      args.epochs,
-            'batch_size':  args.batch_size,
-            'lr':          args.lr,
-            'patience':    args.patience,
-            'seed':        args.seed,
-            'loss':        args.loss,
-            'huber_delta': args.huber_delta,
-        }
+        config = _build_config(args, info)
         with open(os.path.join(args.out_dir, 'config.json'), 'w') as f:
             json.dump(config, f, indent=2)
 
@@ -392,7 +418,7 @@ def main():
     with torch.no_grad():
         for (xb,) in te_loader:
             preds.append(model(xb.to(device)).cpu().numpy())
-    preds = np.concatenate(preds, axis=0).astype(np.float32)  # [N_test, pred_len, 400]
+    preds = np.concatenate(preds, axis=0).astype(np.float32)
 
     np.save(os.path.join(args.out_dir, 'pred.npy'),        preds)
     np.save(os.path.join(args.out_dir, 'start_dates.npy'), test_dates)

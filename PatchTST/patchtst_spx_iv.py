@@ -5,11 +5,17 @@ PatchTST training script for SPX IV surface forecasting.
 Channel-independent patch-based Transformer with RevIN normalisation.
 All model code is inlined — no dependency on PatchTST-main/.
 
-Outputs (in --out_dir):
-    pred.npy          [N_test, pred_len, 400]  scaled-space predictions
-    start_dates.npy   [N_test]                  datetime64[D] start of each window
+Dataset selection:
+    --dataset full      use the full CSV (default).
+    --dataset precovid  slice to date <= 2019-12-31 before splitting.
+
+Outputs (in --out_dir; default
+`PatchTST/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_PatchTST_pl{pl}_s{s}_dm{dm}_nh{nh}_nl{nl}_ep{ep}{loss_suffix}`):
+    pred.npy          [N_test, pred_len, n_iv]   scaled-space predictions  (gitignored)
+    start_dates.npy   [N_test]                   datetime64[D] start of each window
     train_log.csv     epoch, train_loss, val_loss
     best_model.pt     checkpoint of best validation weights
+    config.json       full hyperparam + split + git record
 """
 
 import argparse
@@ -17,6 +23,7 @@ import csv
 import json
 import os
 import random
+import subprocess
 from typing import Optional
 
 import numpy as np
@@ -28,9 +35,10 @@ from sklearn.preprocessing import StandardScaler
 from torch import Tensor
 from torch.utils.data import DataLoader, TensorDataset
 
-TRAIN_FRAC = 0.70
-TEST_FRAC  = 0.20
-N_IV       = 400
+TRAIN_FRAC       = 0.70
+TEST_FRAC        = 0.20
+PRECOVID_END     = "2019-12-31"
+DATASET_CHOICES  = ["full", "precovid"]
 
 
 # ─── RevIN ────────────────────────────────────────────────────────────────────
@@ -100,7 +108,6 @@ class _ScaledDotProductAttention(nn.Module):
 
     def forward(self, q: Tensor, k: Tensor, v: Tensor,
                 prev: Optional[Tensor] = None) -> tuple:
-        # q: [B, heads, Q, d_k]  k: [B, heads, d_k, S]  v: [B, heads, S, d_v]
         scores = torch.matmul(q, k) * self.scale
         if prev is not None:
             scores = scores + prev
@@ -189,7 +196,7 @@ class _TSTEncoder(nn.Module):
 
 
 class _TSTiEncoder(nn.Module):
-    """Channel-independent encoder: 400 channels processed in parallel."""
+    """Channel-independent encoder: all channels processed in parallel via reshape."""
     def __init__(self, c_in: int, patch_num: int, patch_len: int, d_model: int,
                  n_heads: int, d_ff: int, attn_dropout: float, dropout: float,
                  n_layers: int, res_attention: bool):
@@ -205,13 +212,13 @@ class _TSTiEncoder(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, C, patch_len, patch_num]
         n_vars = x.shape[1]
-        x = x.permute(0, 1, 3, 2)            # [B, C, patch_num, patch_len]
-        x = self.W_P(x)                       # [B, C, patch_num, d_model]
-        u = x.reshape(-1, x.shape[2], x.shape[3])   # [B*C, patch_num, d_model]
+        x = x.permute(0, 1, 3, 2)
+        x = self.W_P(x)
+        u = x.reshape(-1, x.shape[2], x.shape[3])
         u = self.dropout(u + self.W_pos)
-        z = self.encoder(u)                   # [B*C, patch_num, d_model]
-        z = z.reshape(-1, n_vars, z.shape[-2], z.shape[-1])  # [B, C, patch_num, d_model]
-        return z.permute(0, 1, 3, 2)          # [B, C, d_model, patch_num]
+        z = self.encoder(u)
+        z = z.reshape(-1, n_vars, z.shape[-2], z.shape[-1])
+        return z.permute(0, 1, 3, 2)
 
 
 class _FlattenHead(nn.Module):
@@ -222,8 +229,7 @@ class _FlattenHead(nn.Module):
         self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, x: Tensor) -> Tensor:
-        # x: [B, C, d_model, patch_num]
-        return self.dropout(self.linear(self.flatten(x)))  # [B, C, target_window]
+        return self.dropout(self.linear(self.flatten(x)))
 
 
 # ─── Model ────────────────────────────────────────────────────────────────────
@@ -263,17 +269,16 @@ class PatchTST(nn.Module):
         self.head = _FlattenHead(c_in, nf, pred_len, head_dropout)
 
     def forward(self, x: Tensor) -> Tensor:
-        # x: [B, seq_len, C]
         if self.revin:
             x = self.revin_layer(x, "norm")
-        z = x.permute(0, 2, 1)                                              # [B, C, seq_len]
+        z = x.permute(0, 2, 1)
         if self.padding_patch == "end":
-            z = self.padding_patch_layer(z)                                  # [B, C, seq_len + stride]
-        z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)   # [B, C, num_patches, patch_len]
-        z = z.permute(0, 1, 3, 2)                                            # [B, C, patch_len, num_patches]
-        z = self.backbone(z)                                                 # [B, C, d_model, num_patches]
-        z = self.head(z)                                                     # [B, C, pred_len]
-        z = z.permute(0, 2, 1)                                               # [B, pred_len, C]
+            z = self.padding_patch_layer(z)
+        z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+        z = z.permute(0, 1, 3, 2)
+        z = self.backbone(z)
+        z = self.head(z)
+        z = z.permute(0, 2, 1)
         if self.revin:
             z = self.revin_layer(z, "denorm")
         return z
@@ -281,13 +286,24 @@ class PatchTST(nn.Module):
 
 # ─── Data ─────────────────────────────────────────────────────────────────────
 
-def load_splits(csv_path: str, seq_len: int, pred_len: int):
+def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
+    if dataset == "full":
+        return df
+    if dataset == "precovid":
+        end = pd.Timestamp(PRECOVID_END)
+        return df[df["date"] <= end].reset_index(drop=True)
+    raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
+
+
+def load_splits(csv_path: str, dataset: str, seq_len: int, pred_len: int):
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
-    # CSV column order = (tau outer, moneyness inner). Do NOT sort — alphabetical
-    # order scrambles the surface (see VAR1 script for a fuller note).
+    df = _slice_dataset(df, dataset)
+
     iv_cols = [c for c in df.columns if c.startswith("iv_")]
-    assert len(iv_cols) == N_IV
+    if not iv_cols:
+        raise ValueError(f"No iv_* columns found in {csv_path}")
+    n_iv = len(iv_cols)
 
     T = len(df)
     n_train = int(T * TRAIN_FRAC)
@@ -318,15 +334,15 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     test_start_dates = np.array([test_slice_dates[i + seq_len] for i in range(len(X_te))])
 
     return X_tr, y_tr, X_va, y_va, X_te, test_start_dates, dict(
-        T=T, n_train=n_train, n_val=n_val, n_test=n_test,
-        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te)
+        T=T, n_iv=n_iv, n_train=n_train, n_val=n_val, n_test=n_test,
+        train_end_date=str(dates[n_train - 1]),
+        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te),
     )
 
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 
 def _compute_loss(pred, y, loss_kind: str, huber_delta: float = 1.0):
-    """mse: MSE in scaled space. huber_scaled: Huber in scaled space."""
     if loss_kind == "mse":
         return F.mse_loss(pred, y)
     if loss_kind == "huber_scaled":
@@ -378,7 +394,7 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
         else:
             wait += 1
 
-        if epoch % 10 == 0 or epoch == 1:
+        if epoch % 5 == 0 or epoch == 1:
             print(f"  epoch {epoch:4}/{args.epochs}  "
                   f"train={tr_loss:.6f}  val={va_loss:.6f}  best={best_val:.6f}")
 
@@ -391,8 +407,57 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
         w.writeheader(); w.writerows(log_rows)
 
     model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
-    print(f"  best val MSE: {best_val:.6f}")
+    print(f"  best val loss: {best_val:.6f}")
     return model
+
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+
+def _git_commit() -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=2,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _build_config(args, info: dict) -> dict:
+    return {
+        "model":          "PatchTST",
+        "dataset":        args.dataset,
+        "csv_path":       args.csv_path,
+        "seq_len":        args.seq_len,
+        "pred_len":       args.pred_len,
+        "patch_len":      args.patch_len,
+        "stride":         args.stride,
+        "padding_patch":  args.padding_patch,
+        "revin":          args.revin,
+        "revin_affine":   args.revin_affine,
+        "d_model":        args.d_model,
+        "n_heads":        args.n_heads,
+        "n_layers":       args.n_layers,
+        "d_ff":           args.d_ff,
+        "dropout":        args.dropout,
+        "attn_dropout":   args.attn_dropout,
+        "head_dropout":   args.head_dropout,
+        "epochs":         args.epochs,
+        "batch_size":     args.batch_size,
+        "lr":             args.lr,
+        "weight_decay":   args.weight_decay,
+        "patience":       args.patience,
+        "seed":           args.seed,
+        "loss":           args.loss,
+        "huber_delta":    args.huber_delta,
+        "n_iv":           info["n_iv"],
+        "n_train":        info["n_train"],
+        "n_val":          info["n_val"],
+        "n_test":         info["n_test"],
+        "train_end_date": info["train_end_date"],
+        "git_commit":     _git_commit(),
+    }
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -400,24 +465,31 @@ def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device):
 def main():
     ap = argparse.ArgumentParser(description="Train PatchTST on SPX IV surface")
     ap.add_argument("--csv_path",    default="SPX_surfaces.csv")
+    ap.add_argument("--dataset",     default="full", choices=DATASET_CHOICES,
+                    help="full = entire CSV; precovid = dates <= 2019-12-31")
     ap.add_argument("--seq_len",     type=int,   default=21)
     ap.add_argument("--pred_len",    type=int,   default=63)
-    ap.add_argument("--patch_len",   type=int,   default=7)
-    ap.add_argument("--stride",      type=int,   default=7)
-    ap.add_argument("--d_model",     type=int,   default=128)
-    ap.add_argument("--n_heads",     type=int,   default=16)
-    ap.add_argument("--n_layers",    type=int,   default=3)
-    ap.add_argument("--d_ff",        type=int,   default=256)
-    ap.add_argument("--dropout",     type=float, default=0.0)
+    ap.add_argument("--patch_len",   type=int,   default=3)
+    ap.add_argument("--stride",      type=int,   default=3)
+    ap.add_argument("--d_model",     type=int,   default=64)
+    ap.add_argument("--n_heads",     type=int,   default=4)
+    ap.add_argument("--n_layers",    type=int,   default=2)
+    ap.add_argument("--d_ff",        type=int,   default=128)
+    ap.add_argument("--dropout",     type=float, default=0.2)
     ap.add_argument("--attn_dropout",type=float, default=0.0)
-    ap.add_argument("--head_dropout",type=float, default=0.0)
+    ap.add_argument("--head_dropout",type=float, default=0.1)
     ap.add_argument("--padding_patch", default="end",
                     choices=["end", "none"],
                     help="'end' replicates last value stride-times before unfold "
                          "(adds +1 patch). Matches legacy default.")
+    ap.add_argument("--revin", default="on", choices=["on", "off"],
+                    help="Per-window RevIN normalisation. 'off' lets the model see "
+                         "raw scaled inputs (no per-window denorm) — useful when "
+                         "level signal matters for long-horizon forecasts.")
     ap.add_argument("--revin_affine", type=int, default=0,
-                    help="RevIN affine params: 1=on, 0=off (legacy default).")
-    ap.add_argument("--epochs",      type=int,   default=100)
+                    help="RevIN affine params: 1=on, 0=off (legacy default). "
+                         "Only effective when --revin=on.")
+    ap.add_argument("--epochs",      type=int,   default=150)
     ap.add_argument("--batch_size",  type=int,   default=64)
     ap.add_argument("--lr",          type=float, default=1e-4)
     ap.add_argument("--weight_decay",type=float, default=1e-4)
@@ -429,16 +501,14 @@ def main():
                     help="Skip training; load best_model.pt + config.json from --out_dir, "
                          "run inference, write pred.npy.")
     ap.add_argument("--loss",         default="mse",
-                    choices=["mse", "huber_scaled"],
-                    help="Training loss in scaled space.")
-    ap.add_argument("--huber_delta",  type=float, default=1.0,
-                    help="Threshold for huber_scaled (default 1.0 = ~1 stdev).")
+                    choices=["mse", "huber_scaled"])
+    ap.add_argument("--huber_delta",  type=float, default=1.0)
     args = ap.parse_args()
 
     if args.device == "auto":
-        if torch.cuda.is_available():      device = torch.device("cuda")
+        if torch.cuda.is_available():           device = torch.device("cuda")
         elif torch.backends.mps.is_available(): device = torch.device("mps")
-        else:                              device = torch.device("cpu")
+        else:                                   device = torch.device("cpu")
     else:
         device = torch.device(args.device)
 
@@ -454,21 +524,12 @@ def main():
             raise SystemExit(f"--predict_only: need config.json and best_model.pt in {args.out_dir}")
         with open(cfg_path) as f:
             cfg = json.load(f)
-        for k in ("csv_path", "seq_len", "pred_len", "patch_len", "stride",
+        for k in ("csv_path", "dataset", "seq_len", "pred_len", "patch_len", "stride",
                   "d_model", "n_heads", "n_layers", "d_ff",
                   "dropout", "attn_dropout", "head_dropout", "batch_size",
-                  "padding_patch", "revin_affine", "loss", "huber_delta"):
+                  "padding_patch", "revin", "revin_affine", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
-        # Backwards compatibility: configs written before the architectural fix
-        # don't include these fields. Their checkpoints were trained with
-        # padding_patch='none' and RevIN affine=True (the pre-fix defaults).
-        if "padding_patch" not in cfg:
-            args.padding_patch = "none"
-            print("[predict_only] config lacks 'padding_patch'; assuming 'none' (pre-fix)")
-        if "revin_affine" not in cfg:
-            args.revin_affine = 1
-            print("[predict_only] config lacks 'revin_affine'; assuming 1 (pre-fix)")
         print(f"[predict_only] {cfg_path}")
 
     if args.out_dir is None:
@@ -476,27 +537,33 @@ def main():
             "mse":          "",
             "huber_scaled": f"_losshuberscaled_d{args.huber_delta:g}",
         }[args.loss]
-        args.out_dir = (f"PatchTST/results/SPX_IV_{args.seq_len}_{args.pred_len}"
+        revin_suffix = "" if args.revin == "on" else "_norevin"
+        args.out_dir = (f"PatchTST/results/{args.dataset}_SPX_IV_{args.seq_len}_{args.pred_len}"
                         f"_PatchTST_pl{args.patch_len}_s{args.stride}"
                         f"_dm{args.d_model}_nh{args.n_heads}_nl{args.n_layers}"
-                        f"_ep{args.epochs}{loss_suffix}")
+                        f"_ep{args.epochs}{loss_suffix}{revin_suffix}")
     os.makedirs(args.out_dir, exist_ok=True)
 
+    print(f"Dataset    : {args.dataset}")
     print(f"Device     : {device}")
     print(f"Output dir : {args.out_dir}")
 
     print("\nLoading data...")
     X_tr, y_tr, X_va, y_va, X_te, test_dates, info = load_splits(
-        args.csv_path, args.seq_len, args.pred_len)
-    print(f"  T={info['T']}  train={info['train_windows']}  "
+        args.csv_path, args.dataset, args.seq_len, args.pred_len)
+    print(f"  T={info['T']}  n_iv={info['n_iv']}  "
+          f"train={info['train_windows']}  "
           f"val={info['val_windows']}  test={info['test_windows']} windows")
+    print(f"  Train ends {info['train_end_date']}")
 
-    model = PatchTST(N_IV, args.seq_len, args.pred_len,
+    n_iv = info["n_iv"]
+    model = PatchTST(n_iv, args.seq_len, args.pred_len,
                      patch_len=args.patch_len, stride=args.stride,
                      d_model=args.d_model, n_heads=args.n_heads, n_layers=args.n_layers,
                      d_ff=args.d_ff, attn_dropout=args.attn_dropout,
                      dropout=args.dropout, head_dropout=args.head_dropout,
                      padding_patch=args.padding_patch,
+                     revin=(args.revin == "on"),
                      affine=bool(args.revin_affine)).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
@@ -506,31 +573,7 @@ def main():
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
         print(f"  Loaded checkpoint from {ckpt_path}")
     else:
-        config = {
-            "model":         "PatchTST",
-            "csv_path":      args.csv_path,
-            "seq_len":       args.seq_len,
-            "pred_len":      args.pred_len,
-            "patch_len":     args.patch_len,
-            "stride":        args.stride,
-            "padding_patch": args.padding_patch,
-            "revin_affine":  args.revin_affine,
-            "d_model":       args.d_model,
-            "n_heads":       args.n_heads,
-            "n_layers":      args.n_layers,
-            "d_ff":          args.d_ff,
-            "dropout":       args.dropout,
-            "attn_dropout":  args.attn_dropout,
-            "head_dropout":  args.head_dropout,
-            "epochs":        args.epochs,
-            "batch_size":    args.batch_size,
-            "lr":            args.lr,
-            "weight_decay":  args.weight_decay,
-            "patience":      args.patience,
-            "seed":          args.seed,
-            "loss":          args.loss,
-            "huber_delta":   args.huber_delta,
-        }
+        config = _build_config(args, info)
         with open(os.path.join(args.out_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=2)
 

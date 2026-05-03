@@ -1,135 +1,78 @@
 # SPX IV Surface Forecasting
 
-Research project on the SPX implied-volatility surface. Five baselines —
-VAR(1), DLinear, PatchTST, HOT, DynGWN — each compressed into one
-self-contained training script with a uniform input/output contract,
-dispatched via a single `train.py`, and benchmarked by `compare_models.py`.
+Research project on the S&P 500 implied-volatility surface. Per-day surface
+is **170 cells** (10 maturities × 17 call-equivalent deltas Δ); models
+forecast `pred_len=63` days from `seq_len=21` days of context.
 
-**Data**: SPX IV surface, 400 features (20 moneyness × 20 tau), 4191 days.
-**Task**: seq_len=21 → pred_len=63 (1-month context → 3-month horizon).
-**Split**: canonical 70/10/20 (train/val/test) — identical across every model.
-
-## Headline result
-
-`DLinear` trained with **Huber loss** (`--loss huber_scaled --huber_delta 1.0`)
-is the dominant model in the benchmark:
-
-- Best overall Spearman IC (+0.591)
-- Best long-horizon IC at t+63 (+0.433)
-- Matches persistence at t+1 (IC 0.933)
-- MSE 0.147
-
-**The right loss matters more than added architecture.** See `thoughts.md`
-for the full ablation walkthrough and rejected hypotheses.
-
-## Directory layout
+## Data
 
 ```
-fyp/
-├── train.py                       # Master dispatcher
-├── compare_models.py              # Unified evaluation harness
-├── SPX_surfaces.csv               # Raw data (400 iv_* columns + date)
-├── thoughts.md                    # Working brainstorm + ablation history
-│
-├── VAR1/var1_spx_iv.py            # Plain OLS VAR(1)
-├── DLinear/dlinear_spx_iv.py      # Channel-independent DLinear (einsum)
-├── PatchTST/patchtst_spx_iv.py    # Patch-based Transformer + RevIN
-├── HOT/hot_spx_iv.py              # Kronecker-attention transformer
-├── DynGWN/dyngwn_spx_iv.py        # Graph WaveNet
-│
-└── comparison_results/            # Compare-models CSV/JSON outputs
+SPX_surfaces.csv     date, iv_T30_D10 … iv_T730_D90   (170 IV cells)
+SPX_dispersion.csv   date, disp_T30_D10 … disp_T730_D90
+SPX_underlying.csv   date, underlying_price
 ```
 
-Each `*_spx_iv.py` script inlines every model definition — there is no
-shared model/util library. Each script can be deleted without affecting
-the others.
+Built from OptionMetrics IvyDB by `data_prep/preprocess_volatility_surface.py`.
+Column ordering is **locked** (maturities outer, Δ inner) — do not re-sort.
 
-## Data contract (every script)
+| Dataset      | Date range                  | Rows |
+|--------------|-----------------------------|------|
+| `full`       | 2009-01-02 → 2025-08-29     | 4191 |
+| `precovid`   | 2009-01-02 → 2019-12-31     | 2768 |
 
-1. Load `SPX_surfaces.csv`. **Use CSV column order as-is** — do NOT sort
-   alphabetically (alphabetical sort scrambles the 20×20 surface and breaks
-   cross-sectional alignment with `compare_models.py`).
-2. Canonical split: `n_train = int(T*0.70)`, `n_test = int(T*0.20)`,
-   `n_val = T - n_train - n_test`.
-3. Fit `StandardScaler` on `iv[:n_train]`, transform all rows.
-4. Window: train uses `[0, n_train)`, val uses `[n_train-seq_len, n_train+n_val)`,
-   test uses `[T-n_test-seq_len, T)`.
-5. Test predictions saved as `pred.npy` in **scaled space**.
-6. Test window start dates saved as `start_dates.npy` (datetime64[D]).
-7. Hyperparameters saved as `config.json`; checkpoint saved as `best_model.pt`.
+Datasets are not separate files: every script accepts
+`--dataset {full,precovid}` and slices the CSV in-place. The 70/10/20 split
+is computed **on the slice**, so `precovid` train ends 2016-09-12 and test
+runs 2017-10 → 2019-10.
 
-## Output format
+## Models
 
-All `pred.npy` files are float32 in scaled space.
+| Model    | Script                            | New-data status |
+|----------|-----------------------------------|-----------------|
+| VAR(1)   | `VAR1/var1_spx_iv.py`             | **ported**      |
+| DLinear  | `DLinear/dlinear_spx_iv.py`       | needs port (170 + dataset flag) |
+| PatchTST | `PatchTST/patchtst_spx_iv.py`     | needs port (170 + dataset flag) |
+| HOT      | `HOT/hot_spx_iv.py`               | needs port (10×17 reshape + dataset flag) |
+| DynGWN   | `DynGWN/dyngwn_spx_iv.py`         | deferred — uses different loss space |
 
-| Script | pred.npy shape | Loader in compare_models |
-|--------|----------------|--------------------------|
-| var1, dlinear, patchtst, dyngwn | `[N, 63, 400]` | `flat` |
-| hot | `[N, 20, 20, 63]` | `hot` (F-order reshape to flat) |
-
-HOT is the only tensorized model; F-order reshape is correct because the CSV
-column `k = i_tau*20 + i_mono` and HOT uses `H=moneyness, W=tau`.
+All ported scripts derive `n_iv` from the CSV and respect the same I/O contract
+(see below).
 
 ## Workflow
 
 ### Train
 
 ```bash
-# Train every model. `hot` expands to BOTH kronecker_product and kronecker_sum
-# unless --attention_type is given.
-python train.py --models all --device cuda
+# Full dataset
+python VAR1/var1_spx_iv.py --seq_len 21 --pred_len 63
 
-# Subset
-python train.py --models var1 dlinear patchtst
-
-# Override a hyperparameter (only routed if the target model accepts it)
-python train.py --models hot --attention_type kronecker_sum --epochs 200
-python train.py --models dyngwn --nhid 64 --graph_mode adaptive_only
-
-# Loss-function ablation (--loss / --huber_delta)
-python train.py --models dlinear --loss huber_scaled --huber_delta 1.0
-python train.py --models dlinear --loss mae_original
-python train.py --models dyngwn  --loss huber_original --huber_delta 0.02
+# Precovid (2009 → 2019-12-31)
+python VAR1/var1_spx_iv.py --dataset precovid --seq_len 21 --pred_len 63
 ```
 
-Available `--loss` choices vary per model:
-- DLinear: `mse` (default), `mae_original`, `mae_scaled`, `huber_scaled`
-- PatchTST, HOT: `mse` (default), `huber_scaled`
-- DynGWN: `mae_original` (default, matches legacy), `huber_original`
-- VAR1: no loss option (closed-form OLS)
-
-Notes on the loss families:
-- `mse` / `huber_scaled` — operate in scaled space; `huber_delta` (default 1.0)
-  is in stdev units.
-- `mae_original` / `huber_original` — inverse-transform model output and
-  compare against raw IV; `huber_delta` is in vol-points (~0.02 = 2 pts).
-- `mae_scaled` — plain MAE in scaled space (uniform per-channel weighting).
-
-Each model script writes to its own `<Model>/results/<auto-named-dir>/`:
-- `pred.npy`         — scaled-space predictions (gitignored)
-- `start_dates.npy`  — alignment dates
-- `config.json`      — full hyperparam record (used for `--predict_only`)
-- `best_model.pt`    — checkpoint of best validation epoch (neural models only)
-- `train_log.csv`    — per-epoch train/val loss
+`train.py` (master dispatcher) is currently calibrated to the old 400-cell
+layout and will be re-wired alongside the model ports. For now invoke
+each model script directly.
 
 ### Compare
 
 ```bash
-python compare_models.py
+python compare_models.py --dataset precovid --seq_len 21 --pred_len 63
 ```
 
-For every model in `MODELS`, finds the most-recent matching results dir.
+For every model in the registry, finds the most-recent matching
+`{dataset}_SPX_IV_{seq_len}_{pred_len}_*` dir.
 - If `pred.npy` is present → load it.
 - Else if `config.json` (+ `best_model.pt` for neural) exists → call the
   script's `--predict_only` mode to regenerate `pred.npy`, then load it.
-- Else → skip the model with a clear reason.
+- Else → skip the model with a clear reason (verbose).
 
-Persistence baseline `Persist(ref)` is computed live from the CSV inside
-`build_reference()` — not a separate model entry.
+`Persist(ref)` is computed live from the CSV inside `build_reference()` —
+not a separate model entry.
 
-Metrics (all in scaled space): MSE, RMSE, MAE, RSE, signed bias, directional
-accuracy, Spearman rank-IC (mean and std over 400 features per window-step).
-Per-horizon breakdown at t+{1, 5, 10, 21, 42, 63}.
+After scoring, each model gets a self-describing `metrics_test.json` written
+**into its own results dir** so a single model can be inspected without
+re-running the whole comparison.
 
 ### Predict-only (regenerate pred.npy from a checkpoint)
 
@@ -137,103 +80,61 @@ Per-horizon breakdown at t+{1, 5, 10, 21, 42, 63}.
 python <script> --predict_only --out_dir <existing-dir>
 ```
 
-The script reads `config.json`, rebuilds the model with the saved
-hyperparameters, loads `best_model.pt`, runs inference, writes `pred.npy`.
-Used automatically by `compare_models.py` when a `pred.npy` is missing.
+Reads `config.json`, rebuilds the model with saved hyperparameters, loads
+`best_model.pt`, runs inference, writes `pred.npy`. Used automatically by
+`compare_models.py` when `pred.npy` is missing. VAR1 has no checkpoint;
+`--predict_only` re-fits OLS in ~2 seconds.
 
-VAR1 has no checkpoint; `--predict_only` re-fits OLS from the CSV (~2 sec).
+## I/O contract (every model script)
 
-> **Bias-correction note:** an earlier ablation tried a static per-channel
-> offset fit on val and applied at test. It *over-corrected* due to regime
-> drift between val (~2021-22) and test (2022-04 → 2025-06, includes the
-> 2022-23 vol regime change). Naive bias correction is not part of the
-> recommended pipeline. See `thoughts.md`.
+Result dir: `MODEL/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_MODEL[_extras]/`
+
+| File             | In git? | Purpose                                                  |
+|------------------|---------|----------------------------------------------------------|
+| `config.json`    | ✓       | Hyperparams + dataset + n_train/val/test + train_end_date + git_commit + seed |
+| `best_model.pt`  | ✓       | Checkpoint of best validation epoch (neural only)        |
+| `start_dates.npy`| ✓       | `[N_test]` window-start datetime64[D] for date alignment |
+| `train_log.csv`  | ✓       | Per-epoch train/val loss                                 |
+| `pred.npy`       | ✗       | `[N_test, pred_len, n_iv]` scaled-space predictions      |
+| `metrics_test.json` | ✓    | Full test scoreboard for this one model (written by `compare_models`) |
+
+Predictions are float32 in scaled space (StandardScaler fit on train).
+HOT (when ported) saves `[N_test, H, W, pred_len]` with `H*W = n_iv`.
 
 ## Colab roundtrip
 
 ```bash
 # On Colab
 git pull
-python train.py --models all --device cuda
-git add -A && git commit -m "trained" && git push
+python <model_script> --dataset precovid --device cuda
+git add VAR1/results/<dir>/{config.json,best_model.pt,start_dates.npy,train_log.csv}
+git commit -m "trained" && git push
 
 # Locally
 git pull
-python compare_models.py    # auto-regens missing pred.npy from checkpoints
+python compare_models.py --dataset precovid    # auto-regens missing pred.npy
 ```
 
-`pred.npy` files (~75 MB each) are gitignored; only the small artifacts
-(`config.json`, `best_model.pt`, `start_dates.npy`, `train_log.csv`) move
+`pred.npy` (~20 MB per model) is gitignored; only the small artefacts move
 through git, and predictions are reconstituted locally on demand.
 
-## Model architectures — fidelity to legacy implementations
+## Implementation notes
 
-Each standalone script reproduces the architecture of its reference
-implementation (PatchTST-main, HOT/src, DynGWN/model.py) module for module.
-Architectural details:
-
-- **VAR1**: global VAR(1) by ordinary least squares with intercept on the
-  scaled training set. **No regularisation, no tuning** — kept simple to
-  match the "no-tuning" treatment of the neural models.
-- **DLinear**: channel-independent decomposition (boundary-padded moving
-  average, `kernel_size=13`) + per-channel linear maps for trend and
-  seasonality. Vectorised einsum over channels (~100× faster than the
-  per-channel `ModuleList` of the original repo, mathematically identical).
-- **PatchTST**: full backbone inlined — RevIN, channel-independent encoder,
-  residual scaled-dot-product attention with learnable scale, BatchNorm
-  pre/post sublayers, GELU FFN. Faithful to legacy defaults:
-  `padding_patch='end'` (replicates the last value `stride` times before
-  unfolding, gives `patch_num+1` patches), RevIN `affine=False`. The
-  `--padding_patch none` and `--revin_affine 1` overrides exist for ablation.
-- **HOT**: full block inlined — RotaryEmbedding (default `--pe rope`,
-  applied on the temporal dim via `rope_dims=[3]`), RMSNorm, SwiGLU FFN,
-  KroneckerAttention with `num_modes=3` (H, W, time-patches). Defaults
-  match `HOT/src/models/ts_tensor.py`. `--pe nope` disables RoPE.
-- **DynGWN**: WaveNet-style dilated temporal convolutions + graph
-  convolution at each step, with adaptive adjacency (`nodevec1 @ nodevec2`)
-  and optionally a fixed 4-neighbor moneyness×tau grid adjacency
-  (`--graph_mode grid_plus_adaptive`, default; matches legacy run).
-  `--graph_mode adaptive_only` drops the grid. Receptive field 13 with
-  blocks=4, layers=2, kernel=2. The legacy `dynamic_gcn_bool` mode (sliding
-  correlation matrices) is NOT ported because the SPX runs always had it off.
-- **DynGWN training loss**: matches legacy `engine.py` —
-  `masked_mae(scaler.inverse_transform(model_output), y_original)` in the
-  ORIGINAL IV space. Inputs `x` are scaled; targets `y` are kept in
-  original space; the model output is inverse-transformed inside the loss.
-  `pred.npy` is still saved in scaled space (compare_models contract).
-  `--loss huber_original` switches MAE → Huber while keeping the same
-  loss-space.
-
-## Recommended configuration (this benchmark)
-
-```bash
-python train.py --models dlinear --loss huber_scaled --huber_delta 1.0
-```
-
-Best overall IC, best long-horizon IC, matches persistence at t+1, lowest MSE.
-
-## Implementation details
-
-- **Train-only scaler**: every script fits `StandardScaler` on `iv[:n_train]`.
-  Means/stds are not persisted — they are re-derived deterministically from
-  the CSV. DynGWN's training loop additionally retains the scaler in memory
-  to inverse-transform model output for the masked-MAE loss.
-- **HOT reshape**: `iv.reshape(-1, 20, 20, order='F')` maps CSV column k to
-  `[i_mono, i_tau]`. Cross-checked against `compare_models.load_hot`.
-- **No alphabetical sort of `iv_*` columns**. The CSV is already sorted as
-  (tau outer, moneyness inner); alphabetical sort breaks this because
-  `'iv_0.9105_0.04'` sorts before `'iv_0.9_0.04'` (`'1' < '_'`). Sorting was
-  the original cause of a 4× IC collapse in early runs. Don't reintroduce.
-- **Test windows from CSV**: `n_test = int(T*0.20)`, first prediction date
-  index = `T - n_test`. Yields 776 test windows for T=4191.
+- **No alphabetical sort of `iv_*` columns.** The CSV is sorted (maturities
+  outer, Δ inner); the integer-encoded names (`iv_T30_D10`, …) avoid the
+  alphabetical-sort bug that plagued the legacy moneyness-grid layout.
+- **Train-only scaler:** every script fits `StandardScaler` on `iv[:n_train]`.
+  Scaler params are not persisted — they are re-derived from the CSV using
+  the dataset and the same split formula recorded in `config.json`.
+- **Dataset slice happens before the split.** Precovid train/val/test sizes
+  are computed on the 2768-row slice, not on a percentage of the full CSV.
 
 ## Editing rules
 
 - Don't reintroduce shared model code across scripts. Each `_spx_iv.py`
   must be deletable without affecting the others.
 - Keep the data pipeline in every script byte-identical (CSV column order,
-  same border formula, same scaler). If you change one, change all five.
-- New result paths must match the `regen_dir` glob in `compare_models.MODELS`.
-- HOT must save `[N, H, W, pred_len]`; flat models save `[N, pred_len, 400]`.
-- When training, always emit `config.json` alongside `best_model.pt` so
-  `--predict_only` and `compare_models.py` auto-regen still work.
+  same border formula, same scaler). If you change one, change all.
+- New result paths must match the registry glob in `compare_models.MODELS`.
+- Always emit `config.json` alongside `best_model.pt` so `--predict_only`
+  and `compare_models` auto-regen still work.

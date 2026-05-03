@@ -7,22 +7,46 @@ All model code is inlined — no dependency on the legacy DynGWN/ pipeline files
 Architecture:
   - WaveNet-style dilated temporal convolutions (blocks=4, layers=2, kernel_size=2)
   - Graph convolution at each WaveNet step using one or two supports:
-        graph_mode='grid_plus_adaptive'  (default, matches legacy run):
-            [4-neighbor moneyness×tau grid, learned adaptive (nodevec1 @ nodevec2)]
+        graph_mode='grid_plus_adaptive'  (default):
+            [4-neighbor (tau, delta) grid, learned adaptive (nodevec1 @ nodevec2)]
         graph_mode='adaptive_only':
             [learned adaptive only]
 
-Training loss (matches legacy engine.py): masked_mae on inverse-transformed
-predictions vs ground truth in ORIGINAL IV space. Inputs (x) are scaled by
-StandardScaler; targets (y) stay in original space; the model output is
-inverse-transformed inside the loss. pred.npy is still saved in scaled space
-(compare_models contract).
+Grid layout for the 170-cell SPX surface:
+    H = TAU   = 10  (OUTER axis: maturities 30, 60, 91, 122, 152, 182, 273, 365, 547, 730d)
+    W = DELTA = 17  (INNER axis: call-equivalent delta 0.10 → 0.90 in 0.05 steps)
+    nid(r, c) = r·W + c = i_T·17 + i_D = csv_col(i_T, i_D)        ← matches CSV order
+    Row-neighbour edge ↔ adjacent maturity at same delta;
+    Column-neighbour edge ↔ adjacent delta at same maturity.
+NOTE: this is a corrected mapping vs the legacy 20×20 grid script, where the
+H_MONO/W_TAU variable names did not match the actual `nid = r·w+c` ordering.
+For non-square grids that mismatch matters; we fix it here explicitly.
 
-Outputs (in --out_dir):
-    pred.npy          [N_test, pred_len, 400]  scaled-space predictions
-    start_dates.npy   [N_test]                  datetime64[D] start of each window
+Loss menu (`--loss`):
+    mse              (default)  — MSE in scaled space (StandardScaler-fit on train).
+                                  Apples-to-apples with DLinear/PatchTST/HOT/VAR.
+    huber_scaled                — Huber in scaled space (δ in stdev units).
+    mae_original    (legacy)    — masked-MAE on inverse-transformed pred vs y in
+                                  ORIGINAL IV space. Up-weights high-vol cells.
+                                  Reproduces legacy DynGWN/engine.py.
+    huber_original  (legacy)    — Huber on inverse-transformed pred vs y in
+                                  ORIGINAL IV space (δ in vol-points).
+
+The model output (and pred.npy) is always in scaled space — the original-space
+losses denorm internally inside `_compute_loss`. compare_models.py contract
+unchanged.
+
+Dataset selection:
+    --dataset full      use the full CSV (default).
+    --dataset precovid  slice to date <= 2019-12-31 before splitting.
+
+Outputs (in --out_dir; default
+`DynGWN/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_DynGWN_{graph_mode}_nh{nh}_b{b}_l{l}_ep{ep}{loss_suffix}`):
+    pred.npy          [N_test, pred_len, n_iv]   scaled-space predictions  (gitignored)
+    start_dates.npy   [N_test]                   datetime64[D] start of each window
     train_log.csv     epoch, train_loss, val_loss
     best_model.pt     checkpoint of best validation weights
+    config.json       full hyperparam + split + git record
 """
 
 import argparse
@@ -30,6 +54,7 @@ import csv
 import json
 import os
 import random
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -39,11 +64,13 @@ import torch.nn.functional as F
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-TRAIN_FRAC = 0.70
-TEST_FRAC  = 0.20
-N_IV       = 400
-H_MONO     = 20   # moneyness axis
-W_TAU      = 20   # tau axis
+TRAIN_FRAC       = 0.70
+TEST_FRAC        = 0.20
+PRECOVID_END     = "2019-12-31"
+DATASET_CHOICES  = ["full", "precovid"]
+H_TAU            = 10    # tau axis (grid H dim, OUTER — matches CSV outer index)
+W_DELTA          = 17    # delta axis (grid W dim, INNER — matches CSV inner index)
+N_IV_EXPECTED    = H_TAU * W_DELTA   # 170; checked against CSV at load time
 
 
 # ─── Loss (legacy masked_mae from DynGWN/util.py) ─────────────────────────────
@@ -65,9 +92,16 @@ def masked_mae(preds: torch.Tensor, labels: torch.Tensor, null_val=float("nan"))
 
 # ─── Static grid adjacency ────────────────────────────────────────────────────
 
-def _make_grid_adjacency(h: int = H_MONO, w: int = W_TAU,
+def _make_grid_adjacency(h: int = H_TAU, w: int = W_DELTA,
                          self_loops: bool = True) -> np.ndarray:
-    """4-neighbor adjacency over a flattened H×W grid (matches legacy generator)."""
+    """
+    4-neighbor adjacency over a flattened H×W grid with `nid(r, c) = r·w + c`.
+
+    With h=H_TAU=10 and w=W_DELTA=17, node indices match CSV column ordering
+    `csv_col(i_T, i_D) = i_T·17 + i_D`. Row neighbours = adjacent maturities,
+    column neighbours = adjacent deltas. Both are real surface-smoothness
+    relationships.
+    """
     n = h * w
     A = np.zeros((n, n), dtype=np.float32)
     nid = lambda r, c: r * w + c
@@ -134,10 +168,10 @@ class DynGWN(nn.Module):
     """
     WaveNet + adaptive graph convolution.
 
-    Input:  [B, in_dim=1, num_nodes=400, seq_len=21]  (padded +1 inside forward)
-    Output: [B, pred_len=63, num_nodes=400, 1]
+    Input:  [B, in_dim=1, num_nodes=170, seq_len=21]  (padded +1 inside forward)
+    Output: [B, pred_len=63, num_nodes=170, 1]        (in scaled space)
     """
-    def __init__(self, num_nodes: int = 400, dropout: float = 0.3,
+    def __init__(self, num_nodes: int = N_IV_EXPECTED, dropout: float = 0.3,
                  in_dim: int = 1, seq_len: int = 21, pred_len: int = 63,
                  nhid: int = 32, kernel_size: int = 2,
                  blocks: int = 4, layers: int = 2,
@@ -151,8 +185,6 @@ class DynGWN(nn.Module):
         end_channels  = nhid * 16
         order         = 2
 
-        # static_supports: list of fixed [N, N] adjacencies registered as buffers.
-        # Adaptive adjacency adds one more support, computed at every forward.
         self.static_supports = static_supports or []
         for i, sup in enumerate(self.static_supports):
             self.register_buffer(f"static_support_{i}", sup, persistent=False)
@@ -160,7 +192,7 @@ class DynGWN(nn.Module):
 
         self.start_conv = nn.Conv2d(in_dim, nhid, kernel_size=(1, 1))
 
-        # Adaptive adjacency node vectors
+        # Adaptive adjacency node vectors (rank-10 low-rank embedding)
         self.nodevec1 = nn.Parameter(torch.randn(num_nodes, 10))
         self.nodevec2 = nn.Parameter(torch.randn(10, num_nodes))
 
@@ -242,19 +274,32 @@ class DynGWN(nn.Module):
 
 # ─── Data ─────────────────────────────────────────────────────────────────────
 
-def load_splits(csv_path: str, seq_len: int, pred_len: int):
+def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
+    if dataset == "full":
+        return df
+    if dataset == "precovid":
+        end = pd.Timestamp(PRECOVID_END)
+        return df[df["date"] <= end].reset_index(drop=True)
+    raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
+
+
+def load_splits(csv_path: str, dataset: str, seq_len: int, pred_len: int):
     """
-    Returns x in SCALED space (input to model), y in ORIGINAL IV space (loss target).
-    The legacy loss inverse-transforms model output before computing masked_mae,
-    so y must remain in the original (un-scaled) space.
+    Returns BOTH x and y in SCALED space (uniform with VAR/DLinear/PatchTST/HOT).
+    Original-space losses (mae_original, huber_original) denorm internally inside
+    `_compute_loss`; nothing else needs the raw IV values.
     """
     df = pd.read_csv(csv_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"])
-    # CSV column order = (tau outer, moneyness inner). Do NOT sort — alphabetical
-    # order scrambles the surface and breaks cross-sectional alignment with
-    # compare_models.py (which uses CSV order).
+    df = _slice_dataset(df, dataset)
+
     iv_cols = [c for c in df.columns if c.startswith("iv_")]
-    assert len(iv_cols) == N_IV
+    n_iv = len(iv_cols)
+    if n_iv != N_IV_EXPECTED:
+        raise ValueError(
+            f"DynGWN expects {N_IV_EXPECTED} = {H_TAU}×{W_DELTA} iv_ columns; "
+            f"found {n_iv}. Update H_TAU/W_DELTA if the data spec changed."
+        )
 
     T = len(df)
     n_train = int(T * TRAIN_FRAC)
@@ -264,18 +309,17 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     b1 = [0,           n_train - seq_len,  T - n_test - seq_len]
     b2 = [n_train,     n_train + n_val,    T]
 
-    iv_raw = df[iv_cols].to_numpy(dtype=np.float32)               # original space
+    iv_raw = df[iv_cols].to_numpy(dtype=np.float32)
     scaler = StandardScaler().fit(iv_raw[b1[0]:b2[0]])
-    iv_sc  = scaler.transform(iv_raw).astype(np.float32)           # scaled space
+    iv_sc  = scaler.transform(iv_raw).astype(np.float32)
     dates  = df["date"].to_numpy(dtype="datetime64[D]")
 
     def _windows(start, end):
-        sl_x = iv_sc[start:end]                                     # scaled  → x
-        sl_y = iv_raw[start:end]                                    # original → y
-        n  = len(sl_x) - seq_len - pred_len + 1
-        # X: [N, seq_len, 400, 1]   y: [N, pred_len, 400, 1]
-        X = np.stack([sl_x[i        : i+seq_len,    :, None] for i in range(n)])
-        y = np.stack([sl_y[i+seq_len : i+seq_len+pred_len, :, None] for i in range(n)])
+        sl = iv_sc[start:end]                                       # SCALED for both x and y
+        n  = len(sl) - seq_len - pred_len + 1
+        # X: [N, seq_len, nodes, 1]   y: [N, pred_len, nodes, 1]
+        X = np.stack([sl[i        : i+seq_len,    :, None] for i in range(n)])
+        y = np.stack([sl[i+seq_len : i+seq_len+pred_len, :, None] for i in range(n)])
         return X.astype(np.float32), y.astype(np.float32)
 
     X_tr, y_tr = _windows(b1[0], b2[0])
@@ -285,8 +329,11 @@ def load_splits(csv_path: str, seq_len: int, pred_len: int):
     test_slice_dates = dates[b1[2]:b2[2]]
     test_start_dates = np.array([test_slice_dates[i + seq_len] for i in range(len(X_te))])
 
-    info = dict(T=T, n_train=n_train, n_val=n_val, n_test=n_test,
-                train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te))
+    info = dict(
+        T=T, n_iv=n_iv, n_train=n_train, n_val=n_val, n_test=n_test,
+        train_end_date=str(dates[n_train - 1]),
+        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te),
+    )
     return X_tr, y_tr, X_va, y_va, X_te, test_start_dates, info, scaler
 
 
@@ -299,28 +346,36 @@ def _make_loader(X: np.ndarray, y: np.ndarray,
                       shuffle=shuffle, num_workers=0)
 
 
-# ─── Training ─────────────────────────────────────────────────────────────────
+# ─── Loss ─────────────────────────────────────────────────────────────────────
 
-def _denorm(out_scaled: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
-    """Inverse-transform [B, nodes, pred] scaled output to original space."""
-    # mean/std are [nodes] → broadcast over [B, nodes, pred].
-    return out_scaled * std.view(1, -1, 1) + mean.view(1, -1, 1)
+def _denorm(x_scaled: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+    """Inverse-transform [B, nodes, pred] scaled tensor to original IV space."""
+    return x_scaled * std.view(1, -1, 1) + mean.view(1, -1, 1)
 
 
-def _compute_loss(pred, real, loss_kind: str, huber_delta: float = 0.02):
+def _compute_loss(pred_scaled: torch.Tensor, real_scaled: torch.Tensor,
+                  mean: torch.Tensor, std: torch.Tensor,
+                  loss_kind: str, huber_delta: float) -> torch.Tensor:
     """
-    DynGWN losses operate in ORIGINAL IV space (pred and real are inverse-
-    transformed before this is called):
-      mae_original   — masked-MAE (legacy default).
-      huber_original — Huber/smooth-L1 with threshold `huber_delta`. δ should
-                        be on the order of typical IV-space errors (default 0.02).
+    Loss menu:
+      mse / huber_scaled              — operate on (pred_scaled, real_scaled).
+      mae_original / huber_original   — denorm both pred and real, then compare in
+                                        original IV space (vol-points).
     """
+    if loss_kind == "mse":
+        return F.mse_loss(pred_scaled, real_scaled)
+    if loss_kind == "huber_scaled":
+        return F.smooth_l1_loss(pred_scaled, real_scaled, beta=huber_delta)
+    pred_orig = _denorm(pred_scaled, mean, std)
+    real_orig = _denorm(real_scaled, mean, std)
     if loss_kind == "mae_original":
-        return masked_mae(pred, real, null_val=float("nan"))
+        return masked_mae(pred_orig, real_orig, null_val=float("nan"))
     if loss_kind == "huber_original":
-        return F.smooth_l1_loss(pred, real, beta=huber_delta)
+        return F.smooth_l1_loss(pred_orig, real_orig, beta=huber_delta)
     raise ValueError(f"unknown loss_kind: {loss_kind!r}")
 
+
+# ─── Training ─────────────────────────────────────────────────────────────────
 
 def _epoch(model, loader, opt, device, mean, std, loss_kind, huber_delta, clip: float = 5.0):
     model.train()
@@ -329,9 +384,8 @@ def _epoch(model, loader, opt, device, mean, std, loss_kind, huber_delta, clip: 
         xb, yb = xb.to(device), yb.to(device)
         out  = model(xb)                                    # [B, pred, nodes, 1] scaled
         out  = out.squeeze(-1).permute(0, 2, 1)             # [B, nodes, pred] scaled
-        pred = _denorm(out, mean, std)                      # [B, nodes, pred] original
-        real = yb[:, 0, :, :]                               # [B, nodes, pred] original
-        loss = _compute_loss(pred, real, loss_kind, huber_delta)
+        real = yb[:, 0, :, :]                               # [B, nodes, pred] scaled
+        loss = _compute_loss(out, real, mean, std, loss_kind, huber_delta)
         opt.zero_grad(); loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), clip)
         opt.step()
@@ -346,9 +400,8 @@ def _val_loss(model, loader, device, mean, std, loss_kind, huber_delta):
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
         out  = model(xb).squeeze(-1).permute(0, 2, 1)
-        pred = _denorm(out, mean, std)
         real = yb[:, 0, :, :]
-        total += _compute_loss(pred, real, loss_kind, huber_delta).item() * len(xb)
+        total += _compute_loss(out, real, mean, std, loss_kind, huber_delta).item() * len(xb)
         n     += len(xb)
     return total / n
 
@@ -357,7 +410,7 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
     tr_loader = _make_loader(X_tr, y_tr, args.batch_size, shuffle=True)
     va_loader = _make_loader(X_va, y_va, args.batch_size, shuffle=False)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    mean = torch.tensor(scaler.mean_, dtype=torch.float32, device=device)
+    mean = torch.tensor(scaler.mean_,  dtype=torch.float32, device=device)
     std  = torch.tensor(scaler.scale_, dtype=torch.float32, device=device)
 
     best_val, wait = float("inf"), 0
@@ -375,7 +428,7 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
         else:
             wait += 1
 
-        if epoch % 25 == 0 or epoch == 1:
+        if epoch % 5 == 0 or epoch == 1:
             print(f"  epoch {epoch:4}/{args.epochs}  "
                   f"train={tr_loss:.6f}  val={va_loss:.6f}  best={best_val:.6f}")
 
@@ -388,8 +441,53 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
         w.writeheader(); w.writerows(log_rows)
 
     model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
-    print(f"  best val masked-MAE: {best_val:.6f}")
+    print(f"  best val loss ({args.loss}): {best_val:.6f}")
     return model
+
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+
+def _git_commit() -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=2,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _build_config(args, info: dict) -> dict:
+    return {
+        "model":          "DynGWN",
+        "dataset":        args.dataset,
+        "csv_path":       args.csv_path,
+        "seq_len":        args.seq_len,
+        "pred_len":       args.pred_len,
+        "graph_mode":     args.graph_mode,
+        "nhid":           args.nhid,
+        "blocks":         args.blocks,
+        "layers":         args.layers,
+        "kernel_size":    args.kernel_size,
+        "dropout":        args.dropout,
+        "epochs":         args.epochs,
+        "batch_size":     args.batch_size,
+        "lr":             args.lr,
+        "weight_decay":   args.weight_decay,
+        "patience":       args.patience,
+        "seed":           args.seed,
+        "loss":           args.loss,
+        "huber_delta":    args.huber_delta,
+        "n_iv":           info["n_iv"],
+        "h_tau":          H_TAU,
+        "w_delta":        W_DELTA,
+        "n_train":        info["n_train"],
+        "n_val":          info["n_val"],
+        "n_test":         info["n_test"],
+        "train_end_date": info["train_end_date"],
+        "git_commit":     _git_commit(),
+    }
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -397,12 +495,14 @@ def train(model, X_tr, y_tr, X_va, y_va, scaler, args, out_dir, device):
 def main():
     ap = argparse.ArgumentParser(description="Train DynGWN on SPX IV surface")
     ap.add_argument("--csv_path",     default="SPX_surfaces.csv")
+    ap.add_argument("--dataset",      default="full", choices=DATASET_CHOICES,
+                    help="full = entire CSV; precovid = dates <= 2019-12-31")
     ap.add_argument("--seq_len",      type=int,   default=21)
     ap.add_argument("--pred_len",     type=int,   default=63)
     ap.add_argument("--graph_mode",   default="grid_plus_adaptive",
                     choices=["grid_plus_adaptive", "adaptive_only"],
-                    help="grid_plus_adaptive (legacy default) adds a fixed 4-neighbor "
-                         "moneyness×tau grid to the learned adaptive adjacency.")
+                    help="grid_plus_adaptive (default) adds a fixed 4-neighbor "
+                         "(tau, delta) grid to the learned adaptive adjacency.")
     ap.add_argument("--nhid",         type=int,   default=32,
                     help="Residual and dilation channels (skip=nhid*8, end=nhid*16)")
     ap.add_argument("--blocks",       type=int,   default=4)
@@ -420,13 +520,14 @@ def main():
     ap.add_argument("--predict_only", action="store_true",
                     help="Skip training; load best_model.pt + config.json from --out_dir, "
                          "run inference, write pred.npy.")
-    ap.add_argument("--loss",         default="mae_original",
-                    choices=["mae_original", "huber_original"],
-                    help="Training loss in ORIGINAL IV space (model output is "
-                         "inverse-transformed before computing the loss). "
-                         "Default mae_original matches legacy DynGWN engine.py.")
+    ap.add_argument("--loss",         default="mse",
+                    choices=["mse", "huber_scaled", "mae_original", "huber_original"],
+                    help="Default `mse` (scaled space, apples-to-apples with the "
+                         "rest of the benchmark). `mae_original`/`huber_original` "
+                         "reproduce the legacy DynGWN loss in vol-points.")
     ap.add_argument("--huber_delta",  type=float, default=0.02,
-                    help="Threshold for huber_original; in IV vol-points (default 0.02 = 2 vol pts).")
+                    help="Threshold for huber_*: ~stdev units for huber_scaled, "
+                         "vol-points for huber_original (default 0.02 = 2 vol pts).")
     args = ap.parse_args()
 
     if args.device == "auto":
@@ -448,45 +549,48 @@ def main():
             raise SystemExit(f"--predict_only: need config.json and best_model.pt in {args.out_dir}")
         with open(cfg_path) as f:
             cfg = json.load(f)
-        for k in ("csv_path", "seq_len", "pred_len", "graph_mode", "nhid",
-                  "blocks", "layers", "kernel_size", "dropout", "batch_size",
-                  "loss", "huber_delta"):
+        for k in ("csv_path", "dataset", "seq_len", "pred_len", "graph_mode",
+                  "nhid", "blocks", "layers", "kernel_size", "dropout",
+                  "batch_size", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
-        # Backwards compat: configs from before --loss was added used
-        # mae_original implicitly. Keep that as the fallback.
-        if "loss" not in cfg:
-            args.loss = "mae_original"
         print(f"[predict_only] {cfg_path}")
 
     if args.out_dir is None:
-        # Default loss (mae_original) keeps the historical no-suffix dir name,
-        # so existing trained checkpoints continue to resolve cleanly.
         loss_suffix = {
-            "mae_original":   "",
+            "mse":            "",
+            "huber_scaled":   f"_losshuberscaled_d{args.huber_delta:g}",
+            "mae_original":   "_lossmaeoriginal",
             "huber_original": f"_losshuberoriginal_d{args.huber_delta:g}",
         }[args.loss]
-        args.out_dir = (f"DynGWN/results/SPX_IV_{args.seq_len}_{args.pred_len}"
+        args.out_dir = (f"DynGWN/results/"
+                        f"{args.dataset}_SPX_IV_{args.seq_len}_{args.pred_len}"
                         f"_DynGWN_{args.graph_mode}"
                         f"_nh{args.nhid}_b{args.blocks}_l{args.layers}"
                         f"_ep{args.epochs}{loss_suffix}")
     os.makedirs(args.out_dir, exist_ok=True)
 
+    print(f"Dataset    : {args.dataset}")
     print(f"Device     : {device}")
     print(f"Output dir : {args.out_dir}")
+    print(f"Loss       : {args.loss}"
+          + (f"  (delta={args.huber_delta})" if "huber" in args.loss else ""))
 
     print("\nLoading data...")
     X_tr, y_tr, X_va, y_va, X_te, test_dates, info, scaler = load_splits(
-        args.csv_path, args.seq_len, args.pred_len)
-    print(f"  T={info['T']}  train={info['train_windows']}  "
+        args.csv_path, args.dataset, args.seq_len, args.pred_len)
+    print(f"  T={info['T']}  n_iv={info['n_iv']}  "
+          f"train={info['train_windows']}  "
           f"val={info['val_windows']}  test={info['test_windows']} windows")
+    print(f"  Train ends {info['train_end_date']}")
 
+    n_iv = info["n_iv"]
     static_supports = []
     if args.graph_mode == "grid_plus_adaptive":
-        A_grid = _row_normalize(_make_grid_adjacency(self_loops=True))
+        A_grid = _row_normalize(_make_grid_adjacency(h=H_TAU, w=W_DELTA, self_loops=True))
         static_supports = [torch.from_numpy(A_grid)]
 
-    model = DynGWN(num_nodes=N_IV, dropout=args.dropout,
+    model = DynGWN(num_nodes=n_iv, dropout=args.dropout,
                    in_dim=1, seq_len=args.seq_len, pred_len=args.pred_len,
                    nhid=args.nhid, kernel_size=args.kernel_size,
                    blocks=args.blocks, layers=args.layers,
@@ -500,26 +604,7 @@ def main():
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
         print(f"  Loaded checkpoint from {ckpt_path}")
     else:
-        config = {
-            "model":         "DynGWN",
-            "csv_path":      args.csv_path,
-            "seq_len":       args.seq_len,
-            "pred_len":      args.pred_len,
-            "graph_mode":    args.graph_mode,
-            "nhid":          args.nhid,
-            "blocks":        args.blocks,
-            "layers":        args.layers,
-            "kernel_size":   args.kernel_size,
-            "dropout":       args.dropout,
-            "epochs":        args.epochs,
-            "batch_size":    args.batch_size,
-            "lr":            args.lr,
-            "weight_decay":  args.weight_decay,
-            "patience":      args.patience,
-            "seed":          args.seed,
-            "loss":          args.loss,
-            "huber_delta":   args.huber_delta,
-        }
+        config = _build_config(args, info)
         with open(os.path.join(args.out_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=2)
 
@@ -532,8 +617,8 @@ def main():
     model.eval()
     with torch.no_grad():
         for xb, _ in te_loader:
-            out = model(xb.to(device))            # [B, pred_len=63, nodes=400, 1]
-            out = out.squeeze(-1).cpu().numpy()   # [B, 63, 400]  (compare_models flat format)
+            out = model(xb.to(device))            # [B, pred_len, nodes, 1]  scaled
+            out = out.squeeze(-1).cpu().numpy()   # [B, pred_len, nodes]  (compare_models flat)
             preds.append(out)
     preds = np.concatenate(preds, axis=0)[:len(test_dates)].astype(np.float32)
 

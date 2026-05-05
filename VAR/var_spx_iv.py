@@ -16,13 +16,21 @@ of features. Picks the p that minimises the chosen `--criterion`, then
 rolls out `pred_len` steps for every test window using the last p
 observations as the initial state.
 
+Standardisation: inputs are standardised with a single global (mean, std)
+fitted on the training portion of the target-space data — pooled across time
+and all 170 IV cells, not per-column. VAR is fit and rolled out in scaled
+space; predictions are inverse-transformed and saved in original target-space
+units. Note: AIC/BIC values depend on Σ̂(p) of the scaled residuals, so
+absolute IC values differ from per-column scaling; relative ordering across p
+can also shift, meaning `selected_lag` may change vs prior runs.
+
 Dataset selection:
     --dataset full      use the full CSV (default).
     --dataset precovid  slice the CSV to date <= 2019-12-31 before splitting.
 
 Outputs (in --out_dir; default
 `VAR/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_VAR_p{selected}_{criterion}`):
-    pred.npy          [N_test, pred_len, n_iv]  scaled-space predictions  (gitignored)
+    pred.npy          [N_test, pred_len, n_iv]  original-space predictions  (gitignored)
     start_dates.npy   [N_test]                  datetime64[D] start of each window
     config.json       full record incl. ic_table sweep over all candidate p
 """
@@ -36,7 +44,6 @@ import subprocess
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
 
 TRAIN_FRAC          = 0.70
 TEST_FRAC           = 0.20
@@ -199,7 +206,7 @@ def main():
                     help="level = train on raw IV (default); logdiff = train on "
                          "log(IV)[1:]-log(IV)[:-1]. logdiff loses one day at the front.")
     ap.add_argument("--seq_len",      type=int, default=21)
-    ap.add_argument("--pred_len",     type=int, default=63)
+    ap.add_argument("--pred_len",     type=int, default=21)
     ap.add_argument("--max_lag",      type=int, default=6,
                     help="Largest p considered in the AIC/BIC sweep (must satisfy "
                          "T_eff > K·p; with K=170 and T_train≈1937, p<11 is safe).")
@@ -247,8 +254,10 @@ def main():
     n_val   = T - n_train - n_test
     train_end_date = str(dates[n_train - 1])
 
-    scaler = StandardScaler().fit(iv[:n_train])
-    iv_sc  = scaler.transform(iv).astype(np.float64)
+    train_data = iv[:n_train]
+    mean = float(train_data.mean())
+    std  = float(train_data.std())
+    iv_sc = ((iv - mean) / std).astype(np.float64)
 
     print(f"T={T}  n_train={n_train}  n_val={n_val}  n_test={n_test}  n_iv={n_iv}")
     print(f"Train ends {train_end_date}")
@@ -318,6 +327,8 @@ def main():
             preds[wi, h, :] = x_next
             window = np.vstack([window[1:], x_next[None]])
         start_dates[wi] = dates[s]
+
+    preds = (preds * std + mean).astype(np.float32)
 
     np.save(os.path.join(args.out_dir, "pred.npy"),        preds)
     np.save(os.path.join(args.out_dir, "start_dates.npy"), start_dates)

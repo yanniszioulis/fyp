@@ -1,0 +1,21 @@
+{
+  "_variants": [
+    {"name": "kronecker_product", "fix": {"attention_type": "kronecker_product"}},
+    {"name": "kronecker_sum",     "fix": {"attention_type": "kronecker_sum"}}
+  ],
+
+  "epochs":       100,
+  "batch_size":   128,
+  "patience":     15,
+  "n_head":       8,
+  "loss":         "mse",
+  "norm":         "off",
+  "pe":           "rope",
+  "dropout":      0.1,
+
+  "patch_size":   [7, 9, 21],
+  "n_blocks":     [2, 4, 6],
+  "d_hidden":     [64, 128],
+  "lr":           [0.001, 0.003],
+  "weight_decay": [0.001, 0.01]
+}

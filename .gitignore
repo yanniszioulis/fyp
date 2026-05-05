@@ -62,3 +62,5 @@ report/*.synctex.gz
 # Keep main.tex and main.pdf
 !report/main.tex
 !report/main.pdf
+
+data_prep/data/*

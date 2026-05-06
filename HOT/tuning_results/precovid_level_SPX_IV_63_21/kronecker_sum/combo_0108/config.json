@@ -5,15 +5,16 @@
   "csv_path": "SPX_surfaces.csv",
   "seq_len": 63,
   "pred_len": 21,
-  "d_hidden": 128,
-  "d_mlp": 512,
+  "d_hidden": 32,
+  "d_mlp": 16,
   "n_blocks": 4,
   "n_head": 4,
-  "patch_size": 9,
+  "patch_size": 3,
   "attention_type": "kronecker_sum",
   "pe": "rope",
+  "spatial_pe": "none",
   "norm": "off",
-  "dropout": 0.1,
+  "dropout": 0.2,
   "epochs": 100,
   "batch_size": 128,
   "lr": 0.001,
@@ -32,5 +33,5 @@
   "n_val": 278,
   "n_test": 553,
   "train_end_date": "2016-09-12",
-  "git_commit": "3fbddfea762b1124f831aa8bff363d689106b015"
+  "git_commit": "f1e1cf149751edecb8d5d659309db8c2edff1a72"
 }

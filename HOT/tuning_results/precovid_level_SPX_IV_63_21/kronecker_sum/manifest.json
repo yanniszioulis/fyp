@@ -1,10 +1,14 @@
 {
-  "n_combos": 72,
+  "n_combos": 216,
   "grid": {
     "epochs": 100,
     "batch_size": 128,
     "patience": 15,
-    "n_head": 8,
+    "n_head": [
+      8,
+      4,
+      2
+    ],
     "loss": "mse",
     "norm": "off",
     "pe": "rope",
@@ -1390,6 +1394,2742 @@
         "batch_size": 128,
         "patience": 15,
         "n_head": 8,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0072",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0073",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0074",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0075",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0076",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0077",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0078",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0079",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0080",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0081",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0082",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0083",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0084",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0085",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0086",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0087",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0088",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0089",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0090",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0091",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0092",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0093",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0094",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0095",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0096",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0097",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0098",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0099",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0100",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0101",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0102",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0103",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0104",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0105",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0106",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0107",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0108",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0109",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0110",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0111",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0112",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0113",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0114",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0115",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0116",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0117",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0118",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0119",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0120",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0121",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0122",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0123",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0124",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0125",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0126",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0127",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0128",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0129",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0130",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0131",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0132",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0133",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0134",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0135",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0136",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0137",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0138",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0139",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0140",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0141",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0142",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0143",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 4,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0144",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0145",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0146",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0147",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0148",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0149",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0150",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0151",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0152",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0153",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0154",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0155",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0156",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0157",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0158",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0159",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0160",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0161",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0162",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0163",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0164",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0165",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0166",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0167",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 7,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0168",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0169",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0170",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0171",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0172",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0173",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0174",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0175",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0176",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0177",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0178",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0179",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0180",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0181",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0182",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0183",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0184",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0185",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0186",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0187",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0188",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0189",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0190",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0191",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 9,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0192",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0193",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0194",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0195",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0196",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0197",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0198",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0199",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 2,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0200",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0201",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0202",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0203",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0204",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0205",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0206",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0207",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 4,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0208",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0209",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0210",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0211",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 64,
+        "lr": 0.003,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0212",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0213",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.001,
+        "weight_decay": 0.01,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0214",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
+        "loss": "mse",
+        "norm": "off",
+        "pe": "rope",
+        "dropout": 0.1,
+        "patch_size": 21,
+        "n_blocks": 6,
+        "d_hidden": 128,
+        "lr": 0.003,
+        "weight_decay": 0.001,
+        "attention_type": "kronecker_sum"
+      }
+    },
+    {
+      "combo_id": "combo_0215",
+      "params": {
+        "epochs": 100,
+        "batch_size": 128,
+        "patience": 15,
+        "n_head": 2,
         "loss": "mse",
         "norm": "off",
         "pe": "rope",

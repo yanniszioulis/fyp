@@ -682,7 +682,7 @@ def main():
         model = train(model, X_tr, y_tr, X_va, y_va, mean, std, args, args.out_dir, device)
 
     print("\nPredicting on test set...")
-    te_loader = _make_loader(X_te, np.zeros_like(X_te), args.batch_size, shuffle=False)
+    te_loader = _make_loader(X_te, np.zeros_like(X_te), 8, shuffle=False)
     preds = []
     model.eval()
     with torch.no_grad():

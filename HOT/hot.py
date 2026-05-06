@@ -793,7 +793,8 @@ def main():
                 context_length=args.seq_len, prediction_length=args.pred_len,
                 attention_type=args.attention_type, dropout=args.dropout,
                 pe=args.pe, norm=(args.norm == "on"),
-                spatial_pe=args.spatial_pe).to(device)
+                spatial_pe=args.spatial_pe,
+                h_max=info["h_moneyness"], w_max=info["w_tau"]).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
 

@@ -31,10 +31,19 @@ Per-cell normalisation (--norm), default `off`:
                         by its context-window mean/std and denormalises the prediction
                         with the same stats. Strips per-cell level information.
 
+Spatial positional embedding (--spatial_pe), default `none`:
+    --spatial_pe none   (default) No 2D PE on (moneyness, tau). KroneckerAttention
+                        is permutation-equivariant per spatial axis: the model has
+                        no built-in awareness of cell position on the grid.
+    --spatial_pe lape   Learned [h_max, w_max, d_hidden] PE added to the patch-
+                        embedded tensor before transformer blocks.
+    --spatial_pe sin2d  Fixed sinusoidal 2D PE (no extra parameters; needs
+                        d_hidden divisible by 4).
+
 Requires:  pip install einops
 
 Outputs (in --out_dir; default
-`HOT/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_HOT_tensor_dh{dh}_nb{nb}_nh{nh}_ps{ps}_{attention_type}_pe{pe}_ep{ep}{loss_suffix}{norm_suffix}`):
+`HOT/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_HOT_tensor_dh{dh}_nb{nb}_nh{nh}_ps{ps}_{attention_type}_pe{pe}{sp_suffix}_ep{ep}{loss_suffix}{norm_suffix}`):
     pred.npy          [N_test, H, W, pred_len]         HOT tensor format, original target-space  (gitignored)
     start_dates.npy   [N_test]                          datetime64[D]
     train_log.csv     epoch, train_loss, val_loss
@@ -97,6 +106,69 @@ class RotaryEmbedding(nn.Module):
         cos = self.cos_cached[:l].unsqueeze(0).unsqueeze(2)
         sin = self.sin_cached[:l].unsqueeze(0).unsqueeze(2)
         return (x * cos) + (self._rotate_half(x) * sin)
+
+
+class SpatialPE(nn.Module):
+    """
+    2D spatial positional embedding for [B, H, W, T, d] tensors.
+
+    Returns a [1, H, W, 1, d] tensor that broadcast-adds to the input.
+
+    Modes:
+      none   identity; no parameters. (HOT.forward skips the add.)
+      lape   learned [h_max, w_max, d] parameter (LAPE-style, Omranpour et al.).
+             Initialised to 0.02·randn so it's a gentle injection on top of the
+             unit-scale post-LayerNorm patch embeddings.
+      sin2d  fixed sinusoidal 2D PE: first d/2 channels encode the H index,
+             last d/2 encode the W index. Requires d divisible by 4. No params.
+
+    Without this, KroneckerAttention is permutation-equivariant per spatial
+    axis: shuffling moneyness rows produces shuffled outputs. With LAPE the
+    20×20 IV grid gains a per-cell positional fingerprint independent of
+    content.
+    """
+    def __init__(self, mode: str, d_hidden: int, h_max: int = 32, w_max: int = 32):
+        super().__init__()
+        self.mode  = mode
+        self.h_max = h_max
+        self.w_max = w_max
+        if mode == "none":
+            return
+        if mode == "lape":
+            self.pe = nn.Parameter(0.02 * torch.randn(h_max, w_max, d_hidden))
+        elif mode == "sin2d":
+            self.register_buffer("pe", self._build_sin2d(h_max, w_max, d_hidden),
+                                 persistent=False)
+        else:
+            raise ValueError(f"Unknown spatial_pe mode {mode!r}; "
+                             f"choose from 'none', 'lape', 'sin2d'.")
+
+    @staticmethod
+    def _build_sin2d(h_max: int, w_max: int, d: int) -> torch.Tensor:
+        if d % 4 != 0:
+            raise ValueError(f"sin2d PE requires d_hidden divisible by 4, got {d}")
+        d_half = d // 2
+
+        def _sincos(n: int, dim: int) -> torch.Tensor:
+            pos = torch.arange(n, dtype=torch.float).unsqueeze(1)            # [n, 1]
+            div = torch.exp(torch.arange(0, dim, 2, dtype=torch.float)
+                            * (-math.log(10000.0) / dim))                    # [dim/2]
+            out = torch.zeros(n, dim)
+            out[:, 0::2] = torch.sin(pos * div)
+            out[:, 1::2] = torch.cos(pos * div)
+            return out
+
+        pe = torch.zeros(h_max, w_max, d)
+        pe[:, :, :d_half] = _sincos(h_max, d_half).unsqueeze(1)               # broadcast over W
+        pe[:, :, d_half:] = _sincos(w_max, d_half).unsqueeze(0)               # broadcast over H
+        return pe
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        H, W = x.shape[1], x.shape[2]
+        if H > self.h_max or W > self.w_max:
+            raise ValueError(f"Input H={H}, W={W} exceeds spatial-PE capacity "
+                             f"({self.h_max}, {self.w_max}); raise h_max/w_max in HOT()")
+        return self.pe[:H, :W].unsqueeze(0).unsqueeze(3)                      # [1, H, W, 1, d]
 
 
 # ─── Kronecker Attention ──────────────────────────────────────────────────────
@@ -233,7 +305,8 @@ class HOT(nn.Module):
                  n_head: int = 8, patch_size: int = 4,
                  context_length: int = 21, prediction_length: int = 63,
                  attention_type: str = "kronecker_product", dropout: float = 0.0,
-                 pe: str = "rope", norm: bool = True):
+                 pe: str = "rope", norm: bool = True,
+                 spatial_pe: str = "none", h_max: int = 32, w_max: int = 32):
         super().__init__()
         assert pe in ("rope", "nope"), f"pe must be 'rope' or 'nope', got {pe!r}"
         self.patch_size        = patch_size
@@ -241,10 +314,12 @@ class HOT(nn.Module):
         self.prediction_length = prediction_length
         self.pe                = pe
         self.norm              = norm
+        self.spatial_pe        = spatial_pe
+        self.has_spatial_pe    = (spatial_pe != "none")
 
         t_patches = math.ceil(context_length / patch_size)
 
-        self.pos_emb = lambda x: torch.zeros_like(x).to(x.device)
+        self.pos_emb = SpatialPE(spatial_pe, d_hidden, h_max=h_max, w_max=w_max)
 
         self.emb = nn.Sequential(
             nn.Conv1d(1, d_hidden, kernel_size=patch_size, stride=patch_size),
@@ -295,7 +370,8 @@ class HOT(nn.Module):
         Tp2 = h.shape[1]
         h = h.view(bs, H, W, Tp2, h.shape[-1])          # [B, H, W, Tp', d]
 
-        h = h + self.pos_emb(h)
+        if self.has_spatial_pe:
+            h = h + self.pos_emb(h)
 
         for block in self.blocks:
             h = block(h)
@@ -573,6 +649,7 @@ def _build_config(args, info: dict, amp_dtype, num_workers, pin_memory) -> dict:
         "patch_size":     args.patch_size,
         "attention_type": args.attention_type,
         "pe":             args.pe,
+        "spatial_pe":     args.spatial_pe,
         "norm":           args.norm,
         "dropout":        args.dropout,
         "epochs":         args.epochs,
@@ -620,6 +697,12 @@ def main():
                     choices=["rope", "nope"],
                     help="Positional encoding: 'rope' applies RoPE on the temporal "
                          "dim (legacy default); 'nope' disables it.")
+    ap.add_argument("--spatial_pe",      default="none",
+                    choices=["none", "lape", "sin2d"],
+                    help="2D spatial positional embedding on the (moneyness, tau) grid. "
+                         "'none' (default) leaves KroneckerAttention permutation-equivariant "
+                         "across H and W. 'lape' adds a learned [h_max, w_max, d] PE; "
+                         "'sin2d' adds a fixed sinusoidal 2D PE (requires d_hidden divisible by 4).")
     ap.add_argument("--norm",            default="off", choices=["on", "off"],
                     help="Per-cell window norm/denorm inside HOT.forward. "
                          "'off' (default) = pass scaled inputs through directly "
@@ -663,7 +746,7 @@ def main():
             cfg = json.load(f)
         for k in ("csv_path", "dataset", "target_space", "seq_len", "pred_len",
                   "d_hidden", "d_mlp", "n_blocks", "n_head", "patch_size", "attention_type",
-                  "pe", "norm", "dropout", "batch_size", "loss", "huber_delta"):
+                  "pe", "spatial_pe", "norm", "dropout", "batch_size", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
         print(f"[predict_only] {cfg_path}")
@@ -674,12 +757,13 @@ def main():
             "huber_scaled": f"_losshuberscaled_d{args.huber_delta:g}",
         }[args.loss]
         norm_suffix = "" if args.norm == "off" else "_norm"
+        sp_suffix   = "" if args.spatial_pe == "none" else f"_sp{args.spatial_pe}"
         args.out_dir = (f"HOT/results/"
                         f"{args.dataset}_{args.target_space}_SPX_IV_"
                         f"{args.seq_len}_{args.pred_len}"
                         f"_HOT_tensor_dh{args.d_hidden}_nb{args.n_blocks}"
                         f"_nh{args.n_head}_ps{args.patch_size}_{args.attention_type}"
-                        f"_pe{args.pe}_ep{args.epochs}{loss_suffix}{norm_suffix}")
+                        f"_pe{args.pe}{sp_suffix}_ep{args.epochs}{loss_suffix}{norm_suffix}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     num_workers, amp_dtype, pin_memory = _resolve_speed_settings(device)
@@ -691,7 +775,8 @@ def main():
     print(f"AMP        : {amp_label}")
     print(f"DataLoader : num_workers={num_workers}  pin_memory={pin_memory}")
     print(f"Output dir : {args.out_dir}")
-    print(f"Attention  : {args.attention_type}  pe={args.pe}  norm={args.norm}")
+    print(f"Attention  : {args.attention_type}  pe={args.pe}  "
+          f"spatial_pe={args.spatial_pe}  norm={args.norm}")
 
     print("\nLoading data...")
     X_tr, y_tr, X_va, y_va, X_te, test_dates, info, mean, std = load_splits(
@@ -707,7 +792,8 @@ def main():
                 n_head=args.n_head, patch_size=args.patch_size,
                 context_length=args.seq_len, prediction_length=args.pred_len,
                 attention_type=args.attention_type, dropout=args.dropout,
-                pe=args.pe, norm=(args.norm == "on")).to(device)
+                pe=args.pe, norm=(args.norm == "on"),
+                spatial_pe=args.spatial_pe).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
 

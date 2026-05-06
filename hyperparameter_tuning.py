@@ -47,6 +47,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -149,11 +151,77 @@ def write_leaderboard(path: str, rows: list, fieldnames: list):
         w.writerows(rows)
 
 
+# ─── Parallel helpers ─────────────────────────────────────────────────────────
+
+def _resolve_parallel(parallel: int, device: str) -> int:
+    """Clamp --parallel to 1 unless CUDA will actually be used.
+
+    Why: each parallel combo is its own subprocess with its own CUDA
+    context. On MPS/CPU, multiple processes share the same device and
+    thrash, ending up slower than serial. Only meaningful on CUDA.
+    """
+    if parallel <= 1:
+        return 1
+    if device == "auto":
+        try:
+            import torch
+            cuda_ok = torch.cuda.is_available()
+        except Exception:
+            cuda_ok = False
+    elif device == "cuda":
+        cuda_ok = True
+    else:
+        cuda_ok = False
+    if not cuda_ok:
+        print(f"  --parallel {parallel} requested but CUDA not detected "
+              f"(device={device!r}); falling back to serial.")
+        return 1
+    return parallel
+
+
+def _run_one_combo(i: int, params: dict, base_dir: str, script: str,
+                   common_cli: list, capture_stdout: bool):
+    """Train or resume a single combo. Returns
+    (combo_id, combo_dir, params, status, score).
+
+    With capture_stdout=True, redirects subprocess output to
+    combo_dir/stdout.log so concurrent runs don't interleave on the
+    console; the file is removed by cleanup() afterward.
+    """
+    combo_id  = f"combo_{i:04d}"
+    combo_dir = os.path.join(base_dir, combo_id)
+    os.makedirs(combo_dir, exist_ok=True)
+
+    if combo_is_complete(combo_dir, params):
+        score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
+        return combo_id, combo_dir, params, "resumed", score
+
+    cmd = ([sys.executable, "-u", script, "--out_dir", combo_dir]
+           + common_cli + combo_to_args(params))
+    if capture_stdout:
+        log_path = os.path.join(combo_dir, "stdout.log")
+        with open(log_path, "w") as f:
+            rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT).returncode
+    else:
+        rc = subprocess.run(cmd).returncode
+    score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
+    if rc != 0 or score is None:
+        return combo_id, combo_dir, params, "failed", None
+    return combo_id, combo_dir, params, "completed", score
+
+
 # ─── Sweep ────────────────────────────────────────────────────────────────────
 
 def run_sweep(grid_resolved: dict, base_dir: str, script: str,
-              common_cli: list[str], dry_run: bool):
-    """Run a single grid sweep into `base_dir` (must already exist)."""
+              common_cli: list[str], dry_run: bool, parallel: int = 1):
+    """Run a single grid sweep into `base_dir` (must already exist).
+
+    parallel > 1 runs combos concurrently in a thread pool, each combo a
+    separate subprocess. Per-combo stdout is captured to `stdout.log` so
+    logs don't interleave; cleanup of losers is deferred until all combos
+    finish. Caller is responsible for ensuring CUDA is the active device
+    — see _resolve_parallel.
+    """
     combos = expand_grid(grid_resolved)
     if not combos:
         print(f"  Grid expanded to 0 combinations; skipping.")
@@ -178,49 +246,87 @@ def run_sweep(grid_resolved: dict, base_dir: str, script: str,
             print(f"    combo_{i:04d}: {ps}")
         return
 
-    leader_path  = os.path.join(base_dir, "leaderboard.csv")
-    leaderboard  = []
-    running_best = (float("inf"), None)  # (score, combo_dir)
+    leader_path = os.path.join(base_dir, "leaderboard.csv")
+    leaderboard = []
 
-    for i, params in enumerate(combos):
-        combo_id  = f"combo_{i:04d}"
-        combo_dir = os.path.join(base_dir, combo_id)
-        os.makedirs(combo_dir, exist_ok=True)
+    if parallel > 1:
+        print(f"  Running {len(combos)} combos with --parallel {parallel} "
+              f"(per-combo stdout → combo_dir/stdout.log)")
+        lb_lock = threading.Lock()
+        done    = 0
+        with ThreadPoolExecutor(max_workers=parallel) as ex:
+            futs = [ex.submit(_run_one_combo, i, p, base_dir, script,
+                              common_cli, True)
+                    for i, p in enumerate(combos)]
+            for fut in as_completed(futs):
+                combo_id, combo_dir, params, status, score = fut.result()
+                with lb_lock:
+                    done += 1
+                    ps = ", ".join(f"{k}={v}" for k, v in params.items())
+                    if score is None:
+                        print(f"  [{done:>3}/{len(combos)}] {combo_id}  FAILED  {ps}")
+                        row = {"combo_id": combo_id, "status": "failed",
+                               "best_val_loss": None, **params}
+                    else:
+                        print(f"  [{done:>3}/{len(combos)}] {combo_id}  {status}  "
+                              f"val={score:.6f}  {ps}")
+                        row = {"combo_id": combo_id, "status": status,
+                               "best_val_loss": score, **params}
+                    leaderboard.append(row)
+                    write_leaderboard(
+                        leader_path,
+                        sorted(leaderboard, key=lambda r: r["combo_id"]),
+                        fieldnames,
+                    )
+        # Deferred cleanup: keep only the winner's checkpoint, prune the rest.
+        scored = [r for r in leaderboard if r["best_val_loss"] is not None]
+        winner_id = (min(scored, key=lambda r: r["best_val_loss"])["combo_id"]
+                     if scored else None)
+        for r in leaderboard:
+            cdir = os.path.join(base_dir, r["combo_id"])
+            cleanup(cdir, keep_checkpoint=(r["combo_id"] == winner_id))
+    else:
+        running_best = (float("inf"), None)  # (score, combo_dir)
 
-        ps = ", ".join(f"{k}={v}" for k, v in params.items())
-        print(f"\n  [{i + 1:>3}/{len(combos)}] {combo_id}  {ps}")
+        for i, params in enumerate(combos):
+            combo_id  = f"combo_{i:04d}"
+            combo_dir = os.path.join(base_dir, combo_id)
+            os.makedirs(combo_dir, exist_ok=True)
 
-        if combo_is_complete(combo_dir, params):
-            score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
-            print(f"     resume → val={score:.6f}")
-            status = "resumed"
-        else:
-            cmd = ([sys.executable, "-u", script, "--out_dir", combo_dir]
-                   + common_cli + combo_to_args(params))
-            rc = subprocess.run(cmd).returncode
-            score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
-            if rc != 0 or score is None:
-                print(f"     FAILED (rc={rc})")
-                row = {"combo_id": combo_id, "status": "failed",
-                       "best_val_loss": None, **params}
-                leaderboard.append(row)
-                write_leaderboard(leader_path, leaderboard, fieldnames)
-                continue
-            status = "completed"
-            print(f"     val={score:.6f}")
+            ps = ", ".join(f"{k}={v}" for k, v in params.items())
+            print(f"\n  [{i + 1:>3}/{len(combos)}] {combo_id}  {ps}")
 
-        if score < running_best[0]:
-            if running_best[1] is not None:
-                cleanup(running_best[1], keep_checkpoint=False)
-            running_best = (score, combo_dir)
-            cleanup(combo_dir, keep_checkpoint=True)
-        else:
-            cleanup(combo_dir, keep_checkpoint=False)
+            if combo_is_complete(combo_dir, params):
+                score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
+                print(f"     resume → val={score:.6f}")
+                status = "resumed"
+            else:
+                cmd = ([sys.executable, "-u", script, "--out_dir", combo_dir]
+                       + common_cli + combo_to_args(params))
+                rc = subprocess.run(cmd).returncode
+                score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
+                if rc != 0 or score is None:
+                    print(f"     FAILED (rc={rc})")
+                    row = {"combo_id": combo_id, "status": "failed",
+                           "best_val_loss": None, **params}
+                    leaderboard.append(row)
+                    write_leaderboard(leader_path, leaderboard, fieldnames)
+                    continue
+                status = "completed"
+                print(f"     val={score:.6f}")
 
-        row = {"combo_id": combo_id, "status": status,
-               "best_val_loss": score, **params}
-        leaderboard.append(row)
-        write_leaderboard(leader_path, leaderboard, fieldnames)
+            if score < running_best[0]:
+                if running_best[1] is not None:
+                    cleanup(running_best[1], keep_checkpoint=False)
+                running_best = (score, combo_dir)
+                cleanup(combo_dir, keep_checkpoint=True)
+            else:
+                cleanup(combo_dir, keep_checkpoint=False)
+
+            row = {"combo_id": combo_id, "status": status,
+                   "best_val_loss": score, **params}
+            leaderboard.append(row)
+            write_leaderboard(leader_path, leaderboard, fieldnames)
 
     completed = [r for r in leaderboard if r["best_val_loss"] is not None]
     if not completed:
@@ -281,7 +387,13 @@ def main():
                     help="Wipe the task subfolder (and all variants) before starting.")
     ap.add_argument("--dry_run",      action="store_true",
                     help="Print the planned sweep and exit without training.")
+    ap.add_argument("--parallel",     type=int, default=1,
+                    help="Run N combos concurrently. Auto-clamped to 1 unless "
+                         "CUDA is detected — on MPS/CPU multiple processes "
+                         "thrash the same device. On a single A100 80GB, "
+                         "4–8 typically saturates the GPU for HOT.")
     args = ap.parse_args()
+    args.parallel = _resolve_parallel(args.parallel, args.device)
 
     script = MODEL_SCRIPTS[args.model]
     if not os.path.isfile(script):
@@ -327,7 +439,7 @@ def main():
         v_grid = {**base_grid, **v_fix}
 
         print(f"\n{'─' * 70}\nVariant: {v_label}\n{'─' * 70}")
-        run_sweep(v_grid, v_dir, script, common_cli, args.dry_run)
+        run_sweep(v_grid, v_dir, script, common_cli, args.dry_run, args.parallel)
 
     print(f"\n{'=' * 70}\nDone. Results: {task_dir}/")
 

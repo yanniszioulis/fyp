@@ -9,13 +9,14 @@
   "patience":     15,
   "n_head":       [8, 4, 2],
   "loss":         "mse",
-  "norm":         "off",
-  "pe":           "rope",
-  "dropout":      0.1,
+  "norm":         ["off"],
+  "pe":           ["rope"],
+  "spatial_pe":   ["none", "lape"],
+  "dropout":      [0.3],
 
-  "patch_size":   [7, 9, 21],
+  "patch_size":   [3, 9, 21],
   "n_blocks":     [2, 4, 6],
-  "d_hidden":     [64, 128],
+  "d_hidden":     [32, 64],
   "lr":           [0.001, 0.003],
   "weight_decay": [0.001, 0.01]
 }

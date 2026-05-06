@@ -47,4 +47,3 @@ combo_0044,resumed,0.0313335380322018,128,5,0.3,100,grid_plus_adaptive,2,3,mse,0
 combo_0045,resumed,0.0303686068414948,128,5,0.3,100,grid_plus_adaptive,2,3,mse,0.001,32,15,0.001
 combo_0046,resumed,0.0350247284022066,128,5,0.3,100,grid_plus_adaptive,2,3,mse,0.003,32,15,0.0001
 combo_0047,resumed,0.0335674878180951,128,5,0.3,100,grid_plus_adaptive,2,3,mse,0.003,32,15,0.001
-combo_0048,resumed,0.033796164019452,128,3,0.3,100,grid_plus_adaptive,2,2,mse,0.001,64,15,0.0001

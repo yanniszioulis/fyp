@@ -2,8 +2,7 @@
   "_note": "Tuned on A100. At nhid=128,blocks=5,layers=3 the largest activation is ~5GB fp32; fits A100-40GB. On T4/V100 (16GB) drop batch_size to 64. kernel_size fixed at 2 because kernel>=3 with blocks=5,layers=3 exceeds seq_len=63 receptive-field cap.",
 
   "_variants": [
-    {"name": "grid_plus_adaptive", "fix": {"graph_mode": "grid_plus_adaptive"}},
-    {"name": "adaptive_only",      "fix": {"graph_mode": "adaptive_only"}}
+    {"name": "grid_plus_adaptive", "fix": {"graph_mode": "grid_plus_adaptive"}}
   ],
 
   "epochs":       100,
@@ -13,7 +12,7 @@
   "kernel_size":  2,
   "dropout":      0.3,
 
-  "nhid":         [16, 32, 64],
+  "nhid":         [16, 32],
   "blocks":       [3, 4, 5],
   "layers":       [2, 3],
   "lr":           [1e-3, 3e-3],

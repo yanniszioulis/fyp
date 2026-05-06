@@ -1,0 +1,23 @@
+{
+  "model": "DLinear",
+  "dataset": "precovid",
+  "target_space": "level",
+  "csv_path": "SPX_surfaces.csv",
+  "seq_len": 63,
+  "pred_len": 21,
+  "kernel_size": 21,
+  "epochs": 100,
+  "batch_size": 128,
+  "lr": 0.0001,
+  "weight_decay": 0.0,
+  "patience": 15,
+  "seed": 42,
+  "loss": "mse",
+  "huber_delta": 1.0,
+  "n_iv": 400,
+  "n_train": 1937,
+  "n_val": 278,
+  "n_test": 553,
+  "train_end_date": "2016-09-12",
+  "git_commit": "1ff691419e9fdc6eff4fafb46a8a3f9735085555"
+}

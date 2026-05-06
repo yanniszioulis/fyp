@@ -1,0 +1,12 @@
+{
+  "_note": "kernel_size must be odd and <= seq_len; values picked to stay valid for seq_len>=63.",
+
+  "epochs":       100,
+  "patience":     15,
+  "batch_size":   128,
+  "loss":         "mse",
+
+  "kernel_size":  [5, 7, 13, 21, 31],
+  "lr":           [1e-4, 3e-4, 1e-3, 4e-3],
+  "weight_decay": [0.0, 1e-3, 1e-2]
+}

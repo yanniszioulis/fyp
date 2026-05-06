@@ -236,7 +236,7 @@ def train(model, X_tr, y_tr, X_va, y_va, mean, std, args, out_dir, device):
         TensorDataset(torch.from_numpy(X_va), torch.from_numpy(y_va)),
         batch_size=args.batch_size, num_workers=0,
     )
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     mean_t = torch.tensor(mean, dtype=torch.float32, device=device)
     std_t  = torch.tensor(std,  dtype=torch.float32, device=device)
@@ -305,6 +305,7 @@ def _build_config(args, info: dict) -> dict:
         'epochs':         args.epochs,
         'batch_size':     args.batch_size,
         'lr':             args.lr,
+        'weight_decay':   args.weight_decay,
         'patience':       args.patience,
         'seed':           args.seed,
         'loss':           args.loss,
@@ -335,6 +336,7 @@ def main():
     ap.add_argument('--epochs',      type=int,   default=100)
     ap.add_argument('--batch_size',  type=int,   default=64)
     ap.add_argument('--lr',          type=float, default=1e-4)
+    ap.add_argument('--weight_decay', type=float, default=0.0)
     ap.add_argument('--patience',    type=int,   default=15,
                     help='Early stopping patience (val loss epochs without improvement)')
     ap.add_argument('--device',      default='auto',

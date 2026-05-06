@@ -7,7 +7,7 @@
   "epochs":       100,
   "batch_size":   128,
   "patience":     15,
-  "n_head":       8,
+  "n_head":       [8, 4, 2],
   "loss":         "mse",
   "norm":         "off",
   "pe":           "rope",

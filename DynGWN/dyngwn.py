@@ -12,15 +12,17 @@ Architecture:
         graph_mode='adaptive_only':
             [learned adaptive only]
 
-Grid layout for the 170-cell SPX surface:
-    H = TAU   = 10  (OUTER axis: maturities 30, 60, 91, 122, 152, 182, 273, 365, 547, 730d)
-    W = DELTA = 17  (INNER axis: call-equivalent delta 0.10 → 0.90 in 0.05 steps)
-    nid(r, c) = r·W + c = i_T·17 + i_D = csv_col(i_T, i_D)        ← matches CSV order
-    Row-neighbour edge ↔ adjacent maturity at same delta;
-    Column-neighbour edge ↔ adjacent delta at same maturity.
-NOTE: this is a corrected mapping vs the legacy 20×20 grid script, where the
-H_MONO/W_TAU variable names did not match the actual `nid = r·w+c` ordering.
-For non-square grids that mismatch matters; we fix it here explicitly.
+Grid layout (derived from CSV `iv_*` column names at load time):
+    Columns are `iv_{moneyness}_{tau}`, ordered (tau OUTER, moneyness INNER):
+    col k = i_t · W + i_m = (moneyness[i_m], tau[i_t]).
+    H = h_tau        (OUTER axis: number of distinct maturities)
+    W = w_moneyness  (INNER axis: number of distinct log-moneyness slices)
+    nid(r, c) = r·W + c = i_t·W + i_m = csv_col(i_t, i_m)        ← matches CSV order
+    Row-neighbour edge ↔ adjacent maturity at same moneyness;
+    Column-neighbour edge ↔ adjacent moneyness at same maturity.
+The current dataset is 20×20 = 400 cells; an earlier 10×17 = 170-cell layout
+also fits this convention (same `nid = r·W + c`). For non-square grids the
+(outer, inner) ordering matters — we verify it explicitly at load time.
 
 Loss menu (`--loss`):
     mse              (default)  — MSE in scaled space.
@@ -32,7 +34,7 @@ Loss menu (`--loss`):
                                   ORIGINAL IV space (δ in vol-points).
 
 Inputs are standardised with a single global (mean, std) fitted on the training
-portion of the target-space data — pooled across time and all 170 IV cells, not
+portion of the target-space data — pooled across time and all IV cells, not
 per-column. The model trains in scaled space; predictions are inverse-transformed
 and saved in original target-space units.
 
@@ -68,9 +70,8 @@ TEST_FRAC            = 0.20
 PRECOVID_END         = "2019-12-31"
 DATASET_CHOICES      = ["full", "precovid"]
 TARGET_SPACE_CHOICES = ["level", "logdiff"]
-H_TAU                = 10    # tau axis (grid H dim, OUTER — matches CSV outer index)
-W_DELTA              = 17    # delta axis (grid W dim, INNER — matches CSV inner index)
-N_IV_EXPECTED        = H_TAU * W_DELTA   # 170; checked against CSV at load time
+# Grid dims (h_tau OUTER, w_moneyness INNER) are derived from CSV columns at
+# load time — see _parse_grid_dims below.
 
 
 # ─── Loss (legacy masked_mae from DynGWN/util.py) ─────────────────────────────
@@ -92,14 +93,14 @@ def masked_mae(preds: torch.Tensor, labels: torch.Tensor, null_val=float("nan"))
 
 # ─── Static grid adjacency ────────────────────────────────────────────────────
 
-def _make_grid_adjacency(h: int = H_TAU, w: int = W_DELTA,
-                         self_loops: bool = True) -> np.ndarray:
+def _make_grid_adjacency(h: int, w: int, self_loops: bool = True) -> np.ndarray:
     """
     4-neighbor adjacency over a flattened H×W grid with `nid(r, c) = r·w + c`.
 
-    With h=H_TAU=10 and w=W_DELTA=17, node indices match CSV column ordering
-    `csv_col(i_T, i_D) = i_T·17 + i_D`. Row neighbours = adjacent maturities,
-    column neighbours = adjacent deltas. Both are real surface-smoothness
+    With h = number of taus (OUTER) and w = number of moneyness values (INNER),
+    node indices match CSV column ordering `csv_col(i_t, i_m) = i_t·w + i_m`.
+    Row neighbours = adjacent maturities (same moneyness); column neighbours =
+    adjacent moneyness (same maturity). Both are real surface-smoothness
     relationships.
     """
     n = h * w
@@ -168,10 +169,10 @@ class DynGWN(nn.Module):
     """
     WaveNet + adaptive graph convolution.
 
-    Input:  [B, in_dim=1, num_nodes=170, seq_len=21]  (padded +1 inside forward)
-    Output: [B, pred_len=63, num_nodes=170, 1]        (in scaled space)
+    Input:  [B, in_dim=1, num_nodes, seq_len]  (padded +1 inside forward)
+    Output: [B, pred_len, num_nodes, 1]        (in scaled space)
     """
-    def __init__(self, num_nodes: int = N_IV_EXPECTED, dropout: float = 0.3,
+    def __init__(self, num_nodes: int, dropout: float = 0.3,
                  in_dim: int = 1, seq_len: int = 21, pred_len: int = 63,
                  nhid: int = 32, kernel_size: int = 2,
                  blocks: int = 4, layers: int = 2,
@@ -292,13 +293,55 @@ def _apply_target_space(iv_raw: np.ndarray, dates_full: np.ndarray, target_space
     raise ValueError(f"Unknown target_space {target_space!r}; choose from {TARGET_SPACE_CHOICES}")
 
 
+def _parse_iv_col(col: str) -> tuple[str, str]:
+    """`iv_{moneyness}_{tau}` → (moneyness_str, tau_str). String keys avoid
+    float-precision pitfalls when verifying grid order."""
+    rest = col[len("iv_"):]
+    return tuple(rest.rsplit("_", 1))  # (moneyness_str, tau_str)
+
+
+def _parse_grid_dims(iv_cols: list) -> tuple:
+    """
+    Derive (h_tau, w_moneyness) from `iv_*` column names and verify that the
+    columns form a complete grid laid out as **(tau outer, moneyness inner)**:
+    cols[i_t·w + i_m] = (moneyness[i_m], tau[i_t]).
+
+    With h = number of taus and w = number of moneyness values, DynGWN's
+    `nid(r, c) = r·w + c` then matches CSV column ordering with r = i_t,
+    c = i_m. Returns (h_tau, w_moneyness, moneyness_strs, tau_strs).
+    """
+    pairs = [_parse_iv_col(c) for c in iv_cols]
+    moneyness_seen, tau_seen = [], []
+    for m, t in pairs:
+        if m not in moneyness_seen:
+            moneyness_seen.append(m)
+        if t not in tau_seen:
+            tau_seen.append(t)
+    h, w = len(tau_seen), len(moneyness_seen)
+    if h * w != len(iv_cols):
+        raise ValueError(
+            f"iv_ columns are not a complete grid: {len(iv_cols)} cols, "
+            f"{h} unique tau × {w} unique moneyness = {h * w}"
+        )
+    for i_t in range(h):
+        for i_m in range(w):
+            k = i_t * w + i_m
+            if pairs[k] != (moneyness_seen[i_m], tau_seen[i_t]):
+                raise ValueError(
+                    f"unexpected column order at index {k}: got {iv_cols[k]!r}, "
+                    f"expected (moneyness={moneyness_seen[i_m]}, tau={tau_seen[i_t]}). "
+                    f"DynGWN requires (tau outer, moneyness inner)."
+                )
+    return h, w, moneyness_seen, tau_seen
+
+
 def load_splits(csv_path: str, dataset: str, target_space: str,
                 seq_len: int, pred_len: int):
     """
     Returns BOTH x and y in SCALED space, plus the (mean, std) used to scale them.
     A single global mean/std is fit on the training portion of the target-space
-    data (pooled across time and all 170 IV cells, not per-column). The same
-    scalars are used to transform the entire series.
+    data (pooled across time and all IV cells, not per-column). The same scalars
+    are used to transform the entire series.
 
     Original-space losses (mae_original, huber_original) denorm internally inside
     `_compute_loss`; main() denormalises pred.npy before saving.
@@ -308,12 +351,10 @@ def load_splits(csv_path: str, dataset: str, target_space: str,
     df = _slice_dataset(df, dataset)
 
     iv_cols = [c for c in df.columns if c.startswith("iv_")]
+    if not iv_cols:
+        raise ValueError(f"No iv_* columns found in {csv_path}")
     n_iv = len(iv_cols)
-    if n_iv != N_IV_EXPECTED:
-        raise ValueError(
-            f"DynGWN expects {N_IV_EXPECTED} = {H_TAU}×{W_DELTA} iv_ columns; "
-            f"found {n_iv}. Update H_TAU/W_DELTA if the data spec changed."
-        )
+    h_tau, w_moneyness, _moneyness, _taus = _parse_grid_dims(iv_cols)
 
     iv_raw     = df[iv_cols].to_numpy(dtype=np.float32)
     dates_full = df["date"].to_numpy(dtype="datetime64[D]")
@@ -348,7 +389,8 @@ def load_splits(csv_path: str, dataset: str, target_space: str,
     test_start_dates = np.array([test_slice_dates[i + seq_len] for i in range(len(X_te))])
 
     info = dict(
-        T=T, n_iv=n_iv, n_train=n_train, n_val=n_val, n_test=n_test,
+        T=T, n_iv=n_iv, h_tau=h_tau, w_moneyness=w_moneyness,
+        n_train=n_train, n_val=n_val, n_test=n_test,
         train_end_date=str(dates[n_train - 1]),
         train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te),
     )
@@ -499,8 +541,8 @@ def _build_config(args, info: dict) -> dict:
         "loss":           args.loss,
         "huber_delta":    args.huber_delta,
         "n_iv":           info["n_iv"],
-        "h_tau":          H_TAU,
-        "w_delta":        W_DELTA,
+        "h_tau":          info["h_tau"],
+        "w_moneyness":    info["w_moneyness"],
         "n_train":        info["n_train"],
         "n_val":          info["n_val"],
         "n_test":         info["n_test"],
@@ -527,7 +569,7 @@ def main():
     ap.add_argument("--graph_mode",   default="grid_plus_adaptive",
                     choices=["grid_plus_adaptive", "adaptive_only"],
                     help="grid_plus_adaptive (default) adds a fixed 4-neighbor "
-                         "(tau, delta) grid to the learned adaptive adjacency.")
+                         "(tau, moneyness) grid to the learned adaptive adjacency.")
     ap.add_argument("--nhid",         type=int,   default=32,
                     help="Residual and dilation channels (skip=nhid*8, end=nhid*16)")
     ap.add_argument("--blocks",       type=int,   default=4)
@@ -614,7 +656,8 @@ def main():
     n_iv = info["n_iv"]
     static_supports = []
     if args.graph_mode == "grid_plus_adaptive":
-        A_grid = _row_normalize(_make_grid_adjacency(h=H_TAU, w=W_DELTA, self_loops=True))
+        A_grid = _row_normalize(_make_grid_adjacency(
+            h=info["h_tau"], w=info["w_moneyness"], self_loops=True))
         static_supports = [torch.from_numpy(A_grid)]
 
     model = DynGWN(num_nodes=n_iv, dropout=args.dropout,

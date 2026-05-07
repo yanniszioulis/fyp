@@ -6,15 +6,15 @@
   "seq_len": 63,
   "pred_len": 21,
   "graph_mode": "grid_plus_adaptive",
-  "nhid": 32,
-  "blocks": 5,
-  "layers": 2,
+  "nhid": 8,
+  "blocks": 2,
+  "layers": 1,
   "kernel_size": 2,
   "dropout": 0.3,
   "epochs": 100,
   "batch_size": 128,
-  "lr": 0.001,
-  "weight_decay": 0.0001,
+  "lr": 0.01,
+  "weight_decay": 0.01,
   "patience": 15,
   "seed": 42,
   "loss": "mse",
@@ -26,5 +26,5 @@
   "n_val": 278,
   "n_test": 553,
   "train_end_date": "2016-09-12",
-  "git_commit": "a9b26805e23b62cc5201d972ab5283524e894460"
+  "git_commit": "7e3a1b8f20bdaf3094bc504c3654fb6d35de1c9e"
 }

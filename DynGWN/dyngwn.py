@@ -20,9 +20,10 @@ Grid layout (derived from CSV `iv_*` column names at load time):
     nid(r, c) = r·W + c = i_t·W + i_m = csv_col(i_t, i_m)        ← matches CSV order
     Row-neighbour edge ↔ adjacent maturity at same moneyness;
     Column-neighbour edge ↔ adjacent moneyness at same maturity.
-The current dataset is 20×20 = 400 cells; an earlier 10×17 = 170-cell layout
-also fits this convention (same `nid = r·W + c`). For non-square grids the
-(outer, inner) ordering matters — we verify it explicitly at load time.
+The current dataset is 8×8 = 64 cells (m in [-0.20, 0.20], tau in [0.04, 1.0]);
+earlier 20×20 = 400 and 10×17 = 170-cell layouts also fit this convention
+(same `nid = r·W + c`). For non-square grids the (outer, inner) ordering
+matters — we verify it explicitly at load time.
 
 Loss menu (`--loss`):
     mse              (default)  — MSE in scaled space.

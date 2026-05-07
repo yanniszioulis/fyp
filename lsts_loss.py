@@ -1,7 +1,8 @@
-"""LSTS loss components for 20×20 IV-surface forecasting.
+"""LSTS loss components for IV-surface forecasting.
 
-Tensors end in (n_tau, n_k) = (20, 20). Functions accept any leading shape
-via `...` indexing, so unbatched (20, 20) and batched (B, 20, 20) both work.
+Tensors end in (n_tau, n_k) -- shape inferred at runtime from the input.
+Functions accept any leading shape via `...` indexing, so unbatched
+(n_tau, n_k) and batched (B, n_tau, n_k) both work.
 """
 
 import math

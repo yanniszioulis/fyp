@@ -69,24 +69,31 @@ class OptionMetricsPreprocess:
         options_file,
         forward_file,
         output_dir,
-        # target grid (what gets saved) -- in log forward moneyness
-        moneyness_min=-0.10,
-        moneyness_max=0.10,
+        # target grid (what gets saved) -- in log forward moneyness.
+        # Wider window (+/-0.20) than the original ATM core (+/-0.10) so the
+        # surface includes the put/call wings where skew/curvature dynamics
+        # live independently of the ATM level. Coarser grid (8 vs 20) so each
+        # cell aggregates enough quotes to be robust without over-smoothing.
+        moneyness_min=-0.20,
+        moneyness_max=0.20,
         ttm_min=0.04,
         ttm_max=1.0,
-        n_axis_points=20,
+        n_axis_points=8,
         # raw-data filter window (wider than target so the kernel has support
         # near the target boundaries) -- in log forward moneyness
-        filter_moneyness_min=-0.30,
-        filter_moneyness_max=0.30,
+        filter_moneyness_min=-0.40,
+        filter_moneyness_max=0.40,
         filter_ttm_min=0.0,
         filter_ttm_max=1.5,
         # ATM band: calls below ATM-forward and puts above ATM-forward are
         # kept only inside this band around log-moneyness = 0
         atm_threshold=0.01,
         # kernel bandwidths (variances, NOT standard deviations -- matches
-        # the OM manual convention: phi = exp(-x^2 / (2 h)))
-        h_tau=0.05,     # in log(T);    sigma_logT  ~ 0.224
+        # the OM manual convention: phi = exp(-x^2 / (2 h))). Sized so
+        # sigma is ~0.5x the new grid step (sharper than before): grid step
+        # in m is 0.40/7 = 0.057, sigma_m = sqrt(h_m) = 0.032 -> ~0.55 step;
+        # log-T step is 0.46, sigma_logT = sqrt(h_tau) = 0.32 -> ~0.69 step.
+        h_tau=0.10,     # in log(T);    sigma_logT  ~ 0.316
         h_m=0.001,      # in log(K/F);  sigma_m     ~ 0.032
         # filtering
         min_vega=0.5,        # OM excludes options with vega below this
@@ -468,15 +475,15 @@ def main():
     parser.add_argument("--output_dir", type=str, default="./data/optionmetrics_processed")
 
     # target grid (log forward moneyness)
-    parser.add_argument("--m_low", type=float, default=-0.10)
-    parser.add_argument("--m_high", type=float, default=0.10)
+    parser.add_argument("--m_low", type=float, default=-0.20)
+    parser.add_argument("--m_high", type=float, default=0.20)
     parser.add_argument("--ttm_low", type=float, default=0.04)
     parser.add_argument("--ttm_high", type=float, default=1.0)
-    parser.add_argument("--grid_size", type=int, default=20)
+    parser.add_argument("--grid_size", type=int, default=8)
 
-    # filter window (log forward moneyness) -- WIDENED vs the original
-    parser.add_argument("--filter_m_low", type=float, default=-0.30)
-    parser.add_argument("--filter_m_high", type=float, default=0.30)
+    # filter window (log forward moneyness)
+    parser.add_argument("--filter_m_low", type=float, default=-0.40)
+    parser.add_argument("--filter_m_high", type=float, default=0.40)
     parser.add_argument("--filter_ttm_low", type=float, default=0.0)
     parser.add_argument("--filter_ttm_high", type=float, default=1.5)
 
@@ -484,7 +491,7 @@ def main():
     parser.add_argument("--atm_threshold", type=float, default=0.01)
 
     # kernel bandwidths (variances; sigma = sqrt(h))
-    parser.add_argument("--h_tau", type=float, default=0.05)
+    parser.add_argument("--h_tau", type=float, default=0.10)
     parser.add_argument("--h_m", type=float, default=0.001)
 
     # quote filters

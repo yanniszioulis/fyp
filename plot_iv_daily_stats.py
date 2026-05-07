@@ -1,4 +1,4 @@
-"""Plot per-day mean and std of SPX IV across the 400-cell surface, in level and logdiff space."""
+"""Plot per-day mean and std of SPX IV across the surface, in level and logdiff space."""
 
 import re
 from pathlib import Path

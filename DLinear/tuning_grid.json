@@ -6,7 +6,7 @@
   "batch_size":   128,
   "loss":         "mse",
 
-  "kernel_size":  [5, 7, 13, 21, 31],
-  "lr":           [1e-4, 3e-4, 1e-3, 4e-3],
-  "weight_decay": [0.0, 1e-3, 1e-2]
+  "kernel_size":  [3, 5, 7, 13],
+  "lr":           [3e-4, 1e-3, 4e-3],
+  "weight_decay": [0.0, 1e-3]
 }

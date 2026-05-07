@@ -33,6 +33,14 @@ Outputs (in --out_dir; default
     pred.npy          [N_test, pred_len, n_iv]  original-space predictions  (gitignored)
     start_dates.npy   [N_test]                  datetime64[D] start of each window
     config.json       full record incl. ic_table sweep over all candidate p
+
+`ic_table[p]` contains, alongside the information criteria, three diagnostic
+losses in scaled space:
+    train_mse        one-step in-sample residual MSE
+    val_mse          one-step val MSE (lag-selection diagnostic)
+    val_rollout_mse  pred_len-step rollout MSE on val (mean over
+                     windows × pred_len × K) — same averaging convention as
+                     the deep-learning baselines, so directly comparable.
 """
 
 from __future__ import annotations
@@ -125,6 +133,52 @@ def _fit_var_p(X: np.ndarray, p: int) -> tuple[np.ndarray, list[np.ndarray], np.
     A_list    = [A_stacked[i * K : (i + 1) * K] for i in range(p)]
     E         = Y - Z_full @ coef
     return c, A_list, E
+
+
+def _one_step_mse(X: np.ndarray, c: np.ndarray, A_list: list[np.ndarray]) -> float:
+    """One-step VAR(p) MSE on `X` given a fit (c, A_list). Predicts X[t] from
+    X[t-1], ..., X[t-p] and averages squared residuals over rows [p, T).
+    `X` is in the same (scaled) space the model was fit in."""
+    p = len(A_list)
+    T = X.shape[0]
+    if T <= p:
+        return float("nan")
+    pred = np.tile(c, (T - p, 1))
+    for i in range(p):
+        pred += X[p - 1 - i : T - 1 - i] @ A_list[i]
+    err = X[p:] - pred
+    return float((err ** 2).mean())
+
+
+def _rollout_mse(iv_sc: np.ndarray, start: int, end: int, pred_len: int,
+                 c: np.ndarray, A_list: list[np.ndarray]) -> float:
+    """Multi-step VAR(p) rollout MSE in scaled space.
+
+    For each window start t0 in [start, end - pred_len + 1) (need t0 >= p):
+    seed from iv_sc[t0 - p : t0], roll out pred_len steps, compare to
+    iv_sc[t0 : t0 + pred_len]. Mean is over (windows × pred_len × K) — same
+    averaging convention as DLinear's val/test loss, so values are directly
+    comparable when both run on the same scaled target space."""
+    p = len(A_list)
+    if start < p:
+        return float("nan")
+    n_windows = end - pred_len + 1 - start
+    if n_windows <= 0:
+        return float("nan")
+    step = _make_step_window_fn(c, A_list)
+    sse   = 0.0
+    count = 0
+    for i in range(n_windows):
+        t0 = start + i
+        window = iv_sc[t0 - p : t0].copy()
+        for h in range(pred_len):
+            x_next = step(window)
+            target = iv_sc[t0 + h]
+            diff   = x_next - target
+            sse   += float(diff @ diff)
+            count += diff.size
+            window = np.vstack([window[1:], x_next[None]])
+    return sse / count
 
 
 def _info_criteria(E: np.ndarray, p: int, K: int) -> dict:
@@ -270,8 +324,10 @@ def main():
 
     ic_table: dict = {}
     fits: dict     = {}
+    rollout_label = f"val_h{args.pred_len}"
     print(f"Fitting VAR(p) for p in {candidate_ps} ...")
-    print(f"  {'p':>3}  {'logdet':>12}  {'aic':>12}  {'bic':>12}  {'hqic':>12}  {'T_eff':>6}")
+    print(f"  {'p':>3}  {'logdet':>12}  {'aic':>12}  {'bic':>12}  {'hqic':>12}  "
+          f"{'T_eff':>6}  {'train_mse':>11}  {'val_mse':>11}  {rollout_label:>12}")
     for p in candidate_ps:
         try:
             c, A_list, E = _fit_var_p(iv_sc[:n_train], p)
@@ -279,10 +335,27 @@ def main():
             print(f"  p={p}: skipped — {err}")
             continue
         ic = _info_criteria(E, p, n_iv)
+        # Train one-step MSE: residuals are already the fit's errors in scaled
+        # space, so this matches what _one_step_mse would compute on the train
+        # slice — kept explicit for symmetry with val.
+        train_mse = float((E ** 2).mean())
+        # Val one-step MSE: feed the last p train rows + the val slice so each
+        # val timestep has p real lags available.
+        val_mse = _one_step_mse(iv_sc[n_train - p : n_train + n_val], c, A_list)
+        # Val pred_len-step rollout MSE: same window convention as DLinear's
+        # val loss (windows × pred_len × K mean of squared error in scaled
+        # space), so directly comparable across models.
+        val_rollout_mse = _rollout_mse(iv_sc, n_train, n_train + n_val,
+                                       args.pred_len, c, A_list)
+        ic["train_mse"]       = train_mse
+        ic["val_mse"]         = val_mse
+        ic["val_rollout_mse"] = val_rollout_mse
+        ic["val_rollout_pred_len"] = args.pred_len
         ic_table[str(p)] = ic
         fits[p] = (c, A_list)
         print(f"  {p:>3}  {ic['logdet']:>+12.4f}  {ic['aic']:>+12.4f}  "
-              f"{ic['bic']:>+12.4f}  {ic['hqic']:>+12.4f}  {ic['T_eff']:>6}")
+              f"{ic['bic']:>+12.4f}  {ic['hqic']:>+12.4f}  {ic['T_eff']:>6}  "
+              f"{train_mse:>11.6f}  {val_mse:>11.6f}  {val_rollout_mse:>12.6f}")
 
     if not fits:
         raise SystemExit("All VAR(p) fits failed — reduce --max_lag.")

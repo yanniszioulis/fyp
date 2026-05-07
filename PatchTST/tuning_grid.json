@@ -17,9 +17,9 @@
     "weight_decay":   1e-4,                                                                                
     "n_heads":        2,
                                                                                                            
-    "d_model":        [32, 64, 128],
-    "n_layers":       [1, 2, 3],                                                                           
-    "d_ff":           [64, 128, 256],
-    "dropout":        [0.1, 0.3],                                                                          
+    "d_model":        [32, 64],
+    "n_layers":       [1, 2],                                                                           
+    "d_ff":           [128, 256],
+    "dropout":        [0.2],                                                                          
     "lr":             [3e-4, 1e-3]
   }  

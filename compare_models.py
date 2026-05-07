@@ -37,9 +37,15 @@ Metrics (all in original target-space units):
   mse, rmse, mae, rse  standard regression metrics
   bias                 mean signed error; positive = over-prediction
   da                   directional accuracy: fraction where sign(pred)==sign(true)
-  ic_mean, ic_std      Spearman rank-IC across (window, step) over N_IV features
+  ic_mean, ic_std      Spearman rank-IC across (window, step) over N_IV features.
+                       target_space=level   : computed on (pred-origin) vs (true-origin),
+                                              i.e. ranks cells by forecast change. Persist(ref)
+                                              → ic = NaN by construction.
+                       target_space=logdiff : computed on raw pred vs true (logdiffs are
+                                              already changes), i.e. ranks cells by today's
+                                              log-return. Persist(ref) gives a real number.
 
-LSTS components (from lsts_loss.py — surface-shape losses on the 20×20 grid):
+LSTS components (from lsts_loss.py — surface-shape losses on the IV grid):
   lsts_level          MSE of surface-mean (overall level offset)
   lsts_skew           MSE of moneyness slope (smile shape)
   lsts_term           MSE of tau slope (term-structure shape)
@@ -58,12 +64,13 @@ import json
 import os
 import subprocess
 import sys
+import warnings
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import torch
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, ConstantInputWarning
 
 from lsts_loss import compute_lsts_components
 
@@ -107,30 +114,35 @@ def build_models(dataset: str, target_space: str,
         {
             "name":         "HOT(product)",
             "tuning_dir":   f"HOT/tuning_results/{tag}/kronecker_product",
+            "result_dir":   f"HOT/results/{tag}_HOT_*kronecker_product*",
             "regen_script": "HOT/hot.py",
             "loader":       "hot",
         },
         {
             "name":         "HOT(sum)",
             "tuning_dir":   f"HOT/tuning_results/{tag}/kronecker_sum",
+            "result_dir":   f"HOT/results/{tag}_HOT_*kronecker_sum*",
             "regen_script": "HOT/hot.py",
             "loader":       "hot",
         },
         {
             "name":         "DynGWN",
             "tuning_dir":   f"DynGWN/tuning_results/{tag}/grid_plus_adaptive",
+            "result_dir":   f"DynGWN/results/{tag}_DynGWN_*",
             "regen_script": "DynGWN/dyngwn.py",
             "loader":       "flat",
         },
         {
             "name":         "PatchTST(patch3)",
             "tuning_dir":   f"PatchTST/tuning_results/{tag}/patch3",
+            "result_dir":   f"PatchTST/results/{tag}_PatchTST_pl3_*",
             "regen_script": "PatchTST/patchtst.py",
             "loader":       "flat",
         },
         {
             "name":         "PatchTST(patch7)",
             "tuning_dir":   f"PatchTST/tuning_results/{tag}/patch7",
+            "result_dir":   f"PatchTST/results/{tag}_PatchTST_pl7_*",
             "regen_script": "PatchTST/patchtst.py",
             "loader":       "flat",
         },
@@ -249,7 +261,7 @@ def load_flat(path: str, n_iv: int) -> np.ndarray:
 
 def load_hot(path: str, n_iv: int) -> np.ndarray:
     """
-    HOT saves [N, H, W, pred_len] where (H, W) = (n_moneyness=20, n_tau=20).
+    HOT saves [N, H, W, pred_len] where (H, W) = (n_moneyness, n_tau).
     HOT script reshapes input via `iv.reshape(-1, H, W, order='F')` so that
     `grid[i_m, i_t] = csv col i_t·H + i_m`. The mirror F-order reshape here
     recovers the flat CSV column order:
@@ -296,7 +308,7 @@ def align_to_ref(pred: np.ndarray, pred_dates: np.ndarray,
 def _lsts_components(pred: np.ndarray, true: np.ndarray,
                      moneyness: np.ndarray, tau: np.ndarray) -> dict:
     """LSTS components computed on a (..., n_tau, n_k) reshape of the flat
-    400-column predictions. Inputs are float32 numpy of shape [B, n_iv]
+    n_iv-column predictions. Inputs are float32 numpy of shape [B, n_iv]
     (B can be N*P, or just N for a single horizon)."""
     n_m, n_t = len(moneyness), len(tau)
     pred_g = pred.reshape(-1, n_t, n_m)
@@ -310,9 +322,15 @@ def _lsts_components(pred: np.ndarray, true: np.ndarray,
 
 
 def compute_metrics(pred: np.ndarray, true: np.ndarray,
-                    moneyness: np.ndarray, tau: np.ndarray) -> dict:
+                    moneyness: np.ndarray, tau: np.ndarray,
+                    origin: np.ndarray, target_space: str) -> dict:
     """
-    pred, true: [N, pred_len, n_iv] in original target-space units.
+    pred, true, origin: [N, pred_len, n_iv] in original target-space units.
+    `origin` is the forecast origin (last input value, broadcast across the
+    horizon) — used to convert level predictions to changes for IC.
+    `target_space` decides what IC ranks: 'level' subtracts origin (so IC ranks
+    cells by forecast change in IV); 'logdiff' uses raw values (logdiffs are
+    already changes, so the raw rank IS the cross-sectional direction signal).
     Returns scalar metrics plus per-horizon arrays (keyed with '_' prefix).
     """
     diff  = pred - true
@@ -333,19 +351,38 @@ def compute_metrics(pred: np.ndarray, true: np.ndarray,
     bias_v = float(np.mean(diff))
     da_v   = float(np.mean(np.sign(pred) == np.sign(true)))
 
+    # Spearman rank-IC across the surface, per (window, step).
+    # level   : rank-correlate predicted vs true CHANGES from forecast origin.
+    #           Persistence (pred==origin) → constant zero → NaN by design.
+    # logdiff : rank-correlate raw values (logdiffs are already changes; the
+    #           raw cross-sectional rank IS the direction signal we want).
+    if target_space == "level":
+        pred_for_ic = pred - origin
+        true_for_ic = true - origin
+    elif target_space == "logdiff":
+        pred_for_ic = pred
+        true_for_ic = true
+    else:
+        raise ValueError(f"Unknown target_space {target_space!r}")
+
     N, P, F = pred.shape
     ic = np.full((N, P), np.nan)
-    for i in range(N):
-        for t in range(P):
-            r, _ = spearmanr(pred[i, t], true[i, t])
-            ic[i, t] = r if np.isfinite(r) else np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConstantInputWarning)
+        for i in range(N):
+            for t in range(P):
+                r, _ = spearmanr(pred_for_ic[i, t], true_for_ic[i, t])
+                ic[i, t] = r if np.isfinite(r) else np.nan
 
-    ic_mean_v = float(np.nanmean(ic))
-    ic_std_v  = float(np.nanstd(ic))
+    with warnings.catch_warnings():
+        # Persist(ref) → IC array is all-NaN; nanmean warns "Mean of empty slice".
+        warnings.simplefilter("ignore", RuntimeWarning)
+        ic_mean_v = float(np.nanmean(ic))
+        ic_std_v  = float(np.nanstd(ic))
+        per_h_ic  = np.nanmean(ic, axis=0)
 
     per_h_mse = np.mean(sq,    axis=(0, 2))
     per_h_mae = np.mean(abs_d, axis=(0, 2))
-    per_h_ic  = np.nanmean(ic, axis=0)
 
     # LSTS — overall (averaged across all windows × horizons × surface cells).
     overall_lsts = _lsts_components(pred.reshape(-1, F), true.reshape(-1, F),
@@ -527,10 +564,26 @@ def write_per_model_metrics(model_dir: str, name: str, dataset: str,
 
 # ─── Resolution + regen ───────────────────────────────────────────────────────
 
-def _resolve_best_combo(tuning_dir: str, name: str) -> str | None:
+def _config_n_iv_matches(cfg_path: str, expected_n_iv: int | None) -> bool:
+    """If expected_n_iv is given, only accept dirs whose config.json `n_iv`
+    matches the current CSV. Lets stale tuning dirs from a different grid
+    (e.g. previous 20x20=400) be skipped automatically."""
+    if expected_n_iv is None:
+        return True
+    try:
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+    except Exception:
+        return False
+    return int(cfg.get("n_iv", -1)) == int(expected_n_iv)
+
+
+def _resolve_best_combo(tuning_dir: str, name: str,
+                        expected_n_iv: int | None = None) -> str | None:
     """
     Read `<tuning_dir>/leaderboard.csv` and pick the lowest-val_loss combo
-    that has both config.json and best_model.pt.
+    that has both config.json and best_model.pt (and matches expected_n_iv
+    when provided).
     """
     lb_path = os.path.join(tuning_dir, "leaderboard.csv")
     if not os.path.exists(lb_path):
@@ -540,23 +593,34 @@ def _resolve_best_combo(tuning_dir: str, name: str) -> str | None:
         print(f"  {name}: leaderboard at {lb_path} missing required columns")
         return None
     df = df.dropna(subset=["best_val_loss"]).sort_values("best_val_loss")
+    skipped_shape = 0
     for _, row in df.iterrows():
         cid = row["combo_id"]
         d = os.path.join(tuning_dir, cid)
         cfg  = os.path.join(d, "config.json")
         ckpt = os.path.join(d, "best_model.pt")
-        if os.path.exists(cfg) and os.path.exists(ckpt):
-            print(f"  {name}: tuning best = {cid} "
-                  f"(val_loss={row['best_val_loss']:.6f}) at {d}")
-            return d
-    print(f"  {name}: no combo under {tuning_dir} has both config.json and best_model.pt")
+        if not (os.path.exists(cfg) and os.path.exists(ckpt)):
+            continue
+        if not _config_n_iv_matches(cfg, expected_n_iv):
+            skipped_shape += 1
+            continue
+        print(f"  {name}: tuning best = {cid} "
+              f"(val_loss={row['best_val_loss']:.6f}) at {d}")
+        return d
+    if skipped_shape:
+        print(f"  {name}: {skipped_shape} combo(s) under {tuning_dir} "
+              f"skipped (n_iv != {expected_n_iv}); will try result_dir")
+    else:
+        print(f"  {name}: no combo under {tuning_dir} has both config.json and best_model.pt")
     return None
 
 
-def _resolve_result_dir(result_glob: str, requires_ckpt: bool, name: str) -> str | None:
+def _resolve_result_dir(result_glob: str, requires_ckpt: bool, name: str,
+                        expected_n_iv: int | None = None) -> str | None:
     """Glob `result_glob` and return the most-recently-modified dir that has
-    config.json (and best_model.pt when `requires_ckpt`). VAR has no
-    checkpoint — refits from CSV+config in seconds."""
+    config.json (and best_model.pt when `requires_ckpt`), filtered by
+    expected_n_iv when provided. VAR has no checkpoint — refits from
+    CSV+config in seconds."""
     matches = glob.glob(result_glob)
     if not matches:
         return None
@@ -564,8 +628,11 @@ def _resolve_result_dir(result_glob: str, requires_ckpt: bool, name: str) -> str
     for d in matches:
         cfg  = os.path.join(d, "config.json")
         ckpt = os.path.join(d, "best_model.pt")
-        if os.path.exists(cfg) and (not requires_ckpt or os.path.exists(ckpt)):
-            candidates.append((d, os.path.getmtime(cfg)))
+        if not (os.path.exists(cfg) and (not requires_ckpt or os.path.exists(ckpt))):
+            continue
+        if not _config_n_iv_matches(cfg, expected_n_iv):
+            continue
+        candidates.append((d, os.path.getmtime(cfg)))
     if not candidates:
         return None
     d = max(candidates, key=lambda t: t[1])[0]
@@ -577,14 +644,16 @@ def _is_var(spec: dict) -> bool:
     return "VAR/" in spec.get("regen_script", "")
 
 
-def _maybe_regen(spec: dict, name: str, infer_batch: int) -> str | None:
+def _maybe_regen(spec: dict, name: str, infer_batch: int,
+                 expected_n_iv: int | None = None) -> str | None:
     out_dir = None
     if spec.get("tuning_dir"):
-        out_dir = _resolve_best_combo(spec["tuning_dir"], name)
+        out_dir = _resolve_best_combo(spec["tuning_dir"], name, expected_n_iv)
     if out_dir is None and spec.get("result_dir"):
         out_dir = _resolve_result_dir(spec["result_dir"],
                                       requires_ckpt=not _is_var(spec),
-                                      name=name)
+                                      name=name,
+                                      expected_n_iv=expected_n_iv)
     if out_dir is None:
         return None
 
@@ -657,7 +726,8 @@ def main():
 
     results = []
 
-    m = compute_metrics(persist, trues, moneyness, tau)
+    m = compute_metrics(persist, trues, moneyness, tau,
+                        origin=persist, target_space=args.target_space)
     m["name"] = "Persist(ref)"
     m["n_windows"] = meta["n_test"]
     m["source"] = "built-in"
@@ -666,7 +736,8 @@ def main():
 
     for spec in models_for_run:
         name = spec["name"]
-        pred_path = _maybe_regen(spec, name, args.infer_batch)
+        pred_path = _maybe_regen(spec, name, args.infer_batch,
+                                 expected_n_iv=n_iv)
         if pred_path is None:
             print(f"  {name}: no regen-eligible dir for dataset={args.dataset!r}, "
                   f"target_space={args.target_space!r} — skipping")
@@ -689,7 +760,8 @@ def main():
                 print(f"  {name}: date alignment failed — {e}")
                 continue
             n_windows = len(ref_dates)
-            true_aligned = trues
+            true_aligned    = trues
+            persist_aligned = persist
         else:
             n_windows = min(len(pred), len(trues))
             if n_windows < len(trues):
@@ -698,13 +770,16 @@ def main():
                     f"alignment from window 0 (model has {len(pred)}, ref has {len(trues)})."
                 )
             pred = pred[:n_windows]
-            true_aligned = trues[:n_windows]
+            true_aligned    = trues[:n_windows]
+            persist_aligned = persist[:n_windows]
 
         if pred.shape[1:] != (args.pred_len, n_iv):
             print(f"  {name}: unexpected pred shape {pred.shape} — skipping")
             continue
 
-        m = compute_metrics(pred, true_aligned, moneyness, tau)
+        m = compute_metrics(pred, true_aligned, moneyness, tau,
+                            origin=persist_aligned,
+                            target_space=args.target_space)
         m["name"] = name
         m["n_windows"] = n_windows
         m["source"] = pred_path

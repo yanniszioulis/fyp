@@ -1,0 +1,60 @@
+{
+  "timestamp": "20260507_211526",
+  "dataset": "full",
+  "target_space": "level",
+  "seq_len": 10,
+  "pred_len": 1,
+  "models": {
+    "Persist(ref)": {
+      "mse": 0.00012804642028640956,
+      "rmse": 0.011315759819225996,
+      "mae": 0.0061456081457436085,
+      "rse": 0.16813860271413628,
+      "bias": 0.00011694411659846082,
+      "da": 1.0,
+      "ic_mean": NaN,
+      "ic_std": NaN,
+      "lsts_level": 8.144233288476244e-05,
+      "lsts_skew": 0.008173339068889618,
+      "lsts_term": 0.028650712221860886,
+      "lsts_curvature": 3.115209983661771e-05,
+      "name": "Persist(ref)",
+      "n_windows": 838,
+      "source": "built-in"
+    },
+    "VAR(BIC)": {
+      "mse": 0.00015056124539114535,
+      "rmse": 0.01227034006827624,
+      "mae": 0.006846576929092407,
+      "rse": 0.1823225119384248,
+      "bias": -0.0018595323199406266,
+      "da": 1.0,
+      "ic_mean": 0.157955262168064,
+      "ic_std": 0.30747463257978724,
+      "lsts_level": 9.03647523955442e-05,
+      "lsts_skew": 0.013039356097579002,
+      "lsts_term": 0.028558339923620224,
+      "lsts_curvature": 5.0516624469310045e-05,
+      "name": "VAR(BIC)",
+      "n_windows": 838,
+      "source": "VAR/results/full_level_SPX_IV_10_1_VAR_p1_bic/pred.npy"
+    },
+    "HOT(product)": {
+      "mse": 0.00015966891078278422,
+      "rmse": 0.01263601641273009,
+      "mae": 0.007276685442775488,
+      "rse": 0.18775602588451185,
+      "bias": -0.00018641899805516005,
+      "da": 1.0,
+      "ic_mean": 0.14163483591633524,
+      "ic_std": 0.4367813273654942,
+      "lsts_level": 9.281383972847834e-05,
+      "lsts_skew": 0.008695561438798904,
+      "lsts_term": 0.02932830899953842,
+      "lsts_curvature": 2.8190524972160347e-05,
+      "name": "HOT(product)",
+      "n_windows": 838,
+      "source": "HOT/results/full_level_SPX_IV_10_1_HOT_tensor_dh64_nb2_nh4_ps3_kronecker_product_perope_splape_ep100/pred.npy"
+    }
+  }
+}

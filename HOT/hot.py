@@ -124,8 +124,7 @@ class SpatialPE(nn.Module):
 
     Without this, KroneckerAttention is permutation-equivariant per spatial
     axis: shuffling moneyness rows produces shuffled outputs. With LAPE the
-    20×20 IV grid gains a per-cell positional fingerprint independent of
-    content.
+    IV grid gains a per-cell positional fingerprint independent of content.
     """
     def __init__(self, mode: str, d_hidden: int, h_max: int = 32, w_max: int = 32):
         super().__init__()

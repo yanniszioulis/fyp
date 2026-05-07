@@ -182,8 +182,8 @@ class DynGWN(nn.Module):
         self.layers    = layers
         self.num_nodes = num_nodes
 
-        skip_channels = nhid * 8
-        end_channels  = nhid * 16
+        skip_channels = nhid * 2
+        end_channels  = nhid * 4
         order         = 2
 
         self.static_supports = static_supports or []
@@ -194,8 +194,8 @@ class DynGWN(nn.Module):
         self.start_conv = nn.Conv2d(in_dim, nhid, kernel_size=(1, 1))
 
         # Adaptive adjacency node vectors (rank-10 low-rank embedding)
-        self.nodevec1 = nn.Parameter(torch.randn(num_nodes, 10))
-        self.nodevec2 = nn.Parameter(torch.randn(10, num_nodes))
+        self.nodevec1 = nn.Parameter(torch.randn(num_nodes, 5))
+        self.nodevec2 = nn.Parameter(torch.randn(5, num_nodes))
 
         self.filter_convs = nn.ModuleList()
         self.gate_convs   = nn.ModuleList()
@@ -580,7 +580,7 @@ def main():
     ap.add_argument("--batch_size",   type=int,   default=32)
     ap.add_argument("--lr",           type=float, default=1e-3)
     ap.add_argument("--weight_decay", type=float, default=1e-4)
-    ap.add_argument("--patience",     type=int,   default=30)
+    ap.add_argument("--patience",     type=int,   default=15)
     ap.add_argument("--device",       default="auto")
     ap.add_argument("--seed",         type=int,   default=42)
     ap.add_argument("--out_dir",      default=None)

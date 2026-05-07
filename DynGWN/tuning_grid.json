@@ -1,5 +1,5 @@
 {
-  "_note": "Tuned on A100. At nhid=128,blocks=5,layers=3 the largest activation is ~5GB fp32; fits A100-40GB. On T4/V100 (16GB) drop batch_size to 64. kernel_size fixed at 2 because kernel>=3 with blocks=5,layers=3 exceeds seq_len=63 receptive-field cap.",
+  "_note": "Local small-capacity grid. Earlier finding: nh8 b2 l1 (~30k params) tied Persist on precovid c63 h21 test MSE while the tuned nh16 b3 l2 (~6M) lost to it; DLinear (also tiny) leads. This grid stays in the small zone and sweeps nhid x layers x dropout to look for a config that beats Persist. batch_size=32 sized for local MPS/CPU.",
 
   "_variants": [
     {"name": "grid_plus_adaptive", "fix": {"graph_mode": "grid_plus_adaptive"}}
@@ -10,11 +10,11 @@
   "batch_size":   128,
   "loss":         "mse",
   "kernel_size":  2,
-  "dropout":      0.3,
+  "blocks":       2,
+  "lr":           [1e-3, 1e-2],
+  "weight_decay": [1e-3, 1e-2],
 
-  "nhid":         [16, 32],
-  "blocks":       [3, 4, 5],
-  "layers":       [2, 3],
-  "lr":           [1e-3, 3e-3],
-  "weight_decay": [1e-4, 1e-3]
+  "nhid":         [4, 8, 16],
+  "layers":       [1, 2],
+  "dropout":      [0.3, 0.5]
 }

@@ -1,0 +1,25 @@
+  {               
+    "_note": "PatchTST grid. Two variants pin (patch_len, stride) as a coupled pair (cartesian product would otherwise produce nonsense like pl=3,stride=7). Sweep extends into the small zone — patch_num is only 10–22 per channel, so high-capacity attention is over-parameterised. RevIN off for apples-to-apples with DLinear/DynGWN/HOT. batch_size=128 sized for Colab; drop to 32 for local MPS/CPU.",                 
+                  
+    "_variants": [
+      {"name": "patch3", "fix": {"patch_len": 3, "stride": 3}},
+      {"name": "patch7", "fix": {"patch_len": 7, "stride": 7}}                                             
+    ],
+                                                                                                           
+    "epochs":         100,                                                                                 
+    "patience":       15,
+    "batch_size":     128,                                                                                 
+    "loss":           "mse",
+    "revin":          "off",
+    "padding_patch":  "end",
+    "attn_dropout":   0.0,                                                                                 
+    "head_dropout":   0.0,
+    "weight_decay":   1e-4,                                                                                
+    "n_heads":        2,
+                                                                                                           
+    "d_model":        [32, 64, 128],
+    "n_layers":       [1, 2, 3],                                                                           
+    "d_ff":           [64, 128, 256],
+    "dropout":        [0.1, 0.3],                                                                          
+    "lr":             [3e-4, 1e-3]
+  }  

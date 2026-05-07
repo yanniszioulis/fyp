@@ -1,0 +1,390 @@
+{
+  "n_combos": 16,
+  "grid": {
+    "epochs": 100,
+    "patience": 15,
+    "batch_size": 128,
+    "loss": "mse",
+    "revin": "off",
+    "padding_patch": "end",
+    "attn_dropout": 0.0,
+    "head_dropout": 0.0,
+    "weight_decay": 0.0001,
+    "n_heads": 2,
+    "d_model": [
+      32,
+      64
+    ],
+    "n_layers": [
+      1,
+      2
+    ],
+    "d_ff": [
+      128,
+      256
+    ],
+    "dropout": [
+      0.2
+    ],
+    "lr": [
+      0.0003,
+      0.001
+    ],
+    "patch_len": 7,
+    "stride": 7
+  },
+  "combos": [
+    {
+      "combo_id": "combo_0000",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 1,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0001",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 1,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0002",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 1,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0003",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 1,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0004",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 2,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0005",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 2,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0006",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 2,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0007",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 32,
+        "n_layers": 2,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0008",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 1,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0009",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 1,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0010",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 1,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0011",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 1,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0012",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 2,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0013",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 2,
+        "d_ff": 128,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0014",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 2,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.0003,
+        "patch_len": 7,
+        "stride": 7
+      }
+    },
+    {
+      "combo_id": "combo_0015",
+      "params": {
+        "epochs": 100,
+        "patience": 15,
+        "batch_size": 128,
+        "loss": "mse",
+        "revin": "off",
+        "padding_patch": "end",
+        "attn_dropout": 0.0,
+        "head_dropout": 0.0,
+        "weight_decay": 0.0001,
+        "n_heads": 2,
+        "d_model": 64,
+        "n_layers": 2,
+        "d_ff": 256,
+        "dropout": 0.2,
+        "lr": 0.001,
+        "patch_len": 7,
+        "stride": 7
+      }
+    }
+  ]
+}

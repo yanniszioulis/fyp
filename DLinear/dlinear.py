@@ -383,7 +383,6 @@ def main():
         args.seq_len      = cfg.get('seq_len',      args.seq_len)
         args.pred_len    = cfg.get('pred_len',    args.pred_len)
         args.kernel_size = cfg.get('kernel_size', args.kernel_size)
-        args.batch_size  = cfg.get('batch_size',  args.batch_size)
         args.loss        = cfg.get('loss',        args.loss)
         args.huber_delta = cfg.get('huber_delta', args.huber_delta)
         print(f'[predict_only] {cfg_path}')

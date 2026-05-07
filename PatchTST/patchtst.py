@@ -554,7 +554,7 @@ def main():
         for k in ("csv_path", "dataset", "target_space", "seq_len", "pred_len",
                   "patch_len", "stride",
                   "d_model", "n_heads", "n_layers", "d_ff",
-                  "dropout", "attn_dropout", "head_dropout", "batch_size",
+                  "dropout", "attn_dropout", "head_dropout",
                   "padding_patch", "revin", "revin_affine", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])

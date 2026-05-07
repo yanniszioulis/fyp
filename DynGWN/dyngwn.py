@@ -618,7 +618,7 @@ def main():
             cfg = json.load(f)
         for k in ("csv_path", "dataset", "target_space", "seq_len", "pred_len",
                   "graph_mode", "nhid", "blocks", "layers", "kernel_size", "dropout",
-                  "batch_size", "loss", "huber_delta"):
+                  "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
         print(f"[predict_only] {cfg_path}")

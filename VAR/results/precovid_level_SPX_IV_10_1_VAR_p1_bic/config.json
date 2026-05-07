@@ -1,0 +1,29 @@
+{
+  "model": "VAR",
+  "dataset": "precovid",
+  "target_space": "level",
+  "csv_path": "SPX_surfaces.csv",
+  "seq_len": 10,
+  "pred_len": 1,
+  "n_iv": 400,
+  "n_train": 1937,
+  "n_val": 278,
+  "n_test": 553,
+  "train_end_date": "2016-09-12",
+  "seed": 42,
+  "loss": "ols",
+  "criterion": "bic",
+  "max_lag": 1,
+  "selected_lag": 1,
+  "ic_table": {
+    "1": {
+      "logdet": -7228.111984085187,
+      "aic": -7062.82272788684,
+      "bic": -6602.6260941813425,
+      "hqic": -6893.570009677629,
+      "T_eff": 1936,
+      "n_params": 160000
+    }
+  },
+  "git_commit": "ac508e97f80f0872bb79256b7c73eed845220e9d"
+}

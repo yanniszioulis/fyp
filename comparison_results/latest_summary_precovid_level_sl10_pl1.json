@@ -1,0 +1,60 @@
+{
+  "timestamp": "20260507_185049",
+  "dataset": "precovid",
+  "target_space": "level",
+  "seq_len": 10,
+  "pred_len": 1,
+  "models": {
+    "Persist(ref)": {
+      "mse": 0.00012439509737305343,
+      "rmse": 0.011153255012464005,
+      "mae": 0.006393923424184322,
+      "rse": 0.2758807024272395,
+      "bias": -6.262389797484502e-05,
+      "da": 1.0,
+      "ic_mean": 0.9905110897025446,
+      "ic_std": 0.019088767816399732,
+      "lsts_level": 9.812202915782109e-05,
+      "lsts_skew": 0.003724664216861129,
+      "lsts_term": 0.0075654140673577785,
+      "lsts_curvature": 5.284702808694419e-08,
+      "name": "Persist(ref)",
+      "n_windows": 553,
+      "source": "built-in"
+    },
+    "VAR(BIC)": {
+      "mse": 0.00012739934027194977,
+      "rmse": 0.011287131622868131,
+      "mae": 0.007252135314047337,
+      "rse": 0.27919220096510716,
+      "bias": 0.0020433401223272085,
+      "da": 1.0,
+      "ic_mean": 0.9897596410391996,
+      "ic_std": 0.019361417088098565,
+      "lsts_level": 0.00010167224536417052,
+      "lsts_skew": 0.0034487212542444468,
+      "lsts_term": 0.008722652681171894,
+      "lsts_curvature": 4.3743419553265994e-08,
+      "name": "VAR(BIC)",
+      "n_windows": 553,
+      "source": "VAR/results/precovid_level_SPX_IV_10_1_VAR_p1_bic/pred.npy"
+    },
+    "DLinear": {
+      "mse": 0.00012364122085273266,
+      "rmse": 0.011119407396652604,
+      "mae": 0.006401455495506525,
+      "rse": 0.275043484599513,
+      "bias": -0.00024600618053227663,
+      "da": 1.0,
+      "ic_mean": 0.9900569000745698,
+      "ic_std": 0.019549280764503303,
+      "lsts_level": 9.744477574713528e-05,
+      "lsts_skew": 0.0038004526868462563,
+      "lsts_term": 0.009042485617101192,
+      "lsts_curvature": 5.283789050736232e-08,
+      "name": "DLinear",
+      "n_windows": 553,
+      "source": "DLinear/results/precovid_level_SPX_IV_10_1_DLinear_individual_k3_ep100/pred.npy"
+    }
+  }
+}

@@ -746,7 +746,7 @@ def main():
             cfg = json.load(f)
         for k in ("csv_path", "dataset", "target_space", "seq_len", "pred_len",
                   "d_hidden", "d_mlp", "n_blocks", "n_head", "patch_size", "attention_type",
-                  "pe", "spatial_pe", "norm", "dropout", "batch_size", "loss", "huber_delta"):
+                  "pe", "spatial_pe", "norm", "dropout", "loss", "huber_delta"):
             if k in cfg:
                 setattr(args, k, cfg[k])
         print(f"[predict_only] {cfg_path}")

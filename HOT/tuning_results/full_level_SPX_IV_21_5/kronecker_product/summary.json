@@ -1,0 +1,223 @@
+{
+  "n_combos": 48,
+  "n_completed": 48,
+  "n_failed": 0,
+  "winner": {
+    "combo_id": "combo_0040",
+    "best_val_loss": 0.0528255752646006,
+    "params": {
+      "attention_type": "kronecker_product",
+      "batch_size": 128,
+      "d_hidden": 32,
+      "d_mlp": 32,
+      "dropout": 0.3,
+      "epochs": 100,
+      "loss": "mse",
+      "lr": 0.001,
+      "n_blocks": 2,
+      "n_head": 4,
+      "norm": "off",
+      "patch_size": 9,
+      "patience": 15,
+      "pe": "rope",
+      "spatial_pe": "sin2d",
+      "weight_decay": 0.001
+    },
+    "result_dir": "HOT/tuning_results/full_level_SPX_IV_21_5/kronecker_product/combo_0040",
+    "checkpoint": "HOT/tuning_results/full_level_SPX_IV_21_5/kronecker_product/combo_0040/best_model.pt"
+  },
+  "ranking": [
+    {
+      "combo_id": "combo_0040",
+      "best_val_loss": 0.0528255752646006
+    },
+    {
+      "combo_id": "combo_0028",
+      "best_val_loss": 0.0528309247814691
+    },
+    {
+      "combo_id": "combo_0027",
+      "best_val_loss": 0.0530713114600915
+    },
+    {
+      "combo_id": "combo_0014",
+      "best_val_loss": 0.0531565902324823
+    },
+    {
+      "combo_id": "combo_0030",
+      "best_val_loss": 0.0538442799678215
+    },
+    {
+      "combo_id": "combo_0046",
+      "best_val_loss": 0.0538766338275029
+    },
+    {
+      "combo_id": "combo_0041",
+      "best_val_loss": 0.0541604258693181
+    },
+    {
+      "combo_id": "combo_0026",
+      "best_val_loss": 0.0545181970183665
+    },
+    {
+      "combo_id": "combo_0044",
+      "best_val_loss": 0.0545659947853821
+    },
+    {
+      "combo_id": "combo_0013",
+      "best_val_loss": 0.0546070108046898
+    },
+    {
+      "combo_id": "combo_0047",
+      "best_val_loss": 0.0548009620263026
+    },
+    {
+      "combo_id": "combo_0012",
+      "best_val_loss": 0.0549810333893849
+    },
+    {
+      "combo_id": "combo_0008",
+      "best_val_loss": 0.0550260165562996
+    },
+    {
+      "combo_id": "combo_0031",
+      "best_val_loss": 0.0550523377381838
+    },
+    {
+      "combo_id": "combo_0024",
+      "best_val_loss": 0.0551399302024107
+    },
+    {
+      "combo_id": "combo_0025",
+      "best_val_loss": 0.0552075912172977
+    },
+    {
+      "combo_id": "combo_0029",
+      "best_val_loss": 0.0553336332623775
+    },
+    {
+      "combo_id": "combo_0037",
+      "best_val_loss": 0.0554283542128709
+    },
+    {
+      "combo_id": "combo_0045",
+      "best_val_loss": 0.0556971900738202
+    },
+    {
+      "combo_id": "combo_0043",
+      "best_val_loss": 0.0557508354003612
+    },
+    {
+      "combo_id": "combo_0010",
+      "best_val_loss": 0.0558040932967112
+    },
+    {
+      "combo_id": "combo_0023",
+      "best_val_loss": 0.0563939890036216
+    },
+    {
+      "combo_id": "combo_0033",
+      "best_val_loss": 0.0567965089128567
+    },
+    {
+      "combo_id": "combo_0021",
+      "best_val_loss": 0.0569173854130965
+    },
+    {
+      "combo_id": "combo_0015",
+      "best_val_loss": 0.0570551093954306
+    },
+    {
+      "combo_id": "combo_0011",
+      "best_val_loss": 0.0572619730463394
+    },
+    {
+      "combo_id": "combo_0019",
+      "best_val_loss": 0.0576845539303926
+    },
+    {
+      "combo_id": "combo_0009",
+      "best_val_loss": 0.0580641684623864
+    },
+    {
+      "combo_id": "combo_0039",
+      "best_val_loss": 0.0580898431631234
+    },
+    {
+      "combo_id": "combo_0020",
+      "best_val_loss": 0.0583063965806594
+    },
+    {
+      "combo_id": "combo_0032",
+      "best_val_loss": 0.0583480252669407
+    },
+    {
+      "combo_id": "combo_0036",
+      "best_val_loss": 0.0583700789855076
+    },
+    {
+      "combo_id": "combo_0017",
+      "best_val_loss": 0.0593504974475273
+    },
+    {
+      "combo_id": "combo_0042",
+      "best_val_loss": 0.0597676405539879
+    },
+    {
+      "combo_id": "combo_0034",
+      "best_val_loss": 0.0604249267623974
+    },
+    {
+      "combo_id": "combo_0038",
+      "best_val_loss": 0.0604950751249606
+    },
+    {
+      "combo_id": "combo_0035",
+      "best_val_loss": 0.0609474675013468
+    },
+    {
+      "combo_id": "combo_0022",
+      "best_val_loss": 0.0613006118398446
+    },
+    {
+      "combo_id": "combo_0005",
+      "best_val_loss": 0.0620773789974359
+    },
+    {
+      "combo_id": "combo_0003",
+      "best_val_loss": 0.0632396139777623
+    },
+    {
+      "combo_id": "combo_0001",
+      "best_val_loss": 0.0642889187886164
+    },
+    {
+      "combo_id": "combo_0016",
+      "best_val_loss": 0.064670263001552
+    },
+    {
+      "combo_id": "combo_0007",
+      "best_val_loss": 0.064716606759108
+    },
+    {
+      "combo_id": "combo_0004",
+      "best_val_loss": 0.0658608846939527
+    },
+    {
+      "combo_id": "combo_0018",
+      "best_val_loss": 0.0658865571022033
+    },
+    {
+      "combo_id": "combo_0000",
+      "best_val_loss": 0.0713046451027576
+    },
+    {
+      "combo_id": "combo_0006",
+      "best_val_loss": 0.0713580359633152
+    },
+    {
+      "combo_id": "combo_0002",
+      "best_val_loss": 0.0734886435362009
+    }
+  ]
+}

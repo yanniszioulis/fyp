@@ -1,0 +1,96 @@
+{
+  "n_combos": 16,
+  "n_completed": 16,
+  "n_failed": 0,
+  "winner": {
+    "combo_id": "combo_0000",
+    "best_val_loss": 0.7346272401782978,
+    "params": {
+      "attn_dropout": 0.0,
+      "batch_size": 128,
+      "d_ff": 128,
+      "d_model": 32,
+      "dropout": 0.2,
+      "epochs": 100,
+      "head_dropout": 0.0,
+      "loss": "mse",
+      "lr": 0.0003,
+      "n_heads": 2,
+      "n_layers": 1,
+      "padding_patch": "end",
+      "patch_len": 3,
+      "patience": 15,
+      "revin": "off",
+      "stride": 3,
+      "weight_decay": 0.0001
+    },
+    "result_dir": "PatchTST/tuning_results/full_logdiff_SPX_IV_21_63/patch3/combo_0000",
+    "checkpoint": "PatchTST/tuning_results/full_logdiff_SPX_IV_21_63/patch3/combo_0000/best_model.pt"
+  },
+  "ranking": [
+    {
+      "combo_id": "combo_0000",
+      "best_val_loss": 0.7346272401782978
+    },
+    {
+      "combo_id": "combo_0001",
+      "best_val_loss": 0.7347208234776302
+    },
+    {
+      "combo_id": "combo_0008",
+      "best_val_loss": 0.7347520275944087
+    },
+    {
+      "combo_id": "combo_0002",
+      "best_val_loss": 0.7347632212465217
+    },
+    {
+      "combo_id": "combo_0004",
+      "best_val_loss": 0.7350052838899842
+    },
+    {
+      "combo_id": "combo_0006",
+      "best_val_loss": 0.7350414951308435
+    },
+    {
+      "combo_id": "combo_0010",
+      "best_val_loss": 0.7351261550972775
+    },
+    {
+      "combo_id": "combo_0003",
+      "best_val_loss": 0.7352120981496924
+    },
+    {
+      "combo_id": "combo_0014",
+      "best_val_loss": 0.7352680655754581
+    },
+    {
+      "combo_id": "combo_0007",
+      "best_val_loss": 0.7352877219184106
+    },
+    {
+      "combo_id": "combo_0005",
+      "best_val_loss": 0.7354664947806286
+    },
+    {
+      "combo_id": "combo_0012",
+      "best_val_loss": 0.7355233612848597
+    },
+    {
+      "combo_id": "combo_0009",
+      "best_val_loss": 0.7357282718690503
+    },
+    {
+      "combo_id": "combo_0013",
+      "best_val_loss": 0.7363797227541605
+    },
+    {
+      "combo_id": "combo_0011",
+      "best_val_loss": 0.7364726173443621
+    },
+    {
+      "combo_id": "combo_0015",
+      "best_val_loss": 0.7365139889783886
+    }
+  ]
+}

@@ -8,31 +8,52 @@ the model parameters do not depend on either axis size.
 
 Requires:  pip install einops
 
+Ablation knobs to revisit later (not in the tuning grid yet):
+    - `head_type`: 'flatten' vs 'mean'. Default 'flatten'.
+
+Deviations from the reference HOT implementation:
+    - RevIN-style per-cell window normalisation inside forward() (RevIN-style).
+    - Conv1d patcher embedding over the temporal axis (PatchTST-style).
+    - PatchTST-style flatten+linear head over all temporal patches is the
+      default (`head_type='flatten'`); the mean-pool head is kept for
+      ablation (`head_type='mean'`).
+    - Unified `pe` flag: 'rope' applies RoPE on H, W, and temporal axes;
+      'nope' disables all positional encoding. The separate `spatial_pe` /
+      `h_max` / `w_max` interface and the SpatialPE module have been removed.
+
 Hyperparameters (passed to HOT.__init__):
     d_hidden           int    — transformer hidden dim. Default: 128.
-    d_mlp              int    — SwiGLU feed-forward inner dim. Default: 512.
+                                SwiGLU feed-forward inner dim is always
+                                derived as `d_mlp = 4 * d_hidden`.
     n_blocks           int    — number of transformer blocks. Default: 4.
     n_head             int    — number of attention heads per Kronecker mode.
-                                Default: 8.
+                                Default: 2.
     patch_size         int    — temporal patch size for the patcher conv.
                                 Default: 4.
     context_length     int    — input window length (lookback). Default: 21.
     prediction_length  int    — forecast horizon length. Default: 63.
     attention_type     str    — 'kronecker_product' or 'kronecker_sum'.
                                 Default: 'kronecker_product'.
-    dropout            float  — dropout in attention / feed-forward / head.
-                                Default: 0.0.
-    pe                 str    — temporal positional encoding: 'rope' applies
-                                RoPE on the temporal dim; 'nope' disables it.
-                                Default: 'rope'.
-    norm               bool   — per-cell window norm/denorm inside forward()
-                                (RevIN-style). Default: True.
-    spatial_pe         str    — 2D PE on the (H, W) grid: 'none', 'lape'
-                                (learned [h_max, w_max, d]), or 'sin2d'
-                                (fixed sinusoidal; needs d_hidden % 4 == 0).
-                                Default: 'none'.
-    h_max              int    — max H supported by the spatial PE. Default: 32.
-    w_max              int    — max W supported by the spatial PE. Default: 32.
+    dropout            float  — dropout in encoder blocks: residual dropout
+                                around attention and FFN sublayers, dropout
+                                inside the FFN, attention output projection,
+                                and patcher embedding. Default: 0.0.
+    attn_dropout       float  — dropout applied to attention weights after
+                                softmax, inside Kronecker attention. Default: 0.0.
+    head_dropout       float  — dropout in the prediction head, before the
+                                final Linear projection to pred_len. Default: 0.0.
+    pe                 str    — positional encoding: 'rope' applies RoPE on
+                                the H, W, and temporal axes; 'nope' disables
+                                all positional encoding. Default: 'rope'.
+    norm               bool   — joint per-window normalisation: strip the
+                                surface-wide mean and std across (H, W, T),
+                                apply, then add back at the output.
+                                Preserves cross-cell structure within a
+                                window while removing the overall vol
+                                level/scale. Default: True.
+    head_type          str    — 'flatten' (default) applies a Flatten+Linear
+                                head over [Tp, d]; 'mean' averages over Tp
+                                before the linear head. (PatchTST uses the 'flatten' approach, while the reference HOT uses 'mean'.)
 """
 
 import math
@@ -75,72 +96,10 @@ class RotaryEmbedding(nn.Module):
         return (x * cos) + (self._rotate_half(x) * sin)
 
 
-class SpatialPE(nn.Module):
-    """
-    2D spatial positional embedding for [B, H, W, T, d] tensors.
-
-    Returns a [1, H, W, 1, d] tensor that broadcast-adds to the input.
-
-    Modes:
-      none   identity; no parameters. (HOT.forward skips the add.)
-      lape   learned [h_max, w_max, d] parameter (LAPE-style, Omranpour et al.).
-             Initialised to 0.02·randn so it's a gentle injection on top of the
-             unit-scale post-LayerNorm patch embeddings.
-      sin2d  fixed sinusoidal 2D PE: first d/2 channels encode the H index,
-             last d/2 encode the W index. Requires d divisible by 4. No params.
-
-    Without this, KroneckerAttention is permutation-equivariant per spatial
-    axis: shuffling rows produces shuffled outputs. With LAPE the grid gains
-    a per-cell positional fingerprint independent of content.
-    """
-    def __init__(self, mode: str, d_hidden: int, h_max: int = 32, w_max: int = 32):
-        super().__init__()
-        self.mode  = mode
-        self.h_max = h_max
-        self.w_max = w_max
-        if mode == "none":
-            return
-        if mode == "lape":
-            self.pe = nn.Parameter(0.02 * torch.randn(h_max, w_max, d_hidden))
-        elif mode == "sin2d":
-            self.register_buffer("pe", self._build_sin2d(h_max, w_max, d_hidden),
-                                 persistent=False)
-        else:
-            raise ValueError(f"Unknown spatial_pe mode {mode!r}; "
-                             f"choose from 'none', 'lape', 'sin2d'.")
-
-    @staticmethod
-    def _build_sin2d(h_max: int, w_max: int, d: int) -> torch.Tensor:
-        if d % 4 != 0:
-            raise ValueError(f"sin2d PE requires d_hidden divisible by 4, got {d}")
-        d_half = d // 2
-
-        def _sincos(n: int, dim: int) -> torch.Tensor:
-            pos = torch.arange(n, dtype=torch.float).unsqueeze(1)            # [n, 1]
-            div = torch.exp(torch.arange(0, dim, 2, dtype=torch.float)
-                            * (-math.log(10000.0) / dim))                    # [dim/2]
-            out = torch.zeros(n, dim)
-            out[:, 0::2] = torch.sin(pos * div)
-            out[:, 1::2] = torch.cos(pos * div)
-            return out
-
-        pe = torch.zeros(h_max, w_max, d)
-        pe[:, :, :d_half] = _sincos(h_max, d_half).unsqueeze(1)               # broadcast over W
-        pe[:, :, d_half:] = _sincos(w_max, d_half).unsqueeze(0)               # broadcast over H
-        return pe
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        H, W = x.shape[1], x.shape[2]
-        if H > self.h_max or W > self.w_max:
-            raise ValueError(f"Input H={H}, W={W} exceeds spatial-PE capacity "
-                             f"({self.h_max}, {self.w_max}); raise h_max/w_max in HOT()")
-        return self.pe[:H, :W].unsqueeze(0).unsqueeze(3)                      # [1, H, W, 1, d]
-
-
 class KroneckerAttention(nn.Module):
     def __init__(self, num_modes: int, d_model: int, n_head: int,
-                 dropout: float = 0., rotary_emb=None,
-                 mode: str = "product", rope_dims: list = []):
+                 dropout: float = 0., attn_dropout: float = 0.,
+                 rotary_emb=None, mode: str = "product", rope_dims: list = []):
         super().__init__()
         self.n_head   = n_head
         self.d_model  = d_model
@@ -152,7 +111,7 @@ class KroneckerAttention(nn.Module):
         self.key_proj   = nn.Linear(d_model, d_model * num_modes)
         self.value_proj = nn.Linear(d_model, d_model)
         self.out_proj   = nn.Linear(d_model, d_model)
-        self.att_dropout  = nn.Dropout(dropout)
+        self.att_dropout  = nn.Dropout(attn_dropout)
         self.proj_dropout = nn.Dropout(dropout)
         self.q_norm = nn.LayerNorm(self.d_head)
         self.k_norm = nn.LayerNorm(self.d_head)
@@ -209,7 +168,8 @@ class SwiGLUFeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_hidden: int, d_mlp: int, n_head: int, dropout: float = 0.,
+    def __init__(self, d_hidden: int, d_mlp: int, n_head: int,
+                 dropout: float = 0., attn_dropout: float = 0.,
                  attention_type: str = "kronecker_product", num_modes: int = 2,
                  rope_dims: list = [], input_size: int = 6):
         super().__init__()
@@ -224,8 +184,12 @@ class TransformerBlock(nn.Module):
 
         assert "kronecker" in attention_type, f"Only kronecker attention supported; got {attention_type}"
         mode = attention_type.split("_")[1]
-        self.attention   = KroneckerAttention(num_modes, d_hidden, n_head, dropout,
-                                              rotary_emb, mode, rope_dims)
+        self.attention   = KroneckerAttention(num_modes, d_hidden, n_head,
+                                              dropout=dropout,
+                                              attn_dropout=attn_dropout,
+                                              rotary_emb=rotary_emb,
+                                              mode=mode,
+                                              rope_dims=rope_dims)
         self.feedforward = SwiGLUFeedForward(d_hidden, d_mlp)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
@@ -249,25 +213,28 @@ class HOT(nn.Module):
     inside forward() and denormalises the prediction with the same stats.
     This strips per-cell level information in the same way RevIN does.
     """
-    def __init__(self, d_hidden: int = 128, d_mlp: int = 512, n_blocks: int = 4,
-                 n_head: int = 8, patch_size: int = 4,
+    def __init__(self, d_hidden: int = 128, n_blocks: int = 4,
+                 n_head: int = 2, patch_size: int = 4,
                  context_length: int = 21, prediction_length: int = 63,
-                 attention_type: str = "kronecker_product", dropout: float = 0.0,
+                 attention_type: str = "kronecker_product",
+                 dropout: float = 0.0, attn_dropout: float = 0.0,
+                 head_dropout: float = 0.0,
                  pe: str = "rope", norm: bool = True,
-                 spatial_pe: str = "none", h_max: int = 32, w_max: int = 32):
+                 head_type: str = "flatten"):
         super().__init__()
         assert pe in ("rope", "nope"), f"pe must be 'rope' or 'nope', got {pe!r}"
+        for name, val in [("dropout", dropout), ("attn_dropout", attn_dropout), ("head_dropout", head_dropout)]:
+            if not (0.0 <= val < 1.0):
+                raise ValueError(f"{name} must be in [0, 1), got {val}")
+        d_mlp = 4 * d_hidden
         self.patch_size        = patch_size
         self.context_length    = context_length
         self.prediction_length = prediction_length
         self.pe                = pe
         self.norm              = norm
-        self.spatial_pe        = spatial_pe
-        self.has_spatial_pe    = (spatial_pe != "none")
+        self.head_type         = head_type
 
         t_patches = math.ceil(context_length / patch_size)
-
-        self.pos_emb = SpatialPE(spatial_pe, d_hidden, h_max=h_max, w_max=w_max)
 
         self.emb = nn.Sequential(
             nn.Conv1d(1, d_hidden, kernel_size=patch_size, stride=patch_size),
@@ -279,28 +246,39 @@ class HOT(nn.Module):
         # Input to transformer blocks: [B, H, W, Tp', d]
         # KroneckerAttention iterates dims 1..3 (H, W, Tp') → 3 modes.
         num_modes = 3
-        rope_dims = [3] if pe == "rope" else []
+        rope_dims = [1, 2, 3] if pe == "rope" else []
         self.blocks = nn.ModuleList([
             TransformerBlock(d_hidden=d_hidden, d_mlp=d_mlp, n_head=n_head,
-                             dropout=dropout, attention_type=attention_type,
+                             dropout=dropout, attn_dropout=attn_dropout,
+                             attention_type=attention_type,
                              num_modes=num_modes, rope_dims=rope_dims,
                              input_size=t_patches)
             for _ in range(n_blocks)
         ])
 
-        self.head = nn.Sequential(
-            nn.LayerNorm(d_hidden),
-            nn.Dropout(dropout),
-            nn.Linear(d_hidden, prediction_length),
-        )
+        if head_type == "flatten":
+            self.head = nn.Sequential(
+                nn.LayerNorm(d_hidden),
+                nn.Flatten(start_dim=-2),
+                nn.Dropout(head_dropout),
+                nn.Linear(d_hidden * t_patches, prediction_length),
+            )
+        elif head_type == "mean":
+            self.head = nn.Sequential(
+                nn.LayerNorm(d_hidden),
+                nn.Dropout(head_dropout),
+                nn.Linear(d_hidden, prediction_length),
+            )
+        else:
+            raise ValueError(f"head_type must be 'flatten' or 'mean', got {head_type!r}")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B, H, W, T]
         bs, H, W, T = x.shape
 
         if self.norm:
-            mu  = x.mean(dim=-1, keepdim=True)
-            std = torch.sqrt(torch.var(x, dim=-1, keepdim=True, unbiased=False) + 1e-5)
+            mu  = x.mean(dim=(1, 2, 3), keepdim=True)
+            std = torch.sqrt(x.var(dim=(1, 2, 3), keepdim=True, unbiased=False) + 1e-5)
             x_input = (x - mu) / std
         else:
             x_input = x
@@ -318,13 +296,13 @@ class HOT(nn.Module):
         Tp_iv = h.shape[1]
         h = h.view(bs, H, W, Tp_iv, h.shape[-1])        # [B, H, W, Tp', d]
 
-        if self.has_spatial_pe:
-            h = h + self.pos_emb(h)
-
         for block in self.blocks:
             h = block(h)
 
-        logits = self.head(h.mean(dim=3))               # [B, H, W, pred]
+        if self.head_type == "flatten":
+            logits = self.head(h)                       # head includes Flatten over [Tp, d]
+        else:
+            logits = self.head(h.mean(dim=3))           # [B, H, W, pred]
 
         if self.norm:
             return (logits * std) + mu

@@ -18,12 +18,27 @@ Hyperparameters (passed to PatchTST.__init__):
     head_dropout   float  — dropout in the prediction head. Default: 0.
     res_attention  bool   — pass attention scores residually between layers.
                             Default: True.
-    revin          bool   — per-window per-channel RevIN norm/denorm around
-                            the model. Default: True.
+    revin          bool   — joint per-window RevIN norm/denorm around the
+                            model: strips mean/std jointly over (L, C),
+                            preserving cross-channel structure within the
+                            window. Default: True.
     affine         bool   — learnable affine in RevIN (only if revin=True).
                             Default: False.
     padding_patch  str    — 'end' replicates the last value `stride` times
                             before unfolding (adds +1 patch). Default: 'end'.
+    decomposition  bool   — DLinear-style trend/residual moving-average
+                            decomposition. When True, two independent
+                            backbones+heads run on the trend and residual
+                            components and their outputs are summed.
+                            Default: False.
+    kernel_size    int    — moving-average kernel for decomposition (must
+                            be odd). Only used if decomposition=True.
+                            Default: 25.
+    store_attn     bool   — if True, each encoder layer saves the most recent
+                            attention weights to its `.attn` attribute
+                            (shape [B*C, n_heads, patch_num, patch_num])
+                            so attention maps can be plotted post-hoc.
+                            Default: False.
 """
 
 from typing import Optional
@@ -35,14 +50,22 @@ from torch import Tensor
 
 
 class RevIN(nn.Module):
+    """
+    Joint RevIN: per-window mean/std reduction over all non-batch axes
+    (L and C jointly). Strips overall window level/scale while preserving
+    cross-channel structure within the window. The `num_features` argument
+    is retained for API compatibility but only affects affine parameter
+    shape (which is now scalar regardless).
+    """
     def __init__(self, num_features: int, eps: float = 1e-5, affine: bool = False):
         super().__init__()
         self.num_features = num_features
         self.eps = eps
         self.affine = affine
         if affine:
-            self.affine_weight = nn.Parameter(torch.ones(num_features))
-            self.affine_bias   = nn.Parameter(torch.zeros(num_features))
+            # Joint RevIN: one scalar pair, broadcasting across all positions.
+            self.affine_weight = nn.Parameter(torch.ones(1))
+            self.affine_bias   = nn.Parameter(torch.zeros(1))
 
     def forward(self, x: Tensor, mode: str) -> Tensor:
         if mode == "norm":
@@ -53,7 +76,7 @@ class RevIN(nn.Module):
         raise NotImplementedError(mode)
 
     def _get_statistics(self, x: Tensor):
-        dims = tuple(range(1, x.ndim - 1))
+        dims = tuple(range(1, x.ndim))
         self.mean  = x.mean(dim=dims, keepdim=True).detach()
         self.stdev = torch.sqrt(x.var(dim=dims, keepdim=True, unbiased=False) + self.eps).detach()
 
@@ -76,6 +99,33 @@ class _Transpose(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return x.transpose(*self.dims)
+
+
+class _MovingAvg(nn.Module):
+    """Boundary-padded 1-D moving average preserving sequence length."""
+    def __init__(self, kernel_size: int):
+        super().__init__()
+        self.pad = (kernel_size - 1) // 2
+        self.avg = nn.AvgPool1d(kernel_size, stride=1, padding=0)
+
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, C]
+        x = torch.cat([
+            x[:, :1].expand(-1, self.pad, -1),
+            x,
+            x[:, -1:].expand(-1, self.pad, -1),
+        ], dim=1)
+        return self.avg(x.permute(0, 2, 1)).permute(0, 2, 1)
+
+
+class _SeriesDecomp(nn.Module):
+    """Split a series into (residual, trend) via moving-average smoothing."""
+    def __init__(self, kernel_size: int):
+        super().__init__()
+        self.moving_avg = _MovingAvg(kernel_size)
+
+    def forward(self, x: Tensor):  # [B, T, C] -> (res, trend)
+        trend = self.moving_avg(x)
+        return x - trend, trend
 
 
 def _positional_encoding(q_len: int, d_model: int) -> nn.Parameter:
@@ -124,23 +174,23 @@ class _MultiheadAttention(nn.Module):
         k_s = self.W_K(Q).view(bs, -1, self.n_heads, self.d_k).permute(0, 2, 3, 1)
         v_s = self.W_V(Q).view(bs, -1, self.n_heads, self.d_k).transpose(1, 2)
         if self.res_attention:
-            output, _, scores = self.sdp_attn(q_s, k_s, v_s, prev=prev)
+            output, attn, scores = self.sdp_attn(q_s, k_s, v_s, prev=prev)
         else:
-            output, _ = self.sdp_attn(q_s, k_s, v_s)
+            output, attn = self.sdp_attn(q_s, k_s, v_s)
             scores = None
         output = output.transpose(1, 2).contiguous().view(bs, -1, self.n_heads * self.d_k)
         output = self.to_out(output)
-        if self.res_attention:
-            return output, scores
-        return output, None
+        return output, attn, scores
 
 
 class _TSTEncoderLayer(nn.Module):
     def __init__(self, d_model: int, n_heads: int,
                  d_ff: int = 256, attn_dropout: float = 0.,
-                 dropout: float = 0., res_attention: bool = True):
+                 dropout: float = 0., res_attention: bool = True,
+                 store_attn: bool = False):
         super().__init__()
         self.res_attention = res_attention
+        self.store_attn = store_attn
         self.self_attn = _MultiheadAttention(d_model, n_heads, attn_dropout, dropout, res_attention)
         self.dropout_attn = nn.Dropout(dropout)
         self.norm_attn = nn.Sequential(_Transpose(1, 2), nn.BatchNorm1d(d_model), _Transpose(1, 2))
@@ -151,7 +201,9 @@ class _TSTEncoderLayer(nn.Module):
         self.norm_ffn = nn.Sequential(_Transpose(1, 2), nn.BatchNorm1d(d_model), _Transpose(1, 2))
 
     def forward(self, src: Tensor, prev: Optional[Tensor] = None):
-        src2, scores = self.self_attn(src, prev=prev)
+        src2, attn, scores = self.self_attn(src, prev=prev)
+        if self.store_attn:
+            self.attn = attn.detach()
         src = self.norm_attn(src + self.dropout_attn(src2))
         src2 = self.ff(src)
         src = self.norm_ffn(src + self.dropout_ffn(src2))
@@ -162,10 +214,12 @@ class _TSTEncoderLayer(nn.Module):
 
 class _TSTEncoder(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int,
-                 attn_dropout: float, dropout: float, n_layers: int, res_attention: bool):
+                 attn_dropout: float, dropout: float, n_layers: int,
+                 res_attention: bool, store_attn: bool = False):
         super().__init__()
         self.layers = nn.ModuleList([
-            _TSTEncoderLayer(d_model, n_heads, d_ff, attn_dropout, dropout, res_attention)
+            _TSTEncoderLayer(d_model, n_heads, d_ff, attn_dropout, dropout,
+                             res_attention, store_attn)
             for _ in range(n_layers)
         ])
         self.res_attention = res_attention
@@ -184,7 +238,7 @@ class _TSTiEncoder(nn.Module):
     """Channel-independent encoder: all channels processed in parallel via reshape."""
     def __init__(self, patch_num: int, patch_len: int, d_model: int,
                  n_heads: int, d_ff: int, attn_dropout: float, dropout: float,
-                 n_layers: int, res_attention: bool):
+                 n_layers: int, res_attention: bool, store_attn: bool = False):
         super().__init__()
         self.patch_num = patch_num
         self.patch_len = patch_len
@@ -192,7 +246,8 @@ class _TSTiEncoder(nn.Module):
         self.W_pos = _positional_encoding(patch_num, d_model)
         self.dropout = nn.Dropout(dropout)
         self.encoder = _TSTEncoder(d_model, n_heads, d_ff,
-                                   attn_dropout, dropout, n_layers, res_attention)
+                                   attn_dropout, dropout, n_layers,
+                                   res_attention, store_attn)
 
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, C, patch_len, patch_num]
@@ -219,22 +274,14 @@ class _FlattenHead(nn.Module):
         return self.dropout(self.linear(self.flatten(x)))
 
 
-class PatchTST(nn.Module):
-    """
-    Channel-independent PatchTST with RevIN.
-    Input:  [B, seq_len, C]  (scaled)
-    Output: [B, pred_len, C] (scaled)
-
-    padding_patch: 'end' replicates the last value `stride` times before unfolding,
-    yielding patch_num+1 patches. Matches legacy run_longExp.py default.
-    """
+class _PatchTSTBackbone(nn.Module):
+    """RevIN → patch → channel-independent transformer → flatten head."""
     def __init__(self, c_in: int, seq_len: int, pred_len: int,
-                 patch_len: int = 7, stride: int = 7,
-                 d_model: int = 128, n_heads: int = 16, n_layers: int = 3,
-                 d_ff: int = 256, attn_dropout: float = 0., dropout: float = 0.,
-                 head_dropout: float = 0., res_attention: bool = True,
-                 revin: bool = True, affine: bool = False,
-                 padding_patch: str = "end"):
+                 patch_len: int, stride: int,
+                 d_model: int, n_heads: int, n_layers: int, d_ff: int,
+                 attn_dropout: float, dropout: float, head_dropout: float,
+                 res_attention: bool, revin: bool, affine: bool,
+                 padding_patch: str, store_attn: bool):
         super().__init__()
         self.revin = revin
         if revin:
@@ -249,11 +296,12 @@ class PatchTST(nn.Module):
             patch_num += 1
 
         self.backbone = _TSTiEncoder(patch_num, patch_len, d_model, n_heads,
-                                     d_ff, attn_dropout, dropout, n_layers, res_attention)
+                                     d_ff, attn_dropout, dropout, n_layers,
+                                     res_attention, store_attn)
         nf = d_model * patch_num
         self.head = _FlattenHead(nf, pred_len, head_dropout)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:  # [B, T, C]
         if self.revin:
             x = self.revin_layer(x, "norm")
         z = x.permute(0, 2, 1)
@@ -268,3 +316,58 @@ class PatchTST(nn.Module):
         if self.revin:
             z = self.revin_layer(z, "denorm")
         return z
+
+
+class PatchTST(nn.Module):
+    """
+    Channel-independent PatchTST with RevIN, optional trend/residual
+    decomposition and optional attention-weight capture.
+
+    Input:  [B, seq_len, C]  (scaled)
+    Output: [B, pred_len, C] (scaled)
+
+    padding_patch: 'end' replicates the last value `stride` times before unfolding,
+    yielding patch_num+1 patches. Matches legacy run_longExp.py default.
+
+    decomposition: when True, splits the input into trend + residual via a
+    moving-average decomposition and runs two independent backbones+heads
+    (one per component), summing their outputs.
+
+    store_attn: when True, each encoder layer caches its attention weights
+    in `<layer>.attn` after every forward pass. With decomposition the two
+    sub-models are reachable via `model.model_trend` and `model.model_res`;
+    without decomposition use `model.model`.
+    """
+    def __init__(self, c_in: int, seq_len: int, pred_len: int,
+                 patch_len: int = 7, stride: int = 7,
+                 d_model: int = 128, n_heads: int = 16, n_layers: int = 3,
+                 d_ff: int = 256, attn_dropout: float = 0., dropout: float = 0.,
+                 head_dropout: float = 0., res_attention: bool = True,
+                 revin: bool = True, affine: bool = False,
+                 padding_patch: str = "end",
+                 decomposition: bool = False, kernel_size: int = 25,
+                 store_attn: bool = False):
+        super().__init__()
+        self.decomposition = decomposition
+
+        backbone_kwargs = dict(
+            c_in=c_in, seq_len=seq_len, pred_len=pred_len,
+            patch_len=patch_len, stride=stride,
+            d_model=d_model, n_heads=n_heads, n_layers=n_layers, d_ff=d_ff,
+            attn_dropout=attn_dropout, dropout=dropout, head_dropout=head_dropout,
+            res_attention=res_attention, revin=revin, affine=affine,
+            padding_patch=padding_patch, store_attn=store_attn,
+        )
+
+        if decomposition:
+            self.decomp_layer = _SeriesDecomp(kernel_size)
+            self.model_trend = _PatchTSTBackbone(**backbone_kwargs)
+            self.model_res   = _PatchTSTBackbone(**backbone_kwargs)
+        else:
+            self.model = _PatchTSTBackbone(**backbone_kwargs)
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.decomposition:
+            res, trend = self.decomp_layer(x)
+            return self.model_res(res) + self.model_trend(trend)
+        return self.model(x)

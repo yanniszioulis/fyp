@@ -31,6 +31,12 @@ Hyperparameters (passed to TuckerDLinear.__init__):
     rank_H       int — shared Tucker rank for A_Hi and A_Ho. In [1, H].
     kernel_size  int — moving-avg kernel for trend/seasonality decomposition.
                        Must be odd. Default: 13.
+    norm         bool — joint per-window normalisation across (L, W, H):
+                        strip the surface-wide mean and std before
+                        decomposition and the linear maps, add back at
+                        the output. Preserves cross-cell structure within
+                        a window while removing the overall vol
+                        level/scale. Default: True.
 
 Input:  [B, L, W, H]
 Output: [B, P, W, H]
@@ -212,6 +218,7 @@ class TuckerDLinear(nn.Module):
         rank_W: int,
         rank_H: int,
         kernel_size: int = 13,
+        norm: bool = True,
     ):
         super().__init__()
         self.seq_len     = seq_len
@@ -223,6 +230,7 @@ class TuckerDLinear(nn.Module):
         self.rank_W      = rank_W
         self.rank_H      = rank_H
         self.kernel_size = kernel_size
+        self.norm        = norm
 
         self.decomp       = _SurfaceMovingAvg(kernel_size)
         self.trend_map    = _TuckerLinear(seq_len, pred_len, W, H,
@@ -232,6 +240,17 @@ class TuckerDLinear(nn.Module):
         self.bias         = nn.Parameter(torch.zeros(pred_len, W, H))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        trend    = self.decomp(x)
-        seasonal = x - trend
-        return self.trend_map(trend) + self.seasonal_map(seasonal) + self.bias
+        if self.norm:
+            mu  = x.mean(dim=(1, 2, 3), keepdim=True)
+            std = torch.sqrt(x.var(dim=(1, 2, 3), keepdim=True, unbiased=False) + 1e-5)
+            x_in = (x - mu) / std
+        else:
+            x_in = x
+
+        trend    = self.decomp(x_in)
+        seasonal = x_in - trend
+        out      = self.trend_map(trend) + self.seasonal_map(seasonal) + self.bias
+
+        if self.norm:
+            out = (out * std) + mu
+        return out

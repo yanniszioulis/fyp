@@ -1,80 +1,47 @@
-#!/usr/bin/env python3
 """
-HOT (Higher-Order Transformer) training script for SPX IV surface forecasting.
+HOT (Higher-Order Transformer) for structured IV surface forecasting.
 
-Treats the IV grid as an [H × W] structured tensor (moneyness × tau) and
-applies Kronecker attention across both spatial axes plus the temporal
-patches. H and W are derived at runtime from `iv_{moneyness}_{tau}` column
-names.
-
-CSV column order is **(tau outer, moneyness inner)**: col k = i_t·H + i_m.
-The F-order reshape `iv.reshape(-1, H, W, order='F')` produces
-`result[i_m, i_t] = col k`, giving H=moneyness on axis 0 and W=tau on
-axis 1. compare_models.load_hot mirror-reshapes with the same F-order to
-recover the flat CSV column order.
-
-Dataset selection:
-    --dataset full      use the full CSV (default).
-    --dataset precovid  slice to date <= 2019-12-31 before splitting.
-
-Standardisation:
-    Inputs are standardised with a single global (mean, std) fitted on the
-    training portion of the target-space data — pooled across time and all
-    IV cells, not per-column. The model trains in scaled space; predictions
-    are inverse-transformed and saved in original target-space units.
-
-Per-cell normalisation (--norm), default `off`:
-    --norm off          (default) Model sees scaled inputs and produces predictions
-                        directly in scaled space (then inverse-scaled before save).
-                        Apples-to-apples with DLinear/DynGWN.
-    --norm on           (legacy) HOT.forward additionally normalises each (H,W) cell
-                        by its context-window mean/std and denormalises the prediction
-                        with the same stats. Strips per-cell level information.
-
-Spatial positional embedding (--spatial_pe), default `none`:
-    --spatial_pe none   (default) No 2D PE on (moneyness, tau). KroneckerAttention
-                        is permutation-equivariant per spatial axis: the model has
-                        no built-in awareness of cell position on the grid.
-    --spatial_pe lape   Learned [h_max, w_max, d_hidden] PE added to the patch-
-                        embedded tensor before transformer blocks.
-    --spatial_pe sin2d  Fixed sinusoidal 2D PE (no extra parameters; needs
-                        d_hidden divisible by 4).
+Treats the IV grid as an [H × W] structured tensor (e.g. moneyness × tau)
+and applies Kronecker attention across both spatial axes plus the
+temporal patches. H and W are inferred at runtime from the input tensor;
+the model parameters do not depend on either axis size.
 
 Requires:  pip install einops
 
-Outputs (in --out_dir; default
-`HOT/results/{dataset}_SPX_IV_{seq_len}_{pred_len}_HOT_tensor_dh{dh}_nb{nb}_nh{nh}_ps{ps}_{attention_type}_pe{pe}{sp_suffix}_ep{ep}{loss_suffix}{norm_suffix}`):
-    pred.npy          [N_test, H, W, pred_len]         HOT tensor format, original target-space  (gitignored)
-    start_dates.npy   [N_test]                          datetime64[D]
-    train_log.csv     epoch, train_loss, val_loss
-    best_model.pt     checkpoint of best validation weights
-    config.json       full hyperparam + split + git record
+Hyperparameters (passed to HOT.__init__):
+    d_hidden           int    — transformer hidden dim. Default: 128.
+    d_mlp              int    — SwiGLU feed-forward inner dim. Default: 512.
+    n_blocks           int    — number of transformer blocks. Default: 4.
+    n_head             int    — number of attention heads per Kronecker mode.
+                                Default: 8.
+    patch_size         int    — temporal patch size for the patcher conv.
+                                Default: 4.
+    context_length     int    — input window length (lookback). Default: 21.
+    prediction_length  int    — forecast horizon length. Default: 63.
+    attention_type     str    — 'kronecker_product' or 'kronecker_sum'.
+                                Default: 'kronecker_product'.
+    dropout            float  — dropout in attention / feed-forward / head.
+                                Default: 0.0.
+    pe                 str    — temporal positional encoding: 'rope' applies
+                                RoPE on the temporal dim; 'nope' disables it.
+                                Default: 'rope'.
+    norm               bool   — per-cell window norm/denorm inside forward()
+                                (RevIN-style). Default: True.
+    spatial_pe         str    — 2D PE on the (H, W) grid: 'none', 'lape'
+                                (learned [h_max, w_max, d]), or 'sin2d'
+                                (fixed sinusoidal; needs d_hidden % 4 == 0).
+                                Default: 'none'.
+    h_max              int    — max H supported by the spatial PE. Default: 32.
+    w_max              int    — max W supported by the spatial PE. Default: 32.
 """
 
-import argparse
-import csv
-import json
 import math
-import os
-import random
-import subprocess
 
-import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum
-from torch.utils.data import DataLoader, TensorDataset
 
-TRAIN_FRAC           = 0.70
-TEST_FRAC            = 0.20
-PRECOVID_END         = "2019-12-31"
-DATASET_CHOICES      = ["full", "precovid"]
-TARGET_SPACE_CHOICES = ["level", "logdiff"]
-
-
-# ─── Positional Encoding / Embeddings ─────────────────────────────────────────
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, max_position_embeddings: int = 64, base: int = 10000):
@@ -123,8 +90,8 @@ class SpatialPE(nn.Module):
              last d/2 encode the W index. Requires d divisible by 4. No params.
 
     Without this, KroneckerAttention is permutation-equivariant per spatial
-    axis: shuffling moneyness rows produces shuffled outputs. With LAPE the
-    IV grid gains a per-cell positional fingerprint independent of content.
+    axis: shuffling rows produces shuffled outputs. With LAPE the grid gains
+    a per-cell positional fingerprint independent of content.
     """
     def __init__(self, mode: str, d_hidden: int, h_max: int = 32, w_max: int = 32):
         super().__init__()
@@ -169,8 +136,6 @@ class SpatialPE(nn.Module):
                              f"({self.h_max}, {self.w_max}); raise h_max/w_max in HOT()")
         return self.pe[:H, :W].unsqueeze(0).unsqueeze(3)                      # [1, H, W, 1, d]
 
-
-# ─── Kronecker Attention ──────────────────────────────────────────────────────
 
 class KroneckerAttention(nn.Module):
     def __init__(self, num_modes: int, d_model: int, n_head: int,
@@ -232,19 +197,6 @@ class KroneckerAttention(nn.Module):
         return self.proj_dropout(self.out_proj(value))
 
 
-# ─── Transformer Block ────────────────────────────────────────────────────────
-
-class RMSNorm(nn.Module):
-    def __init__(self, d_hidden: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(d_hidden))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        rms = torch.sqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
-        return (x / rms) * self.weight
-
-
 class SwiGLUFeedForward(nn.Module):
     def __init__(self, d_hidden: int, d_mlp: int):
         super().__init__()
@@ -282,8 +234,6 @@ class TransformerBlock(nn.Module):
         return h + self.drop2(self.feedforward(self.norm2(h)))
 
 
-# ─── HOT Model ────────────────────────────────────────────────────────────────
-
 class HOT(nn.Module):
     """
     Higher-Order Transformer for structured IV surface forecasting.
@@ -295,10 +245,9 @@ class HOT(nn.Module):
     parameters do not depend on either axis size (Kronecker attention
     pools over the spatial dims dynamically).
 
-    If `norm=True` (legacy), normalises each (H,W) point over the context window
-    inside forward() and denormalises the prediction with the same stats. This
-    strips per-cell level information in the same way RevIN does for PatchTST —
-    consider `norm=False` if long-horizon bias is observed.
+    If `norm=True`, normalises each (H, W) point over the context window
+    inside forward() and denormalises the prediction with the same stats.
+    This strips per-cell level information in the same way RevIN does.
     """
     def __init__(self, d_hidden: int = 128, d_mlp: int = 512, n_blocks: int = 4,
                  n_head: int = 8, patch_size: int = 4,
@@ -366,8 +315,8 @@ class HOT(nn.Module):
         h = x_pad.reshape(bs * H * W, Tp).unsqueeze(1)  # [B*H*W, 1, Tp]
         h = self.emb(h).transpose(1, 2)                 # [B*H*W, Tp', d]
         h = self.emb_norm(h)
-        Tp2 = h.shape[1]
-        h = h.view(bs, H, W, Tp2, h.shape[-1])          # [B, H, W, Tp', d]
+        Tp_iv = h.shape[1]
+        h = h.view(bs, H, W, Tp_iv, h.shape[-1])        # [B, H, W, Tp', d]
 
         if self.has_spatial_pe:
             h = h + self.pos_emb(h)
@@ -375,461 +324,8 @@ class HOT(nn.Module):
         for block in self.blocks:
             h = block(h)
 
-        logits = self.head(h.mean(dim=3))                # [B, H, W, pred]
+        logits = self.head(h.mean(dim=3))               # [B, H, W, pred]
 
         if self.norm:
             return (logits * std) + mu
         return logits
-
-
-# ─── Data ─────────────────────────────────────────────────────────────────────
-
-def _slice_dataset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
-    if dataset == "full":
-        return df
-    if dataset == "precovid":
-        end = pd.Timestamp(PRECOVID_END)
-        return df[df["date"] <= end].reset_index(drop=True)
-    raise ValueError(f"Unknown dataset {dataset!r}; choose from {DATASET_CHOICES}")
-
-
-def _apply_target_space(iv_raw: np.ndarray, dates_full: np.ndarray, target_space: str):
-    """level → unchanged; logdiff → log(IV)[1:]-log(IV)[:-1], dates trimmed by 1."""
-    if target_space == "level":
-        return iv_raw, dates_full
-    if target_space == "logdiff":
-        if (iv_raw <= 0).any():
-            raise ValueError("logdiff target_space requires all IV > 0")
-        log_iv = np.log(iv_raw)
-        return (log_iv[1:] - log_iv[:-1]).astype(iv_raw.dtype), dates_full[1:]
-    raise ValueError(f"Unknown target_space {target_space!r}; choose from {TARGET_SPACE_CHOICES}")
-
-
-def _parse_iv_col(col: str) -> tuple[str, str]:
-    """`iv_{moneyness}_{tau}` → (moneyness_str, tau_str). String keys avoid
-    float-precision pitfalls when verifying grid order."""
-    rest = col[len("iv_"):]
-    return tuple(rest.rsplit("_", 1))  # (moneyness_str, tau_str)
-
-
-def _parse_grid_dims(iv_cols: list) -> tuple:
-    """
-    Derive (H_moneyness, W_tau) from `iv_*` column names and verify that
-    the columns form a complete grid laid out as **(tau outer, moneyness
-    inner)**: cols[i_t·H + i_m] = (moneyness[i_m], tau[i_t]).
-
-    Returns (H, W, moneyness_strs, tau_strs).
-    """
-    pairs = [_parse_iv_col(c) for c in iv_cols]
-    moneyness_seen, tau_seen = [], []
-    for m, t in pairs:
-        if m not in moneyness_seen:
-            moneyness_seen.append(m)
-        if t not in tau_seen:
-            tau_seen.append(t)
-    H, W = len(moneyness_seen), len(tau_seen)
-    if H * W != len(iv_cols):
-        raise ValueError(
-            f"iv_ columns are not a complete grid: {len(iv_cols)} cols, "
-            f"{H} unique moneyness × {W} unique tau = {H * W}"
-        )
-    for i_t in range(W):
-        for i_m in range(H):
-            k = i_t * H + i_m
-            if pairs[k] != (moneyness_seen[i_m], tau_seen[i_t]):
-                raise ValueError(
-                    f"unexpected column order at index {k}: got {iv_cols[k]!r}, "
-                    f"expected (moneyness={moneyness_seen[i_m]}, tau={tau_seen[i_t]}). "
-                    f"HOT requires (tau outer, moneyness inner)."
-                )
-    return H, W, moneyness_seen, tau_seen
-
-
-def _to_grid(iv: np.ndarray, H: int, W: int) -> np.ndarray:
-    """
-    Reshape [N, H*W] → [N, H, W] using F-order.
-
-    CSV columns are sorted (tau outer, moneyness inner): col k = i_t·H + i_m.
-    F-order reshape with shape (H, W): result[i_m, i_t] = flat[i_m + H·i_t] = col k. ✓
-    Mirror-reshape lives in compare_models.load_hot.
-    """
-    return iv.reshape(-1, H, W, order="F")
-
-
-def load_splits(csv_path: str, dataset: str, target_space: str,
-                seq_len: int, pred_len: int):
-    df = pd.read_csv(csv_path, low_memory=False)
-    df["date"] = pd.to_datetime(df["date"])
-    df = _slice_dataset(df, dataset)
-
-    iv_cols = [c for c in df.columns if c.startswith("iv_")]
-    if not iv_cols:
-        raise ValueError(f"No iv_* columns found in {csv_path}")
-    n_iv = len(iv_cols)
-    H, W, _moneyness, _taus = _parse_grid_dims(iv_cols)
-
-    iv_raw     = df[iv_cols].to_numpy(dtype=np.float32)
-    dates_full = df["date"].to_numpy(dtype="datetime64[D]")
-    data, dates = _apply_target_space(iv_raw, dates_full, target_space)
-
-    T = len(data)
-    n_train = int(T * TRAIN_FRAC)
-    n_test  = int(T * TEST_FRAC)
-    n_val   = T - n_train - n_test
-
-    b1 = [0,           n_train - seq_len,  T - n_test - seq_len]
-    b2 = [n_train,     n_train + n_val,    T]
-
-    train_data = data[b1[0]:b2[0]]
-    mean = float(train_data.mean())
-    std  = float(train_data.std())
-    iv   = ((data - mean) / std).astype(np.float32)
-
-    iv_grid = _to_grid(iv, H, W)   # [T, H, W]
-
-    def _windows(start, end):
-        sl = iv_grid[start:end]
-        n  = len(sl) - seq_len - pred_len + 1
-        # X: [N, H, W, seq_len]  y: [N, H, W, pred_len]
-        X = np.stack([sl[i : i+seq_len].transpose(1, 2, 0)         for i in range(n)])
-        y = np.stack([sl[i+seq_len : i+seq_len+pred_len].transpose(1, 2, 0) for i in range(n)])
-        return X.astype(np.float32), y.astype(np.float32)
-
-    X_tr, y_tr = _windows(b1[0], b2[0])
-    X_va, y_va = _windows(b1[1], b2[1])
-    X_te, _y   = _windows(b1[2], b2[2])
-
-    test_slice_dates = dates[b1[2]:b2[2]]
-    test_start_dates = np.array([test_slice_dates[i + seq_len] for i in range(len(X_te))])
-
-    info = dict(
-        T=T, n_iv=n_iv, h_moneyness=H, w_tau=W,
-        n_train=n_train, n_val=n_val, n_test=n_test,
-        train_end_date=str(dates[n_train - 1]),
-        train_windows=len(X_tr), val_windows=len(X_va), test_windows=len(X_te),
-    )
-    return X_tr, y_tr, X_va, y_va, X_te, test_start_dates, info, mean, std
-
-
-# ─── Training ─────────────────────────────────────────────────────────────────
-
-def _compute_loss(pred, y, loss_kind: str, huber_delta: float = 1.0):
-    if loss_kind == "mse":
-        return F.mse_loss(pred, y)
-    if loss_kind == "huber_scaled":
-        return F.smooth_l1_loss(pred, y, beta=huber_delta)
-    raise ValueError(f"unknown loss_kind: {loss_kind!r}")
-
-
-def _resolve_speed_settings(device):
-    """Auto-tune DataLoader / AMP based on device. Returns
-    (num_workers, amp_dtype, pin_memory).
-
-    cuda + Ampere+ → 2 workers, bf16 autocast, pinned host mem.
-    cuda + pre-Ampere (T4 etc.) → 2 workers, fp32, pinned host mem.
-    mps / cpu → single-threaded fp32 (autocast/multi-worker not
-    helpful and known-flaky here).
-    """
-    if device.type != "cuda":
-        return 0, None, False
-    amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else None
-    return 2, amp_dtype, True
-
-
-def _epoch(model, loader, opt, device, loss_kind, huber_delta, amp_dtype):
-    model.train()
-    total, n = 0.0, 0
-    for xb, yb in loader:
-        xb = xb.to(device, non_blocking=True)
-        yb = yb.to(device, non_blocking=True)
-        if amp_dtype is not None:
-            with torch.autocast(device_type=device.type, dtype=amp_dtype):
-                loss = _compute_loss(model(xb), yb, loss_kind, huber_delta)
-        else:
-            loss = _compute_loss(model(xb), yb, loss_kind, huber_delta)
-        opt.zero_grad(); loss.backward(); opt.step()
-        total += loss.item() * len(xb); n += len(xb)
-    return total / n
-
-
-@torch.no_grad()
-def _val_loss(model, loader, device, loss_kind, huber_delta, amp_dtype):
-    model.eval()
-    total, n = 0.0, 0
-    for xb, yb in loader:
-        xb = xb.to(device, non_blocking=True)
-        yb = yb.to(device, non_blocking=True)
-        if amp_dtype is not None:
-            with torch.autocast(device_type=device.type, dtype=amp_dtype):
-                loss = _compute_loss(model(xb), yb, loss_kind, huber_delta)
-        else:
-            loss = _compute_loss(model(xb), yb, loss_kind, huber_delta)
-        total += loss.item() * len(xb)
-        n += len(xb)
-    return total / n
-
-
-def train(model, X_tr, y_tr, X_va, y_va, args, out_dir, device,
-          amp_dtype, num_workers, pin_memory):
-    persistent = (num_workers > 0)
-    tr_loader = DataLoader(
-        TensorDataset(torch.from_numpy(X_tr), torch.from_numpy(y_tr)),
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=pin_memory,
-        persistent_workers=persistent,
-    )
-    va_loader = DataLoader(
-        TensorDataset(torch.from_numpy(X_va), torch.from_numpy(y_va)),
-        batch_size=args.batch_size,
-        num_workers=num_workers, pin_memory=pin_memory,
-        persistent_workers=persistent,
-    )
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
-    best_val, wait = float("inf"), 0
-    ckpt = os.path.join(out_dir, "best_model.pt")
-    log_rows = []
-
-    for epoch in range(1, args.epochs + 1):
-        tr_loss = _epoch(model, tr_loader, opt, device,
-                         args.loss, args.huber_delta, amp_dtype)
-        va_loss = _val_loss(model, va_loader, device,
-                            args.loss, args.huber_delta, amp_dtype)
-        log_rows.append({"epoch": epoch, "train_loss": tr_loss, "val_loss": va_loss})
-
-        if va_loss < best_val:
-            best_val, wait = va_loss, 0
-            torch.save(model.state_dict(), ckpt)
-        else:
-            wait += 1
-
-        if epoch % 5 == 0 or epoch == 1:
-            print(f"  epoch {epoch:4}/{args.epochs}  "
-                  f"train={tr_loss:.6f}  val={va_loss:.6f}  best={best_val:.6f}")
-
-        if wait >= args.patience:
-            print(f"  early stop at epoch {epoch}")
-            break
-
-    with open(os.path.join(out_dir, "train_log.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["epoch", "train_loss", "val_loss"])
-        w.writeheader(); w.writerows(log_rows)
-
-    model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
-    print(f"  best val loss: {best_val:.6f}")
-    return model
-
-
-# ─── Misc ────────────────────────────────────────────────────────────────────
-
-def _git_commit() -> str | None:
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=False, timeout=2,
-        )
-        return out.stdout.strip() or None
-    except Exception:
-        return None
-
-
-def _build_config(args, info: dict, amp_dtype, num_workers, pin_memory) -> dict:
-    return {
-        "model":          "HOT",
-        "dataset":        args.dataset,
-        "target_space":   args.target_space,
-        "csv_path":       args.csv_path,
-        "seq_len":        args.seq_len,
-        "pred_len":       args.pred_len,
-        "d_hidden":       args.d_hidden,
-        "d_mlp":          args.d_mlp,
-        "n_blocks":       args.n_blocks,
-        "n_head":         args.n_head,
-        "patch_size":     args.patch_size,
-        "attention_type": args.attention_type,
-        "pe":             args.pe,
-        "spatial_pe":     args.spatial_pe,
-        "norm":           args.norm,
-        "dropout":        args.dropout,
-        "epochs":         args.epochs,
-        "batch_size":     args.batch_size,
-        "lr":             args.lr,
-        "weight_decay":   args.weight_decay,
-        "patience":       args.patience,
-        "seed":           args.seed,
-        "loss":           args.loss,
-        "huber_delta":    args.huber_delta,
-        "amp":            str(amp_dtype).split(".")[-1] if amp_dtype is not None else "off",
-        "num_workers":    num_workers,
-        "pin_memory":     pin_memory,
-        "n_iv":           info["n_iv"],
-        "h_moneyness":    info["h_moneyness"],
-        "w_tau":          info["w_tau"],
-        "n_train":        info["n_train"],
-        "n_val":          info["n_val"],
-        "n_test":         info["n_test"],
-        "train_end_date": info["train_end_date"],
-        "git_commit":     _git_commit(),
-    }
-
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
-
-def main():
-    ap = argparse.ArgumentParser(description="Train HOT on SPX IV surface")
-    ap.add_argument("--csv_path",        default="SPX_surfaces.csv")
-    ap.add_argument("--dataset",         default="full", choices=DATASET_CHOICES,
-                    help="full = entire CSV; precovid = dates <= 2019-12-31")
-    ap.add_argument("--target_space",    default="level", choices=TARGET_SPACE_CHOICES,
-                    help="level = train on raw IV (default); logdiff = train on "
-                         "log(IV)[1:]-log(IV)[:-1]. logdiff loses one day at the front.")
-    ap.add_argument("--seq_len",         type=int,   default=63)
-    ap.add_argument("--pred_len",        type=int,   default=21)
-    ap.add_argument("--d_hidden",        type=int,   default=128)
-    ap.add_argument("--d_mlp",           type=int,   default=512)
-    ap.add_argument("--n_blocks",        type=int,   default=4)
-    ap.add_argument("--n_head",          type=int,   default=8)
-    ap.add_argument("--patch_size",      type=int,   default=4)
-    ap.add_argument("--attention_type",  default="kronecker_product",
-                    choices=["kronecker_product", "kronecker_sum"])
-    ap.add_argument("--pe",              default="rope",
-                    choices=["rope", "nope"],
-                    help="Positional encoding: 'rope' applies RoPE on the temporal "
-                         "dim (legacy default); 'nope' disables it.")
-    ap.add_argument("--spatial_pe",      default="none",
-                    choices=["none", "lape", "sin2d"],
-                    help="2D spatial positional embedding on the (moneyness, tau) grid. "
-                         "'none' (default) leaves KroneckerAttention permutation-equivariant "
-                         "across H and W. 'lape' adds a learned [h_max, w_max, d] PE; "
-                         "'sin2d' adds a fixed sinusoidal 2D PE (requires d_hidden divisible by 4).")
-    ap.add_argument("--norm",            default="off", choices=["on", "off"],
-                    help="Per-cell window norm/denorm inside HOT.forward. "
-                         "'off' (default) = pass scaled inputs through directly "
-                         "(apples-to-apples with DLinear/DynGWN). 'on' = legacy "
-                         "RevIN-style window norm/denorm.")
-    ap.add_argument("--dropout",         type=float, default=0.1)
-    ap.add_argument("--epochs",          type=int,   default=100)
-    ap.add_argument("--batch_size",      type=int,   default=32)
-    ap.add_argument("--lr",              type=float, default=1e-3)
-    ap.add_argument("--weight_decay",    type=float, default=1e-2)
-    ap.add_argument("--patience",        type=int,   default=15)
-    ap.add_argument("--device",          default="auto")
-    ap.add_argument("--seed",            type=int,   default=42)
-    ap.add_argument("--out_dir",         default=None)
-    ap.add_argument("--predict_only",    action="store_true",
-                    help="Skip training; load best_model.pt + config.json from --out_dir, "
-                         "run inference, write pred.npy.")
-    ap.add_argument("--loss",            default="mse",
-                    choices=["mse", "huber_scaled"])
-    ap.add_argument("--huber_delta",     type=float, default=1.0)
-    args = ap.parse_args()
-
-    if args.device == "auto":
-        if torch.cuda.is_available():           device = torch.device("cuda")
-        elif torch.backends.mps.is_available(): device = torch.device("mps")
-        else:                                   device = torch.device("cpu")
-    else:
-        device = torch.device(args.device)
-
-    random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
-    if device.type == "cuda": torch.cuda.manual_seed_all(args.seed)
-
-    if args.predict_only:
-        if args.out_dir is None:
-            raise SystemExit("--predict_only requires --out_dir <dir with config.json + best_model.pt>")
-        cfg_path  = os.path.join(args.out_dir, "config.json")
-        ckpt_path = os.path.join(args.out_dir, "best_model.pt")
-        if not (os.path.exists(cfg_path) and os.path.exists(ckpt_path)):
-            raise SystemExit(f"--predict_only: need config.json and best_model.pt in {args.out_dir}")
-        with open(cfg_path) as f:
-            cfg = json.load(f)
-        for k in ("csv_path", "dataset", "target_space", "seq_len", "pred_len",
-                  "d_hidden", "d_mlp", "n_blocks", "n_head", "patch_size", "attention_type",
-                  "pe", "spatial_pe", "norm", "dropout", "loss", "huber_delta"):
-            if k in cfg:
-                setattr(args, k, cfg[k])
-        print(f"[predict_only] {cfg_path}")
-
-    if args.out_dir is None:
-        loss_suffix = {
-            "mse":          "",
-            "huber_scaled": f"_losshuberscaled_d{args.huber_delta:g}",
-        }[args.loss]
-        norm_suffix = "" if args.norm == "off" else "_norm"
-        sp_suffix   = "" if args.spatial_pe == "none" else f"_sp{args.spatial_pe}"
-        args.out_dir = (f"HOT/results/"
-                        f"{args.dataset}_{args.target_space}_SPX_IV_"
-                        f"{args.seq_len}_{args.pred_len}"
-                        f"_HOT_tensor_dh{args.d_hidden}_nb{args.n_blocks}"
-                        f"_nh{args.n_head}_ps{args.patch_size}_{args.attention_type}"
-                        f"_pe{args.pe}{sp_suffix}_ep{args.epochs}{loss_suffix}{norm_suffix}")
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    num_workers, amp_dtype, pin_memory = _resolve_speed_settings(device)
-    amp_label = str(amp_dtype).split(".")[-1] if amp_dtype is not None else "off"
-
-    print(f"Dataset    : {args.dataset}")
-    print(f"Target     : {args.target_space}")
-    print(f"Device     : {device}")
-    print(f"AMP        : {amp_label}")
-    print(f"DataLoader : num_workers={num_workers}  pin_memory={pin_memory}")
-    print(f"Output dir : {args.out_dir}")
-    print(f"Attention  : {args.attention_type}  pe={args.pe}  "
-          f"spatial_pe={args.spatial_pe}  norm={args.norm}")
-
-    print("\nLoading data...")
-    X_tr, y_tr, X_va, y_va, X_te, test_dates, info, mean, std = load_splits(
-        args.csv_path, args.dataset, args.target_space, args.seq_len, args.pred_len)
-    print(f"  T={info['T']}  n_iv={info['n_iv']}  "
-          f"train={info['train_windows']}  "
-          f"val={info['val_windows']}  test={info['test_windows']} windows")
-    print(f"  Train ends {info['train_end_date']}")
-    print(f"  X shape (per split): {X_tr.shape}  "
-          f"[N, H={info['h_moneyness']} (moneyness), W={info['w_tau']} (tau), seq]")
-
-    model = HOT(d_hidden=args.d_hidden, d_mlp=args.d_mlp, n_blocks=args.n_blocks,
-                n_head=args.n_head, patch_size=args.patch_size,
-                context_length=args.seq_len, prediction_length=args.pred_len,
-                attention_type=args.attention_type, dropout=args.dropout,
-                pe=args.pe, norm=(args.norm == "on"),
-                spatial_pe=args.spatial_pe,
-                h_max=info["h_moneyness"], w_max=info["w_tau"]).to(device)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters: {n_params:,}")
-
-    if args.predict_only:
-        ckpt_path = os.path.join(args.out_dir, "best_model.pt")
-        model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
-        print(f"  Loaded checkpoint from {ckpt_path}")
-    else:
-        config = _build_config(args, info, amp_dtype, num_workers, pin_memory)
-        with open(os.path.join(args.out_dir, "config.json"), "w") as f:
-            json.dump(config, f, indent=2)
-
-        print("\nTraining...")
-        model = train(model, X_tr, y_tr, X_va, y_va, args, args.out_dir, device,
-                      amp_dtype, num_workers, pin_memory)
-
-    print("\nPredicting on test set...")
-    te_loader = DataLoader(TensorDataset(torch.from_numpy(X_te)),
-                           batch_size=args.batch_size,
-                           num_workers=num_workers, pin_memory=pin_memory)
-    preds = []
-    model.eval()
-    with torch.no_grad():
-        for (xb,) in te_loader:
-            preds.append(model(xb.to(device, non_blocking=True)).cpu().numpy())
-    preds = np.concatenate(preds, axis=0).astype(np.float32)
-    # preds: [N, H, W, pred_len]
-    preds = (preds * std + mean).astype(np.float32)
-
-    np.save(os.path.join(args.out_dir, "pred.npy"),        preds)
-    np.save(os.path.join(args.out_dir, "start_dates.npy"), test_dates)
-    print(f"  pred.npy        shape={preds.shape}  "
-          f"(HOT format [N, H={info['h_moneyness']}, W={info['w_tau']}, pred])")
-    print(f"  start_dates.npy range={test_dates[0]} → {test_dates[-1]}")
-    print(f"\nDone. Results in {args.out_dir}/")
-
-
-if __name__ == "__main__":
-    main()

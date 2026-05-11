@@ -217,8 +217,8 @@ class TuckerDLinear(nn.Module):
         rank_P: int,
         rank_W: int,
         rank_H: int,
-        kernel_size: int = 13,
-        norm: bool = True,
+        kernel_size: int = 31,
+        norm: bool = False,
     ):
         super().__init__()
         self.seq_len     = seq_len

@@ -1,447 +1,472 @@
 #!/usr/bin/env python3
 """
-hyperparameter_tuning.py — orchestrate a sweep over a model's hyperparameter grid.
+hyperparameter_tuning.py — sweep a model's tuning_grid.json on SPX_surfaces.csv.
 
-Reads `<MODEL>/tuning_grid.json` (scalars = fixed, lists = swept via cartesian
-product). Results are organised by *task* (dataset × target_space × seq_len ×
-pred_len) and optionally by *variant* (per-grid `_variants` block):
+Reuses train.py's data pipeline (log-IV + per-channel scaler, chronological
+split, optional `--data_end` cutoff) but with tuning defaults: train/val/
+test = 70/10/20 and `data_end=2023-12-29`. Test data is held out and never
+touched during tuning — winners are chosen on validation loss.
 
-    <MODEL>/tuning_results/
-      {dataset}_{target_space}_SPX_IV_{sl}_{pl}/        ← task tag
-        [<variant_name>/]                                 ← only if grid has _variants
-          combo_0001/{config.json, train_log.csv}
-          combo_0002/{config.json, train_log.csv}
-          ...
-          combo_NNNN/{config.json, train_log.csv,
-                      best_model.pt, start_dates.npy}    ← winner (lowest val_loss)
-          summary.json   leaderboard.csv   manifest.json
+What it does
+------------
+For each model in `--model`, reads `<ModelDir>/tuning_grid.json` and runs
+the cartesian product of its list-valued keys (scalars held fixed). Grid
+fields override `train.py`'s trainer constants (`epochs`, `patience`,
+`min_epochs`, `batch_size`, `lr`, `weight_decay`); model-architecture keys
+go to the model's `__init__`.
 
-For every combo, a running winner is maintained by min `val_loss` from each
-combo's `train_log.csv`. Only the running winner retains its `best_model.pt`;
-losing combos are pruned to `{config.json, train_log.csv}`.
+Supported bundle keys (mirrored from existing grids):
+  `_variants`                 → run the whole grid once per variant;
+                                each variant's `fix` dict overlays the grid.
+                                Output goes under `<variant_name>/`.
+  `_spatial_temporal_pairs`   → TuckerDLinear-only. Joint sweep over
+                                `(rank_W, rank_H, rank_L, rank_P_max)`;
+                                `rank_P = min(pred_len, rank_P_max)`.
 
-Variants (optional, declared in the grid as `_variants`):
-    Each entry runs the full grid independently with its own scalar
-    overrides. Used to treat e.g. HOT(kronecker_product) and
-    HOT(kronecker_sum) as separate sweeps.
-    [
-      {"name": "kronecker_product", "fix": {"attention_type": "kronecker_product"}},
-      {"name": "kronecker_sum",     "fix": {"attention_type": "kronecker_sum"}}
-    ]
+Layout
+------
+<ModelDir>/tuning_results/63_<pred_len>/[<variant_name>/]
+    combo_0000/{config.json, train_log.csv}
+    combo_0001/{config.json, train_log.csv}
+    ...
+    combo_NNNN/{config.json, train_log.csv, best_model.pt}   ← running winner
+    summary.json
 
-Resume semantics: a combo whose `train_log.csv` has a parseable `val_loss`
-and whose `config.json` matches the requested params is skipped (its score
-is read from the log). Use `--overwrite` to wipe.
+Only the running winner of each variant keeps `best_model.pt`. When a
+later combo beats the current winner's val loss, the new combo's `.pt`
+is written and the old winner's `.pt` is deleted. `summary.json` lists
+every combo's score, the ranking, and the winner.
+
+Notes
+-----
+* Supported models: dlinear, patchtst, hot, tucker_dlinear. DynGWN is
+  currently excluded (its `_variants` block requires a grid adjacency we
+  haven't wired up yet).
+* String knobs in grids are coerced: "on" → True, "off" → False.
+* Existing output dirs require `--overwrite` to wipe.
 
 Usage
 -----
-    python hyperparameter_tuning.py --model hot --dataset precovid \\
-        --seq_len 21 --pred_len 63 --grid HOT/tuning_grid.json
-    python hyperparameter_tuning.py --model hot --grid HOT/tuning_grid.json --dry_run
+    python hyperparameter_tuning.py --model dlinear --pred_len 21
+    python hyperparameter_tuning.py --model dlinear,patchtst --pred_len 5
+    python hyperparameter_tuning.py --model all --pred_len 63 --overwrite
 """
+from __future__ import annotations
+
 import argparse
 import csv
 import itertools
 import json
 import os
 import shutil
-import subprocess
-import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
-import pandas as pd
+import numpy as np
+import torch
 
-
-MODEL_SCRIPTS = {
-    "hot":      "HOT/hot.py",
-    "dlinear":  "DLinear/dlinear.py",
-    "patchtst": "PatchTST/patchtst.py",
-    "dyngwn":   "DynGWN/dyngwn.py",
-}
-
-KEEP_ALWAYS = {"config.json", "train_log.csv"}
-KEEP_WINNER = KEEP_ALWAYS | {"best_model.pt", "start_dates.npy"}
-
-
-# ─── Grid ─────────────────────────────────────────────────────────────────────
-
-def expand_grid(grid: dict) -> list[dict]:
-    """Cartesian product of list-valued keys; scalars held fixed. Keys
-    starting with '_' are ignored (free-form metadata)."""
-    keys, vals = [], []
-    for k, v in grid.items():
-        if k.startswith("_"):
-            continue
-        keys.append(k)
-        vals.append(v if isinstance(v, list) else [v])
-    return [dict(zip(keys, t)) for t in itertools.product(*vals)]
+from train import (
+    BATCH_SIZE,
+    DLinear,
+    EPOCHS,
+    HOT,
+    LOOKBACK,
+    MIN_EPOCHS,
+    MODEL_DIR,
+    PATIENCE,
+    PatchTST,
+    ROOT,
+    TuckerDLinear,
+    _DLinearAdapter,
+    _HOTAdapter,
+    _PatchTSTAdapter,
+    _TuckerAdapter,
+    _epoch,
+    load_dataset,
+    pick_device,
+)
 
 
-def combo_to_args(params: dict) -> list[str]:
-    out = []
-    for k, v in params.items():
-        out += [f"--{k}", str(v)]
-    return out
+TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear")
+
+# Grid-key buckets.
+TRAINER_KEYS    = {"epochs", "patience", "min_epochs", "batch_size"}
+OPTIMIZER_KEYS  = {"lr", "weight_decay"}
+META_KEYS       = {"loss"}            # currently always MSE; ignored
+TUCKER_PAIR_KEY = "_spatial_temporal_pair"
 
 
-def build_common_args(args) -> list[str]:
-    return [
-        "--csv_path",     args.csv_path,
-        "--dataset",      args.dataset,
-        "--target_space", args.target_space,
-        "--seq_len",      str(args.seq_len),
-        "--pred_len",     str(args.pred_len),
-        "--device",       args.device,
-        "--seed",         str(args.seed),
-    ]
+# ─── Grid expansion ───────────────────────────────────────────────────────
+
+def _coerce(v):
+    """Map common string knobs in the grids to bools."""
+    if isinstance(v, str):
+        if v.lower() == "on":  return True
+        if v.lower() == "off": return False
+    return v
 
 
-# ─── Combo state ──────────────────────────────────────────────────────────────
-
-def read_min_val_loss(log_path: str):
-    if not os.path.isfile(log_path):
-        return None
-    df = pd.read_csv(log_path)
-    if df.empty or "val_loss" not in df.columns:
-        return None
-    return float(df["val_loss"].min())
-
-
-def combo_is_complete(combo_dir: str, params: dict) -> bool:
-    """Combo is complete if `train_log.csv` has a parseable val_loss and
-    `config.json`'s recorded params match the requested combo."""
-    log = os.path.join(combo_dir, "train_log.csv")
-    cfg = os.path.join(combo_dir, "config.json")
-    if not (os.path.isfile(log) and os.path.isfile(cfg)):
-        return False
-    if read_min_val_loss(log) is None:
-        return False
-    with open(cfg) as f:
-        saved = json.load(f)
-    for k, v in params.items():
-        if str(saved.get(k)) != str(v):
-            return False
-    return True
+def split_combo(combo: dict) -> tuple[dict, dict, dict]:
+    """Split a flat combo dict into (model_kwargs, optimizer, trainer)."""
+    trainer = {k: combo[k] for k in TRAINER_KEYS  if k in combo}
+    opt     = {k: combo[k] for k in OPTIMIZER_KEYS if k in combo}
+    model   = {k: _coerce(v) for k, v in combo.items()
+               if k not in TRAINER_KEYS
+               and k not in OPTIMIZER_KEYS
+               and k not in META_KEYS}
+    return model, opt, trainer
 
 
-def cleanup(combo_dir: str, keep_checkpoint: bool):
-    """Remove everything in `combo_dir` except {config.json, train_log.csv};
-    optionally also keep best_model.pt and start_dates.npy (running winner)."""
-    if not os.path.isdir(combo_dir):
-        return
-    keep = KEEP_WINNER if keep_checkpoint else KEEP_ALWAYS
-    for entry in os.listdir(combo_dir):
-        if entry in keep:
-            continue
-        path = os.path.join(combo_dir, entry)
-        if os.path.isdir(path):
-            shutil.rmtree(path)
-        else:
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
+def expand_grid(grid: dict, model_name: str,
+                pred_len: int) -> list[tuple[str | None, dict]]:
+    """Return [(variant_name | None, flat_combo_dict), ...]."""
+    variants = grid.get("_variants") or [{"name": None, "fix": {}}]
+    base     = {k: v for k, v in grid.items() if not k.startswith("_")}
 
-
-def write_leaderboard(path: str, rows: list, fieldnames: list):
-    with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(rows)
-
-
-# ─── Parallel helpers ─────────────────────────────────────────────────────────
-
-def _resolve_parallel(parallel: int, device: str) -> int:
-    """Clamp --parallel to 1 unless CUDA will actually be used.
-
-    Why: each parallel combo is its own subprocess with its own CUDA
-    context. On MPS/CPU, multiple processes share the same device and
-    thrash, ending up slower than serial. Only meaningful on CUDA.
-    """
-    if parallel <= 1:
-        return 1
-    if device == "auto":
-        try:
-            import torch
-            cuda_ok = torch.cuda.is_available()
-        except Exception:
-            cuda_ok = False
-    elif device == "cuda":
-        cuda_ok = True
-    else:
-        cuda_ok = False
-    if not cuda_ok:
-        print(f"  --parallel {parallel} requested but CUDA not detected "
-              f"(device={device!r}); falling back to serial.")
-        return 1
-    return parallel
-
-
-def _run_one_combo(i: int, params: dict, base_dir: str, script: str,
-                   common_cli: list, capture_stdout: bool):
-    """Train or resume a single combo. Returns
-    (combo_id, combo_dir, params, status, score).
-
-    With capture_stdout=True, redirects subprocess output to
-    combo_dir/stdout.log so concurrent runs don't interleave on the
-    console; the file is removed by cleanup() afterward.
-    """
-    combo_id  = f"combo_{i:04d}"
-    combo_dir = os.path.join(base_dir, combo_id)
-    os.makedirs(combo_dir, exist_ok=True)
-
-    if combo_is_complete(combo_dir, params):
-        score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
-        return combo_id, combo_dir, params, "resumed", score
-
-    cmd = ([sys.executable, "-u", script, "--out_dir", combo_dir]
-           + common_cli + combo_to_args(params))
-    if capture_stdout:
-        log_path = os.path.join(combo_dir, "stdout.log")
-        with open(log_path, "w") as f:
-            rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT).returncode
-    else:
-        rc = subprocess.run(cmd).returncode
-    score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
-    if rc != 0 or score is None:
-        return combo_id, combo_dir, params, "failed", None
-    return combo_id, combo_dir, params, "completed", score
-
-
-# ─── Sweep ────────────────────────────────────────────────────────────────────
-
-def run_sweep(grid_resolved: dict, base_dir: str, script: str,
-              common_cli: list[str], dry_run: bool, parallel: int = 1):
-    """Run a single grid sweep into `base_dir` (must already exist).
-
-    parallel > 1 runs combos concurrently in a thread pool, each combo a
-    separate subprocess. Per-combo stdout is captured to `stdout.log` so
-    logs don't interleave; cleanup of losers is deferred until all combos
-    finish. Caller is responsible for ensuring CUDA is the active device
-    — see _resolve_parallel.
-    """
-    combos = expand_grid(grid_resolved)
-    if not combos:
-        print(f"  Grid expanded to 0 combinations; skipping.")
-        return
-
-    swept_keys = sorted({k for p in combos for k in p})
-    fieldnames = ["combo_id", "status", "best_val_loss"] + swept_keys
-
-    manifest = {
-        "n_combos": len(combos),
-        "grid":     grid_resolved,
-        "combos": [{"combo_id": f"combo_{i:04d}", "params": p}
-                   for i, p in enumerate(combos)],
-    }
-    with open(os.path.join(base_dir, "manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=2)
-
-    if dry_run:
-        print(f"  Dry run — {len(combos)} combos:")
-        for i, p in enumerate(combos):
-            ps = ", ".join(f"{k}={v}" for k, v in p.items())
-            print(f"    combo_{i:04d}: {ps}")
-        return
-
-    leader_path = os.path.join(base_dir, "leaderboard.csv")
-    leaderboard = []
-
-    if parallel > 1:
-        print(f"  Running {len(combos)} combos with --parallel {parallel} "
-              f"(per-combo stdout → combo_dir/stdout.log)")
-        lb_lock = threading.Lock()
-        done    = 0
-        with ThreadPoolExecutor(max_workers=parallel) as ex:
-            futs = [ex.submit(_run_one_combo, i, p, base_dir, script,
-                              common_cli, True)
-                    for i, p in enumerate(combos)]
-            for fut in as_completed(futs):
-                combo_id, combo_dir, params, status, score = fut.result()
-                with lb_lock:
-                    done += 1
-                    ps = ", ".join(f"{k}={v}" for k, v in params.items())
-                    if score is None:
-                        print(f"  [{done:>3}/{len(combos)}] {combo_id}  FAILED  {ps}")
-                        row = {"combo_id": combo_id, "status": "failed",
-                               "best_val_loss": None, **params}
-                    else:
-                        print(f"  [{done:>3}/{len(combos)}] {combo_id}  {status}  "
-                              f"val={score:.6f}  {ps}")
-                        row = {"combo_id": combo_id, "status": status,
-                               "best_val_loss": score, **params}
-                    leaderboard.append(row)
-                    write_leaderboard(
-                        leader_path,
-                        sorted(leaderboard, key=lambda r: r["combo_id"]),
-                        fieldnames,
-                    )
-        # Deferred cleanup: keep only the winner's checkpoint, prune the rest.
-        scored = [r for r in leaderboard if r["best_val_loss"] is not None]
-        winner_id = (min(scored, key=lambda r: r["best_val_loss"])["combo_id"]
-                     if scored else None)
-        for r in leaderboard:
-            cdir = os.path.join(base_dir, r["combo_id"])
-            cleanup(cdir, keep_checkpoint=(r["combo_id"] == winner_id))
-    else:
-        running_best = (float("inf"), None)  # (score, combo_dir)
-
-        for i, params in enumerate(combos):
-            combo_id  = f"combo_{i:04d}"
-            combo_dir = os.path.join(base_dir, combo_id)
-            os.makedirs(combo_dir, exist_ok=True)
-
-            ps = ", ".join(f"{k}={v}" for k, v in params.items())
-            print(f"\n  [{i + 1:>3}/{len(combos)}] {combo_id}  {ps}")
-
-            if combo_is_complete(combo_dir, params):
-                score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
-                print(f"     resume → val={score:.6f}")
-                status = "resumed"
-            else:
-                cmd = ([sys.executable, "-u", script, "--out_dir", combo_dir]
-                       + common_cli + combo_to_args(params))
-                rc = subprocess.run(cmd).returncode
-                score = read_min_val_loss(os.path.join(combo_dir, "train_log.csv"))
-                if rc != 0 or score is None:
-                    print(f"     FAILED (rc={rc})")
-                    row = {"combo_id": combo_id, "status": "failed",
-                           "best_val_loss": None, **params}
-                    leaderboard.append(row)
-                    write_leaderboard(leader_path, leaderboard, fieldnames)
-                    continue
-                status = "completed"
-                print(f"     val={score:.6f}")
-
-            if score < running_best[0]:
-                if running_best[1] is not None:
-                    cleanup(running_best[1], keep_checkpoint=False)
-                running_best = (score, combo_dir)
-                cleanup(combo_dir, keep_checkpoint=True)
-            else:
-                cleanup(combo_dir, keep_checkpoint=False)
-
-            row = {"combo_id": combo_id, "status": status,
-                   "best_val_loss": score, **params}
-            leaderboard.append(row)
-            write_leaderboard(leader_path, leaderboard, fieldnames)
-
-    completed = [r for r in leaderboard if r["best_val_loss"] is not None]
-    if not completed:
-        print(f"\n  All combos failed in {base_dir}; no winner.")
-        return
-
-    completed_sorted = sorted(completed, key=lambda r: r["best_val_loss"])
-    winner     = completed_sorted[0]
-    winner_dir = os.path.join(base_dir, winner["combo_id"])
-    winner_pt  = os.path.join(winner_dir, "best_model.pt")
-
-    summary = {
-        "n_combos":    len(combos),
-        "n_completed": len(completed),
-        "n_failed":    len(combos) - len(completed),
-        "winner": {
-            "combo_id":      winner["combo_id"],
-            "best_val_loss": winner["best_val_loss"],
-            "params":        {k: winner[k] for k in swept_keys},
-            "result_dir":    winner_dir,
-            "checkpoint":    winner_pt,
-        },
-        "ranking": [
-            {"combo_id":      r["combo_id"],
-             "best_val_loss": r["best_val_loss"]}
-            for r in completed_sorted
-        ],
-    }
-    with open(os.path.join(base_dir, "summary.json"), "w") as f:
-        json.dump(summary, f, indent=2)
-
-    print(f"\n  Winner: {winner['combo_id']}  val={winner['best_val_loss']:.6f}")
-    print(f"    params:  {', '.join(f'{k}={winner[k]}' for k in swept_keys)}")
-    print(f"    ckpt:    {winner_pt}")
-    if not os.path.isfile(winner_pt):
-        print(f"    WARNING: winner .pt missing — re-run with --overwrite to "
-              f"regenerate cleanly.")
-
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
-
-def main():
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("--model",        required=True, choices=list(MODEL_SCRIPTS.keys()))
-    ap.add_argument("--grid",         required=True,
-                    help="Path to tuning_grid.json (scalars=fixed, lists=swept).")
-    ap.add_argument("--dataset",      default="full",  choices=["full", "precovid"])
-    ap.add_argument("--target_space", default="level", choices=["level", "logdiff"])
-    ap.add_argument("--seq_len",      type=int, default=63)
-    ap.add_argument("--pred_len",     type=int, default=21)
-    ap.add_argument("--csv_path",     default="SPX_surfaces.csv")
-    ap.add_argument("--device",       default="auto")
-    ap.add_argument("--seed",         type=int, default=42)
-    ap.add_argument("--overwrite",    action="store_true",
-                    help="Wipe the task subfolder (and all variants) before starting.")
-    ap.add_argument("--dry_run",      action="store_true",
-                    help="Print the planned sweep and exit without training.")
-    ap.add_argument("--parallel",     type=int, default=1,
-                    help="Run N combos concurrently. Auto-clamped to 1 unless "
-                         "CUDA is detected — on MPS/CPU multiple processes "
-                         "thrash the same device. On a single A100 80GB, "
-                         "4–8 typically saturates the GPU for HOT.")
-    args = ap.parse_args()
-    args.parallel = _resolve_parallel(args.parallel, args.device)
-
-    script = MODEL_SCRIPTS[args.model]
-    if not os.path.isfile(script):
-        raise SystemExit(f"Model script not found: {script}")
-    if not os.path.isfile(args.grid):
-        raise SystemExit(f"Grid file not found: {args.grid}")
-
-    with open(args.grid) as f:
-        grid = json.load(f)
-
-    task_tag = (f"{args.dataset}_{args.target_space}_SPX_IV_"
-                f"{args.seq_len}_{args.pred_len}")
-    task_dir = os.path.join(os.path.dirname(script), "tuning_results", task_tag)
-
-    if args.overwrite and os.path.isdir(task_dir):
-        print(f"Wiping {task_dir}/ ...")
-        shutil.rmtree(task_dir)
-    os.makedirs(task_dir, exist_ok=True)
-
-    base_grid = {k: v for k, v in grid.items() if not k.startswith("_")}
-    variants  = grid.get("_variants") or [{"name": None, "fix": {}}]
-
-    common_cli = build_common_args(args)
-
-    print(f"\nTuning {args.model.upper()}  task={task_tag}")
-    print(f"Output: {task_dir}/")
-    print(f"Variants: {len(variants)}  "
-          f"({sum(1 for v in base_grid.values() if isinstance(v, list))} "
-          f"swept axes per variant)")
-
+    out: list[tuple[str | None, dict]] = []
     for v in variants:
         v_name = v.get("name")
         v_fix  = v.get("fix") or {}
+        merged = {**base, **v_fix}
 
+        axes_keys, axes_vals = [], []
+        for k, vv in merged.items():
+            axes_keys.append(k)
+            axes_vals.append(vv if isinstance(vv, list) else [vv])
+
+        # TuckerDLinear's bundled spatial+temporal rank axis.
+        if model_name == "tucker_dlinear":
+            pairs = grid.get("_spatial_temporal_pairs")
+            if pairs:
+                axes_keys.append(TUCKER_PAIR_KEY)
+                axes_vals.append(pairs)
+
+        for tup in itertools.product(*axes_vals):
+            combo = dict(zip(axes_keys, tup))
+            if model_name == "tucker_dlinear" and TUCKER_PAIR_KEY in combo:
+                pair = combo.pop(TUCKER_PAIR_KEY)
+                combo["rank_W"] = pair["rank_W"]
+                combo["rank_H"] = pair["rank_H"]
+                combo["rank_L"] = pair["rank_L"]
+                combo["rank_P"] = min(pred_len, pair["rank_P_max"])
+            out.append((v_name, combo))
+    return out
+
+
+# ─── Model construction ───────────────────────────────────────────────────
+
+def build_model_for_tuning(name: str, model_kw: dict, pred_len: int,
+                           n_channels: int, n_tau: int, n_money: int):
+    L, P, C = LOOKBACK, pred_len, n_channels
+    if name == "dlinear":
+        kw = dict(seq_len=L, pred_len=P, n_channels=C, **model_kw)
+        return _DLinearAdapter(DLinear(**kw)), kw
+    if name == "patchtst":
+        kw = dict(c_in=C, seq_len=L, pred_len=P, **model_kw)
+        return _PatchTSTAdapter(PatchTST(**kw)), kw
+    if name == "hot":
+        kw = dict(context_length=L, prediction_length=P, **model_kw)
+        return _HOTAdapter(HOT(**kw), n_tau, n_money), kw
+    if name == "tucker_dlinear":
+        kw = dict(seq_len=L, pred_len=P, W=n_money, H=n_tau, **model_kw)
+        return _TuckerAdapter(TuckerDLinear(**kw), n_tau, n_money), kw
+    raise ValueError(f"Unsupported model: {name!r}")
+
+
+# ─── One combo: train and persist ─────────────────────────────────────────
+
+def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
+                  device: torch.device, seed: int,
+                  combo_dir: str) -> tuple[dict, dict | None]:
+    """Train one combo to completion (or early stop). Returns the combo's
+    `config.json` payload and its best-epoch state_dict (CPU tensors)."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    gen = torch.Generator().manual_seed(seed)
+
+    model_kw, opt_kw, trainer_kw = split_combo(combo)
+    grid = data["grid"]
+    C    = data["rows"]["n_channels"]
+    Xtr, Ytr = data["train"]
+    Xva, Yva = data["val"]
+
+    adapter, resolved = build_model_for_tuning(
+        name, model_kw, pred_len, C, grid.n_tau, grid.n_money,
+    )
+    adapter.to(device)
+    n_params = sum(p.numel() for p in adapter.parameters())
+
+    lr = float(opt_kw["lr"])
+    wd = float(opt_kw.get("weight_decay", 0.0))
+    optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=wd)
+
+    epochs     = int(trainer_kw.get("epochs",     EPOCHS))
+    patience   = int(trainer_kw.get("patience",   PATIENCE))
+    min_epochs = int(trainer_kw.get("min_epochs", MIN_EPOCHS))
+    batch_size = int(trainer_kw.get("batch_size", BATCH_SIZE))
+
+    log_path = os.path.join(combo_dir, "train_log.csv")
+    log_f    = open(log_path, "w", newline="")
+    log_w    = csv.writer(log_f)
+    log_w.writerow(["epoch", "train_loss", "val_loss", "lr", "epoch_time_s"])
+
+    best_val   = float("inf")
+    best_train = float("nan")
+    best_epoch = 0
+    best_state: dict | None = None
+    last_epoch = 0
+
+    for epoch in range(1, epochs + 1):
+        last_epoch = epoch
+        t0 = time.time()
+        tr_loss = _epoch(adapter, Xtr, Ytr, batch_size, device,
+                         optimizer=optimizer, generator=gen)
+        va_loss = _epoch(adapter, Xva, Yva, batch_size, device, optimizer=None)
+        dt = time.time() - t0
+
+        improved = va_loss < best_val
+        if improved:
+            best_val   = va_loss
+            best_train = tr_loss
+            best_epoch = epoch
+            best_state = {k: v.detach().cpu().clone()
+                          for k, v in adapter.state_dict().items()}
+
+        marker = "  [best]" if improved else ""
+        print(f"     epoch {epoch:3d}/{epochs}  "
+              f"train={tr_loss:.6f}  val={va_loss:.6f}  "
+              f"({dt:.1f}s){marker}")
+        log_w.writerow([epoch, f"{tr_loss:.8f}", f"{va_loss:.8f}",
+                        f"{lr:.8g}", f"{dt:.3f}"])
+        log_f.flush()
+
+        if epoch >= min_epochs and (epoch - best_epoch) >= patience:
+            break
+
+    log_f.close()
+
+    config = {
+        "model":           name,
+        "pred_len":        pred_len,
+        "lookback":        LOOKBACK,
+        "combo":           combo,
+        "model_kwargs":    resolved,
+        "optimizer":       "Adam",
+        "lr":              lr,
+        "weight_decay":    wd,
+        "epochs":          epochs,
+        "patience":        patience,
+        "min_epochs":      min_epochs,
+        "batch_size":      batch_size,
+        "n_params":        n_params,
+        "seed":            seed,
+        "device":          str(device),
+        "stop_epoch":      int(last_epoch),
+        "best_epoch":      int(best_epoch),
+        "best_val_loss":   float(best_val),
+        "best_train_loss": float(best_train),
+    }
+    with open(os.path.join(combo_dir, "config.json"), "w") as f:
+        json.dump(config, f, indent=2, default=str)
+
+    return config, best_state
+
+
+# ─── Per-model sweep ──────────────────────────────────────────────────────
+
+def run_sweep_for_model(name: str, pred_len: int, data: dict,
+                        device: torch.device, seed: int,
+                        overwrite: bool):
+    grid_path = os.path.join(ROOT, MODEL_DIR[name], "tuning_grid.json")
+    if not os.path.isfile(grid_path):
+        raise SystemExit(f"Missing tuning grid: {grid_path}")
+    with open(grid_path) as f:
+        grid = json.load(f)
+
+    task_dir = os.path.join(ROOT, MODEL_DIR[name], "tuning_results",
+                            f"{LOOKBACK}_{pred_len}")
+    if os.path.isdir(task_dir):
+        if not overwrite:
+            raise SystemExit(
+                f"{os.path.relpath(task_dir, ROOT)} already exists. "
+                f"Pass --overwrite to wipe.")
+        shutil.rmtree(task_dir)
+    os.makedirs(task_dir, exist_ok=True)
+
+    pairs = expand_grid(grid, name, pred_len)
+    by_variant: dict[str | None, list[dict]] = {}
+    for v_name, combo in pairs:
+        by_variant.setdefault(v_name, []).append(combo)
+
+    n_variants = len(by_variant)
+    print(f"\n{'=' * 72}")
+    print(f"  {name.upper()}   pred_len={pred_len}   "
+          f"variants={n_variants}   total combos={len(pairs)}")
+    print(f"  out: {os.path.relpath(task_dir, ROOT)}/")
+    print(f"{'=' * 72}")
+
+    for v_name, combos in by_variant.items():
         if v_name is None:
-            v_dir   = task_dir
-            v_label = "(default)"
+            v_dir = task_dir
+            label = "(no variant)"
         else:
-            v_dir   = os.path.join(task_dir, v_name)
-            v_label = v_name
+            v_dir = os.path.join(task_dir, v_name)
             os.makedirs(v_dir, exist_ok=True)
+            label = v_name
 
-        v_grid = {**base_grid, **v_fix}
+        print(f"\n  ── variant: {label}   {len(combos)} combos ──")
 
-        print(f"\n{'─' * 70}\nVariant: {v_label}\n{'─' * 70}")
-        run_sweep(v_grid, v_dir, script, common_cli, args.dry_run, args.parallel)
+        winner_id:  str | None = None
+        winner_val: float = float("inf")
+        winner_epoch: int = 0
+        leaderboard: list[dict] = []
 
-    print(f"\n{'=' * 70}\nDone. Results: {task_dir}/")
+        for i, combo in enumerate(combos):
+            combo_id  = f"combo_{i:04d}"
+            combo_dir = os.path.join(v_dir, combo_id)
+            os.makedirs(combo_dir, exist_ok=True)
+
+            cs = ", ".join(f"{k}={v}" for k, v in combo.items())
+            print(f"\n  [{i + 1:>3}/{len(combos)}] {combo_id}  {cs}")
+
+            try:
+                config, best_state = run_one_combo(
+                    name, pred_len, combo, data, device, seed, combo_dir,
+                )
+            except Exception as e:
+                print(f"     FAILED: {type(e).__name__}: {e}")
+                leaderboard.append({
+                    "combo_id":        combo_id,
+                    "best_val_loss":   None,
+                    "best_train_loss": None,
+                    "best_epoch":      None,
+                    "n_params":        None,
+                    **combo,
+                })
+                continue
+
+            print(f"     best val: {config['best_val_loss']:.6f}  "
+                  f"@ epoch {config['best_epoch']}  "
+                  f"(stopped at {config['stop_epoch']})")
+            leaderboard.append({
+                "combo_id":        combo_id,
+                "best_val_loss":   config["best_val_loss"],
+                "best_train_loss": config["best_train_loss"],
+                "best_epoch":      config["best_epoch"],
+                "stop_epoch":      config["stop_epoch"],
+                "n_params":        config["n_params"],
+                **combo,
+            })
+
+            # Promote running winner.
+            if config["best_val_loss"] < winner_val:
+                if winner_id is not None:
+                    old_pt = os.path.join(v_dir, winner_id, "best_model.pt")
+                    if os.path.isfile(old_pt):
+                        os.remove(old_pt)
+                if best_state is not None:
+                    torch.save(best_state,
+                               os.path.join(combo_dir, "best_model.pt"))
+                winner_id    = combo_id
+                winner_val   = config["best_val_loss"]
+                winner_epoch = config["best_epoch"]
+                print(f"     ** new running winner ({combo_id}, "
+                      f"val={winner_val:.6f}) **")
+
+        # Variant summary.
+        scored = [r for r in leaderboard if r["best_val_loss"] is not None]
+        ranked = sorted(scored, key=lambda r: r["best_val_loss"])
+        summary = {
+            "model":        name,
+            "pred_len":     pred_len,
+            "lookback":     LOOKBACK,
+            "variant":      v_name,
+            "n_combos":     len(combos),
+            "n_succeeded":  len(scored),
+            "n_failed":     len(combos) - len(scored),
+            "data_end":     data.get("data_end"),
+            "first_date":   data.get("first_date"),
+            "last_date":    data.get("last_date"),
+            "test_first_target_date": data.get("test_first_target_date"),
+            "winner": (None if winner_id is None else {
+                "combo_id":      winner_id,
+                "best_val_loss": winner_val,
+                "best_epoch":    winner_epoch,
+                "config_path":   os.path.relpath(
+                    os.path.join(v_dir, winner_id, "config.json"), ROOT),
+                "checkpoint":    os.path.relpath(
+                    os.path.join(v_dir, winner_id, "best_model.pt"), ROOT),
+            }),
+            "ranking":      ranked,
+            "leaderboard":  leaderboard,
+        }
+        with open(os.path.join(v_dir, "summary.json"), "w") as f:
+            json.dump(summary, f, indent=2, default=str)
+
+        if winner_id is None:
+            print(f"\n  variant {label}: every combo failed.")
+        else:
+            print(f"\n  variant {label} winner: {winner_id}  "
+                  f"val={winner_val:.6f}  @ epoch {winner_epoch}")
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────
+
+def parse_models(arg: str) -> list[str]:
+    if arg == "all":
+        return list(TUNABLE)
+    names = [s.strip() for s in arg.split(",") if s.strip()]
+    bad = [n for n in names if n not in TUNABLE]
+    if bad:
+        raise SystemExit(
+            f"Unknown / untunable model(s): {bad}. "
+            f"Pick from {TUNABLE} or 'all'.")
+    return names
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Sweep <ModelDir>/tuning_grid.json on SPX_surfaces.csv.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("--model", required=True,
+                    help='Comma-separated names from '
+                         f'{TUNABLE} or "all".')
+    ap.add_argument("--pred_len", required=True, type=int, choices=(5, 21, 63))
+    ap.add_argument("--csv_path",   default=os.path.join(ROOT, "SPX_surfaces.csv"))
+    ap.add_argument("--train_frac", type=float, default=0.7)
+    ap.add_argument("--val_frac",   type=float, default=0.1)
+    ap.add_argument("--data_end",   type=str,   default="2023-12-29",
+                    help="Drop CSV rows with date > this. "
+                         "Pass 'none' to keep all rows.")
+    ap.add_argument("--seed",       type=int,   default=42)
+    ap.add_argument("--overwrite",  action="store_true",
+                    help="Wipe each model's tuning_results/63_<pred_len>/ "
+                         "before starting.")
+    args = ap.parse_args()
+
+    if args.train_frac + args.val_frac >= 1.0:
+        raise SystemExit("train_frac + val_frac must be < 1.")
+
+    names = parse_models(args.model)
+
+    device = pick_device()
+    print(f"device: {device}")
+    print(f"loading {os.path.relpath(args.csv_path, ROOT)} ...")
+    data_end = None if args.data_end.lower() == "none" else args.data_end
+    data = load_dataset(args.csv_path, args.train_frac, args.val_frac,
+                        LOOKBACK, args.pred_len, data_end=data_end)
+    g, r = data["grid"], data["rows"]
+    print(f"  rows: N={r['N']}  train_end={r['train_end']}  "
+          f"val_end={r['val_end']}  C={r['n_channels']}  "
+          f"grid={g.n_tau}×{g.n_money} (tau×moneyness)")
+    print(f"  windows: train={data['train'][0].shape[0]}  "
+          f"val={data['val'][0].shape[0]}  test={data['test'][0].shape[0]}  "
+          f"(test held out; never used in tuning)")
+    print(f"  test starts predicting at: {data['test_first_target_date']}")
+
+    for name in names:
+        run_sweep_for_model(name, args.pred_len, data, device,
+                            args.seed, args.overwrite)
 
 
 if __name__ == "__main__":

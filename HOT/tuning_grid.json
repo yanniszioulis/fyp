@@ -7,7 +7,6 @@
   "epochs": 100,
   "batch_size": 64,
   "patience": 15,
-  "n_head": 4,
   "loss": "mse",
   "norm": "off",
   "pe": "rope",
@@ -17,9 +16,10 @@
 
   "_note_d_mlp": "d_mlp is set as 4 * d_hidden.",
 
-  "d_hidden":     [64, 128],
+  "n_head":       [2, 4],
+  "d_hidden":     [32, 64, 128],
   "lr":           [1e-4, 3e-4, 1e-3],
   "weight_decay": [0.1, 0.3, 0.5],
-  "dropout":      [0.2, 0.3],
+  "dropout":      [0.05, 0.1],
   "head_dropout": [0.01, 0.1]
 }

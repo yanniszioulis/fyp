@@ -7,7 +7,7 @@
 
   "epochs":       100,
   "patience":     15,
-  "batch_size":   128,
+  "batch_size":   64,
   "loss":         "mse",
   "kernel_size":  2,
   "blocks":       [2, 4],

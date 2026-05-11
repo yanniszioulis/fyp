@@ -1,0 +1,23 @@
+{
+  "_note_1": "rank_P is auto-set by sweep driver to min(pred_len, rank_P_max) per horizon.",
+  "_note_2": "Full spatial rank (rank_W=15, rank_H=10) is bracketed with a single low-temporal config to bound param count.",
+
+  "epochs":       100,
+  "patience":     15,
+  "min_epochs":   20,
+  "batch_size":   64,
+  "loss":         "mse",
+  "norm":         true,
+
+  "kernel_size":  [5, 13, 21, 31],
+  "lr":           [1e-3, 3e-3],
+  "weight_decay": [1e-4, 1e-3, 1e-2],
+
+  "_spatial_temporal_pairs": [
+    {"rank_W": 2,  "rank_H": 2,  "rank_L": 8,  "rank_P_max": 8},
+    {"rank_W": 5,  "rank_H": 5,  "rank_L": 8,  "rank_P_max": 8},
+    {"rank_W": 5,  "rank_H": 5,  "rank_L": 16, "rank_P_max": 16},
+    {"rank_W": 10, "rank_H": 7,  "rank_L": 8,  "rank_P_max": 8},
+    {"rank_W": 15, "rank_H": 10, "rank_L": 4,  "rank_P_max": 4}
+  ]
+}

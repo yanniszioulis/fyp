@@ -213,13 +213,13 @@ class HOT(nn.Module):
     inside forward() and denormalises the prediction with the same stats.
     This strips per-cell level information in the same way RevIN does.
     """
-    def __init__(self, d_hidden: int = 128, n_blocks: int = 4,
-                 n_head: int = 2, patch_size: int = 4,
-                 context_length: int = 21, prediction_length: int = 63,
+    def __init__(self, d_hidden: int = 64, n_blocks: int = 2,
+                 n_head: int = 2, patch_size: int = 7,
+                 context_length: int = 63, prediction_length: int = 21,
                  attention_type: str = "kronecker_product",
-                 dropout: float = 0.0, attn_dropout: float = 0.0,
-                 head_dropout: float = 0.0,
-                 pe: str = "rope", norm: bool = True,
+                 dropout: float = 0.1, attn_dropout: float = 0.0,
+                 head_dropout: float = 0.01,
+                 pe: str = "rope", norm: bool = False,
                  head_type: str = "flatten"):
         super().__init__()
         assert pe in ("rope", "nope"), f"pe must be 'rope' or 'nope', got {pe!r}"

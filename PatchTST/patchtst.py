@@ -340,10 +340,10 @@ class PatchTST(nn.Module):
     """
     def __init__(self, c_in: int, seq_len: int, pred_len: int,
                  patch_len: int = 7, stride: int = 7,
-                 d_model: int = 128, n_heads: int = 16, n_layers: int = 3,
-                 d_ff: int = 256, attn_dropout: float = 0., dropout: float = 0.,
-                 head_dropout: float = 0., res_attention: bool = True,
-                 revin: bool = True, affine: bool = False,
+                 d_model: int = 32, n_heads: int = 2, n_layers: int = 2,
+                 d_ff: int = 64, attn_dropout: float = 0.0, dropout: float = 0.1,
+                 head_dropout: float = 0.01, res_attention: bool = True,
+                 revin: bool = False, affine: bool = False,
                  padding_patch: str = "end",
                  decomposition: bool = False, kernel_size: int = 25,
                  store_attn: bool = False):

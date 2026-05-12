@@ -109,9 +109,14 @@ def _coerce(v):
 
 
 def _signature(combo: dict) -> str:
-    """Canonical JSON signature of a combo's params (for resume matching)."""
-    return json.dumps({k: combo[k] for k in sorted(combo)},
-                      default=str, sort_keys=True)
+    """Canonical JSON signature of a combo's params (for resume matching).
+
+    Values are coerced so semantically equivalent encodings match
+    (e.g. "off"/"on" ↔ False/True), which keeps resume robust to grid
+    edits that only change a value's *encoding*.
+    """
+    norm = {k: _coerce(combo[k]) for k in sorted(combo)}
+    return json.dumps(norm, default=str, sort_keys=True)
 
 
 def discover_existing(v_dir: str) -> dict[str, tuple[str, float, dict]]:

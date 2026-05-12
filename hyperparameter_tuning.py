@@ -231,10 +231,10 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
             best_state = {k: v.detach().cpu().clone()
                           for k, v in adapter.state_dict().items()}
 
-        marker = "  [best]" if improved else ""
-        print(f"     epoch {epoch:3d}/{epochs}  "
-              f"train={tr_loss:.6f}  val={va_loss:.6f}  "
-              f"({dt:.1f}s){marker}")
+        if epoch == 1 or epoch % 10 == 0 or epoch == epochs:
+            print(f"     epoch {epoch:3d}/{epochs}  "
+                  f"train={tr_loss:.6f}  val={va_loss:.6f}  "
+                  f"best_val={best_val:.6f} (@{best_epoch})  ({dt:.1f}s)")
         log_w.writerow([epoch, f"{tr_loss:.8f}", f"{va_loss:.8f}",
                         f"{lr:.8g}", f"{dt:.3f}"])
         log_f.flush()

@@ -80,7 +80,7 @@ LR_DYNGWN         = 1e-3
 WD_DLINEAR        = 1e-4
 WD_PATCHTST       = 1e-4
 WD_HOT            = 0.05
-WD_TUCKER_DLINEAR = 1e-4
+WD_TUCKER_DLINEAR = 1e-3
 WD_DYNGWN         = 1e-3
 
 # Shared trainer settings (same for every deep model).
@@ -297,7 +297,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
     if name == "dlinear":
         kw = dict(seq_len=L, pred_len=P, n_channels=C)
         m = DLinear(**kw)
-        return _DLinearAdapter(m), {**kw, "kernel_size": 13, "revin": True,
+        return _DLinearAdapter(m), {**kw, "kernel_size": 13, "revin": False,
                                     "revin_affine": False, "revin_eps": 1e-5}
     if name == "patchtst":
         kw = dict(c_in=C, seq_len=L, pred_len=P)
@@ -306,7 +306,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
             **kw,
             "patch_len": 7, "stride": 7, "d_model": 32, "n_heads": 4,
             "n_layers": 2, "d_ff": 128, "attn_dropout": 0.0, "dropout": 0.3,
-            "head_dropout": 0.2, "res_attention": True, "revin": True,
+            "head_dropout": 0.2, "res_attention": True, "revin": False,
             "affine": False, "padding_patch": "end", "decomposition": False,
             "kernel_size": 25, "store_attn": False,
         }
@@ -318,14 +318,14 @@ def build_model(name: str, pred_len: int, n_channels: int,
             "d_hidden": 128, "n_blocks": 4, "n_head": 2, "patch_size": 4,
             "attention_type": "kronecker_product",
             "dropout": 0.0, "attn_dropout": 0.0, "head_dropout": 0.0,
-            "pe": "rope", "norm": True, "head_type": "flatten",
+            "pe": "rope", "norm": False, "head_type": "flatten",
         }
     if name == "tucker_dlinear":
         # No __init__ defaults for the ranks; pick a balanced config.
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            rank_L=8, rank_P=min(8, P), rank_W=n_money, rank_H=n_tau,
-            kernel_size=13, norm=True,
+            rank_L=63, rank_P=min(21, P), rank_W=15, rank_H=10,
+            kernel_size=31, norm=False,
         )
         m = TuckerDLinear(**kw)
         return _TuckerAdapter(m, n_tau, n_money), kw

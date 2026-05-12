@@ -8,7 +8,7 @@
   "batch_size": 64,
   "patience": 15,
   "loss": "mse",
-  "norm": "off",
+  "norm": false,
   "pe": "rope",
   "n_blocks": 2,
   "patch_size": 7,

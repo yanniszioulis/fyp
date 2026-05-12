@@ -18,6 +18,8 @@
     {"rank_W": 5,  "rank_H": 5,  "rank_L": 8,  "rank_P_max": 8},
     {"rank_W": 5,  "rank_H": 5,  "rank_L": 16, "rank_P_max": 16},
     {"rank_W": 10, "rank_H": 7,  "rank_L": 8,  "rank_P_max": 8},
-    {"rank_W": 15, "rank_H": 10, "rank_L": 4,  "rank_P_max": 4}
+    {"rank_W": 15, "rank_H": 10, "rank_L": 4,  "rank_P_max": 4},
+    {"rank_W": 15, "rank_H": 10, "rank_L": 8,  "rank_P_max": 8},
+    {"rank_W": 15, "rank_H": 10, "rank_L": 16, "rank_P_max": 16}
   ]
 }

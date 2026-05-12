@@ -1,0 +1,23 @@
+{
+  "model": "tucker_dlinear",
+  "variant": null,
+  "tuning_dir": "Tucker_DLinear/tuning_results/63_21",
+  "winner_combo": "combo_0106",
+  "val_loss": 0.17381971950085454,
+  "best_epoch": 17,
+  "model_kwargs": {
+    "seq_len": 63,
+    "pred_len": 21,
+    "W": 15,
+    "H": 10,
+    "norm": true,
+    "kernel_size": 31,
+    "rank_W": 5,
+    "rank_H": 5,
+    "rank_L": 8,
+    "rank_P": 8
+  },
+  "n_params": 84994,
+  "tuning_seed": 42,
+  "checkpoint": "Tucker_DLinear/tuning_results/63_21/combo_0106/best_model.pt"
+}

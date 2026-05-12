@@ -43,7 +43,10 @@ Notes
   currently excluded (its `_variants` block requires a grid adjacency we
   haven't wired up yet).
 * String knobs in grids are coerced: "on" → True, "off" → False.
-* Existing output dirs require `--overwrite` to wipe.
+* Resume by default: combos whose params already match a saved
+  `config.json` are reused (their existing combo_id is kept, no retrain).
+  New combos in the grid are trained with fresh combo_ids. Pass
+  `--overwrite` to wipe and start from scratch.
 
 Usage
 -----
@@ -103,6 +106,56 @@ def _coerce(v):
         if v.lower() == "on":  return True
         if v.lower() == "off": return False
     return v
+
+
+def _signature(combo: dict) -> str:
+    """Canonical JSON signature of a combo's params (for resume matching)."""
+    return json.dumps({k: combo[k] for k in sorted(combo)},
+                      default=str, sort_keys=True)
+
+
+def discover_existing(v_dir: str) -> dict[str, tuple[str, float, dict]]:
+    """Scan `v_dir` for completed combos. Returns
+        {param_signature: (combo_id, best_val_loss, cfg_dict)}.
+    A combo is "complete" if its config.json has both `combo` and a
+    `best_val_loss`. Combos without those keys are ignored."""
+    if not os.path.isdir(v_dir):
+        return {}
+    out: dict[str, tuple[str, float, dict]] = {}
+    for entry in sorted(os.listdir(v_dir)):
+        if not entry.startswith("combo_"):
+            continue
+        sub      = os.path.join(v_dir, entry)
+        cfg_path = os.path.join(sub, "config.json")
+        if not os.path.isfile(cfg_path):
+            continue
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+        except Exception:
+            continue
+        params = cfg.get("combo")
+        score  = cfg.get("best_val_loss")
+        if params is None or score is None:
+            continue
+        out[_signature(params)] = (entry, float(score), cfg)
+    return out
+
+
+def find_existing_winner(v_dir: str,
+                         existing: dict[str, tuple[str, float, dict]]
+                         ) -> tuple[str, float, int] | None:
+    """Return (combo_id, val_loss, best_epoch) for the existing combo that
+    owns `best_model.pt`. If multiple combos somehow have a .pt, pick the
+    one with the lowest stored val_loss. Returns None if no .pt exists."""
+    candidates = []
+    for combo_id, score, cfg in existing.values():
+        pt = os.path.join(v_dir, combo_id, "best_model.pt")
+        if os.path.isfile(pt):
+            candidates.append((combo_id, score, int(cfg.get("best_epoch", 0))))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda r: r[1])
 
 
 def split_combo(combo: dict) -> tuple[dict, dict, dict]:
@@ -284,11 +337,7 @@ def run_sweep_for_model(name: str, pred_len: int, data: dict,
 
     task_dir = os.path.join(ROOT, MODEL_DIR[name], "tuning_results",
                             f"{LOOKBACK}_{pred_len}")
-    if os.path.isdir(task_dir):
-        if not overwrite:
-            raise SystemExit(
-                f"{os.path.relpath(task_dir, ROOT)} already exists. "
-                f"Pass --overwrite to wipe.")
+    if os.path.isdir(task_dir) and overwrite:
         shutil.rmtree(task_dir)
     os.makedirs(task_dir, exist_ok=True)
 
@@ -313,19 +362,57 @@ def run_sweep_for_model(name: str, pred_len: int, data: dict,
             os.makedirs(v_dir, exist_ok=True)
             label = v_name
 
-        print(f"\n  ── variant: {label}   {len(combos)} combos ──")
+        # Resume support: keep already-trained combos whose params match
+        # the new grid expansion. Only run combos that are genuinely new.
+        existing = discover_existing(v_dir)
+        existing_ids = sorted(
+            int(cid.split("_")[1]) for cid, _, _ in existing.values()
+        )
+        next_id = (existing_ids[-1] + 1) if existing_ids else 0
 
-        winner_id:  str | None = None
-        winner_val: float = float("inf")
-        winner_epoch: int = 0
+        ew = find_existing_winner(v_dir, existing)
+        if ew is None:
+            winner_id, winner_val, winner_epoch = None, float("inf"), 0
+        else:
+            winner_id, winner_val, winner_epoch = ew
+
+        n_reuse = sum(1 for c in combos if _signature(c) in existing)
+        n_new   = len(combos) - n_reuse
+        print(f"\n  ── variant: {label}   {len(combos)} combos "
+              f"(reuse {n_reuse}, new {n_new}) ──")
+        if winner_id is not None:
+            print(f"     existing winner: {winner_id}  "
+                  f"val={winner_val:.6f}  @ epoch {winner_epoch}")
+
         leaderboard: list[dict] = []
 
         for i, combo in enumerate(combos):
-            combo_id  = f"combo_{i:04d}"
+            sig = _signature(combo)
+            cs  = ", ".join(f"{k}={v}" for k, v in combo.items())
+
+            # Reuse a previously trained combo with matching params.
+            if sig in existing:
+                combo_id, score, cfg = existing[sig]
+                print(f"\n  [{i + 1:>3}/{len(combos)}] {combo_id}  {cs}")
+                print(f"     skipped (val={score:.6f}  "
+                      f"@ epoch {cfg.get('best_epoch')})")
+                leaderboard.append({
+                    "combo_id":        combo_id,
+                    "best_val_loss":   score,
+                    "best_train_loss": cfg.get("best_train_loss"),
+                    "best_epoch":      cfg.get("best_epoch"),
+                    "stop_epoch":      cfg.get("stop_epoch"),
+                    "n_params":        cfg.get("n_params"),
+                    "status":          "reused",
+                    **combo,
+                })
+                continue
+
+            # Fresh combo: allocate next free id and train.
+            combo_id  = f"combo_{next_id:04d}"
+            next_id  += 1
             combo_dir = os.path.join(v_dir, combo_id)
             os.makedirs(combo_dir, exist_ok=True)
-
-            cs = ", ".join(f"{k}={v}" for k, v in combo.items())
             print(f"\n  [{i + 1:>3}/{len(combos)}] {combo_id}  {cs}")
 
             try:
@@ -340,6 +427,7 @@ def run_sweep_for_model(name: str, pred_len: int, data: dict,
                     "best_train_loss": None,
                     "best_epoch":      None,
                     "n_params":        None,
+                    "status":          "failed",
                     **combo,
                 })
                 continue
@@ -354,10 +442,14 @@ def run_sweep_for_model(name: str, pred_len: int, data: dict,
                 "best_epoch":      config["best_epoch"],
                 "stop_epoch":      config["stop_epoch"],
                 "n_params":        config["n_params"],
+                "status":          "trained",
                 **combo,
             })
 
-            # Promote running winner.
+            # Promote running winner (only new combos can win — existing
+            # non-winners don't have a .pt to fall back on, but by
+            # construction their val_loss is ≥ the existing winner's, so
+            # they can't beat the running winner anyway).
             if config["best_val_loss"] < winner_val:
                 if winner_id is not None:
                     old_pt = os.path.join(v_dir, winner_id, "best_model.pt")
@@ -441,7 +533,9 @@ def main():
     ap.add_argument("--seed",       type=int,   default=42)
     ap.add_argument("--overwrite",  action="store_true",
                     help="Wipe each model's tuning_results/63_<pred_len>/ "
-                         "before starting.")
+                         "before starting. Without this flag, combos whose "
+                         "params already exist on disk are reused and only "
+                         "new grid additions are trained.")
     args = ap.parse_args()
 
     if args.train_frac + args.val_frac >= 1.0:

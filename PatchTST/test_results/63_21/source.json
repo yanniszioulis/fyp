@@ -1,0 +1,27 @@
+{
+  "model": "patchtst",
+  "variant": null,
+  "tuning_dir": "PatchTST/tuning_results/63_21",
+  "winner_combo": "combo_0001",
+  "val_loss": 0.15497329560058493,
+  "best_epoch": 37,
+  "model_kwargs": {
+    "c_in": 150,
+    "seq_len": 63,
+    "pred_len": 21,
+    "patch_len": 7,
+    "stride": 7,
+    "revin": false,
+    "padding_patch": "end",
+    "attn_dropout": 0.0,
+    "n_heads": 2,
+    "n_layers": 2,
+    "d_model": 32,
+    "d_ff": 64,
+    "dropout": 0.1,
+    "head_dropout": 0.01
+  },
+  "n_params": 24407,
+  "tuning_seed": 42,
+  "checkpoint": "PatchTST/tuning_results/63_21/combo_0001/best_model.pt"
+}

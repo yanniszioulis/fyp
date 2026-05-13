@@ -13,7 +13,7 @@
   "kernel_size":  31,
   "lr_g_mult":    0.25,
 
-  "lr":           [3e-4, 1e-3, 4e-3],
+  "lr":           [1e-3, 4e-3, 1e-2],
   "weight_decay": [1e-2, 1e-1, 5e-1],
   "wd_g_mult":    [5, 10, 100],
 

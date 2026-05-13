@@ -1,0 +1,13 @@
+{
+  "model": "tucker_dlinear",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.1693982761760592,
+  "best_epoch": 57,
+  "stop_epoch": 72,
+  "test_mse": 0.22325286269187927,
+  "test_rmse": 0.472496415533366,
+  "test_mae": 0.29865923523902893,
+  "space": "standardized_log_iv"
+}

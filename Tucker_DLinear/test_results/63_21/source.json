@@ -2,22 +2,23 @@
   "model": "tucker_dlinear",
   "variant": null,
   "tuning_dir": "Tucker_DLinear/tuning_results/63_21",
-  "winner_combo": "combo_0351",
-  "val_loss": 0.17177232031971512,
-  "best_epoch": 29,
+  "winner_combo": "combo_0141",
+  "val_loss": 0.15775596735550917,
+  "best_epoch": 50,
   "model_kwargs": {
     "seq_len": 63,
     "pred_len": 21,
     "W": 15,
     "H": 10,
     "norm": false,
+    "tie_spatial": false,
     "kernel_size": 31,
     "rank_W": 15,
     "rank_H": 10,
-    "rank_L": 16,
-    "rank_P": 16
+    "rank_L": 1,
+    "rank_P": 2
   },
-  "n_params": 11527138,
+  "n_params": 94660,
   "tuning_seed": 42,
-  "checkpoint": "Tucker_DLinear/tuning_results/63_21/combo_0351/best_model.pt"
+  "checkpoint": "Tucker_DLinear/tuning_results/63_21/combo_0141/best_model.pt"
 }

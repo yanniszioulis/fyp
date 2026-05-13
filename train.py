@@ -4,7 +4,7 @@ train.py — train one (or all) IV-surface forecasters on SPX_surfaces.csv.
 
 Models
 ------
-Deep:  dlinear, patchtst, hot, tucker_dlinear, dyngwn
+Deep:  dlinear, patchtst, hot, tucker_dlinear, gwn
        Each uses its own __init__ defaults; lr is read from the LR_*
        constants below. Shared trainer: Adam, MSE on standardized log-IV,
        max EPOCHS, early stop with PATIENCE (suppressed until MIN_EPOCHS).
@@ -56,14 +56,14 @@ import torch.nn as nn
 
 # Make the per-model packages importable as top-level modules.
 ROOT = os.path.dirname(os.path.abspath(__file__))
-for sub in ("DLinear", "PatchTST", "HOT", "Tucker_DLinear", "DynGWN", "VAR"):
+for sub in ("DLinear", "PatchTST", "HOT", "Tucker_DLinear", "GWN", "VAR"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
 from dlinear import DLinear                # noqa: E402
 from patchtst import PatchTST              # noqa: E402
 from hot import HOT                        # noqa: E402
 from tucker_dlinear import TuckerDLinear   # noqa: E402
-from dyngwn import DynGWN                  # noqa: E402
+from gwn import GWN                        # noqa: E402
 from var import fit_var_p, make_step_window_fn  # noqa: E402
 
 
@@ -73,15 +73,15 @@ from var import fit_var_p, make_step_window_fn  # noqa: E402
 # shared, see below.
 LR_DLINEAR        = 4e-3
 LR_PATCHTST       = 1e-3
-LR_HOT            = 3e-4
+LR_HOT            = 1e-3
 LR_TUCKER_DLINEAR = 1e-3
-LR_DYNGWN         = 1e-3
+LR_GWN            = 1e-3
 
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
-WD_HOT            = 0.05
+WD_HOT            = 0.3
 WD_TUCKER_DLINEAR = 1e-1
-WD_DYNGWN         = 1e-3
+WD_GWN            = 1e-3
 
 # Tucker-only (with AdamW): the G core gets its own multipliers on top of
 # LR_TUCKER_DLINEAR / WD_TUCKER_DLINEAR. The factor matrices stay at the
@@ -99,7 +99,7 @@ BATCH_SIZE = 32
 
 LOOKBACK   = 63   # fixed across the project
 VALID_PRED_LEN = (5, 21, 63)
-DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "dyngwn")
+DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn")
 
 # Folder names per model (where outputs land relative to repo root).
 MODEL_DIR = {
@@ -107,7 +107,7 @@ MODEL_DIR = {
     "patchtst":       "PatchTST",
     "hot":            "HOT",
     "tucker_dlinear": "Tucker_DLinear",
-    "dyngwn":         "DynGWN",
+    "gwn":            "GWN",
     "var":            "VAR",
 }
 
@@ -288,7 +288,7 @@ class _TuckerAdapter(_Adapter):
         return z.permute(0, 1, 3, 2).reshape(B, -1, C)
 
 
-class _DynGWNAdapter(_Adapter):
+class _GWNAdapter(_Adapter):
     def forward(self, x):
         # x: [B, L, C] → [B, 1, C, L] → model → [B, P, C, 1] → [B, P, C]
         B, L, C = x.shape
@@ -320,19 +320,28 @@ def build_model(name: str, pred_len: int, n_channels: int,
         m = PatchTST(**kw)
         return _PatchTSTAdapter(m), kw
     if name == "hot":
-        kw = dict(context_length=L, prediction_length=P)
+        # Matches the prior tuning winner (kronecker_sum, combo_0096):
+        # d_hidden=128, n_blocks=2, n_head=2, patch_size=7, dropout=0.05,
+        # head_dropout=0.01, attention_type='kronecker_sum'. (Previous
+        # build_model called HOT() with no kwargs, so it ran with HOT's
+        # __init__ defaults — d_hidden=64, kronecker_product, etc. —
+        # NOT the tuning winner.)
+        kw = dict(
+            context_length=L, prediction_length=P,
+            d_hidden=64, n_blocks=1, n_head=2, patch_size=7,
+            attention_type="kronecker_sum",
+            dropout=0.3, attn_dropout=0.0, head_dropout=0.1,
+            pe="rope", norm=False, head_type="flatten",
+        )
         m = HOT(**kw)
-        return _HOTAdapter(m, n_tau, n_money), {
-            **kw,
-            "d_hidden": 128, "n_blocks": 4, "n_head": 2, "patch_size": 4,
-            "attention_type": "kronecker_product",
-            "dropout": 0.0, "attn_dropout": 0.0, "head_dropout": 0.0,
-            "pe": "rope", "norm": False, "head_type": "flatten",
-        }
+        return _HOTAdapter(m, n_tau, n_money), kw
     if name == "tucker_dlinear":
-        # Matches the prior tuning winner (combo_0351): full spatial rank,
-        # temporal rank 16. tie_spatial=True ties A_Wi=A_Wo and A_Hi=A_Ho
-        # to kill the input/output spatial-factor gauge subspace.
+        # Current best config, validated via multi_seed (94,660 params,
+        # val mean 0.165, test mean 0.226, ~tied with DLinear within seed
+        # noise). Full spatial rank with very low temporal rank (rL=1,
+        # rP=2) — partial-rank-aware orthonormal init + AdamW with
+        # per-group LR/WD (lr_g_mult=0.25, wd_g_mult=10) + grad_clip=1.0
+        # are wired up automatically in train_deep_model.
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
             rank_L=1, rank_P=min(2, P), rank_W=n_money, rank_H=n_tau,
@@ -340,13 +349,17 @@ def build_model(name: str, pred_len: int, n_channels: int,
         )
         m = TuckerDLinear(**kw)
         return _TuckerAdapter(m, n_tau, n_money), kw
-    if name == "dyngwn":
-        kw = dict(num_iv=C, seq_len=L, pred_len=P)
-        m = DynGWN(**kw)
-        return _DynGWNAdapter(m), {
+    if name == "gwn":
+        kw = dict(num_nodes=C, seq_len=L, pred_len=P)
+        m = GWN(**kw)
+        return _GWNAdapter(m), {
             **kw,
-            "dropout": 0.3, "in_dim": 1, "nhid": 32, "kernel_size": 2,
-            "blocks": 4, "layers": 2, "static_supports": None,
+            "dropout": 0.3, "supports": None,
+            "gcn_bool": True, "addaptadj": True, "aptinit": None,
+            "in_dim": 1,
+            "residual_channels": 32, "dilation_channels": 32,
+            "skip_channels": 256, "end_channels": 512,
+            "kernel_size": 2, "blocks": 4, "layers": 2,
         }
     raise ValueError(f"Unknown model: {name}")
 
@@ -356,7 +369,7 @@ LR_BY_MODEL = {
     "patchtst":       LR_PATCHTST,
     "hot":            LR_HOT,
     "tucker_dlinear": LR_TUCKER_DLINEAR,
-    "dyngwn":         LR_DYNGWN,
+    "gwn":            LR_GWN,
 }
 
 WD_BY_MODEL = {
@@ -364,7 +377,7 @@ WD_BY_MODEL = {
     "patchtst":       WD_PATCHTST,
     "hot":            WD_HOT,
     "tucker_dlinear": WD_TUCKER_DLINEAR,
-    "dyngwn":         WD_DYNGWN,
+    "gwn":            WD_GWN,
 }
 
 
@@ -417,7 +430,8 @@ def _predict(model, X, batch, device) -> np.ndarray:
 
 
 def train_deep_model(name: str, data: dict, pred_len: int,
-                     device: torch.device, seed: int):
+                     device: torch.device, seed: int,
+                     batch_size: int = BATCH_SIZE):
     """Train one deep model with the shared trainer; save artefacts."""
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -453,15 +467,26 @@ def train_deep_model(name: str, data: dict, pred_len: int,
             [{"params": other_params, "lr": lr,   "weight_decay": wd},
              {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
         )
+    elif name in ("hot", "patchtst", "dlinear"):
+        # AdamW for consistency across the deep models. For transformers
+        # (HOT, PatchTST) this matters: Adam couples WD through the second-
+        # moment normalisation in ways that destabilise attention. For
+        # DLinear it's a no-op while WD_DLINEAR=0 but lets us add decoupled
+        # WD later without re-tuning.
+        lr_g = None
+        wd_g = None
+        optimizer = torch.optim.AdamW(adapter.parameters(), lr=lr, weight_decay=wd)
     else:
         lr_g = None
         wd_g = None
         optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=wd)
 
-    # Tucker's overcomplete parameterisation causes a large epoch-1 gradient
-    # spike before Adam's second-moment estimates build up (see notes). Clip
-    # the grad norm to 1.0 to kill the spike and stabilise early training.
-    grad_clip = 1.0 if name == "tucker_dlinear" else None
+    # Grad-norm clip:
+    # - Tucker:   clips the epoch-1 spike from its overcomplete parameterisation.
+    # - PatchTST / HOT: standard transformer stabiliser.
+    # - DLinear:  consistency with the other deep models; tames any rare
+    #             large-batch gradient bursts on the channel-independent maps.
+    grad_clip = 1.0 if name in ("tucker_dlinear", "hot", "patchtst", "dlinear") else None
 
     ts      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     out_dir = os.path.join(ROOT, MODEL_DIR[name],
@@ -473,8 +498,8 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     print(f"  params:  {n_params:,}")
     lr_str = f"lr={lr}" + (f" (lr_G={lr_g:.4g})" if lr_g is not None else "")
     wd_str = f"wd={wd}" + (f" (wd_G={wd_g:.4g})" if wd_g is not None else "")
-    opt_name = "AdamW" if name == "tucker_dlinear" else "Adam"
-    print(f"  {opt_name}  {lr_str}  {wd_str}  batch={BATCH_SIZE}  "
+    opt_name = "AdamW" if name in ("tucker_dlinear", "hot", "patchtst", "dlinear") else "Adam"
+    print(f"  {opt_name}  {lr_str}  {wd_str}  batch={batch_size}  "
           f"epochs<={EPOCHS}  patience={PATIENCE} (min_epochs={MIN_EPOCHS})"
           f"{f'  grad_clip={grad_clip}' if grad_clip is not None else ''}")
     print(f"  out:     {os.path.relpath(out_dir, ROOT)}")
@@ -493,10 +518,10 @@ def train_deep_model(name: str, data: dict, pred_len: int,
 
     for epoch in range(1, EPOCHS + 1):
         t0 = time.time()
-        tr_loss = _epoch(adapter, Xtr, Ytr, BATCH_SIZE, device,
+        tr_loss = _epoch(adapter, Xtr, Ytr, batch_size, device,
                          optimizer=optimizer, generator=gen,
                          grad_clip=grad_clip)
-        va_loss = _epoch(adapter, Xva, Yva, BATCH_SIZE, device,
+        va_loss = _epoch(adapter, Xva, Yva, batch_size, device,
                          optimizer=None)
         dt = time.time() - t0
         improved = va_loss < best_val
@@ -529,7 +554,7 @@ def train_deep_model(name: str, data: dict, pred_len: int,
 
     # Restore best weights for the test pass.
     adapter.load_state_dict(best_state)
-    preds_te = _predict(adapter, Xte, BATCH_SIZE, device)   # [N, P, C]
+    preds_te = _predict(adapter, Xte, batch_size, device)   # [N, P, C]
     np.save(os.path.join(out_dir, "preds.npy"), preds_te.astype(np.float32))
 
     mse = float(np.mean((preds_te - Yte) ** 2))
@@ -560,7 +585,7 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         "epochs":         EPOCHS,
         "patience":       PATIENCE,
         "min_epochs":     MIN_EPOCHS,
-        "batch_size":     BATCH_SIZE,
+        "batch_size":     batch_size,
         "lookback":       LOOKBACK,
         "pred_len":       pred_len,
         "seed":           seed,
@@ -699,6 +724,9 @@ def main():
                     help="Drop CSV rows with date > this (YYYY-MM-DD). "
                          "Pass 'none' to keep all rows.")
     ap.add_argument("--seed",       type=int,   default=42)
+    ap.add_argument("--batch_size", type=int,   default=BATCH_SIZE,
+                    help=f"Mini-batch size. Default: {BATCH_SIZE} "
+                         "(the BATCH_SIZE constant in train.py).")
     args = ap.parse_args()
 
     if args.train_frac + args.val_frac >= 1.0:
@@ -723,9 +751,11 @@ def main():
         return
     if args.model == "all":
         for name in DEEP_MODELS:
-            train_deep_model(name, data, args.pred_len, device, args.seed)
+            train_deep_model(name, data, args.pred_len, device, args.seed,
+                             batch_size=args.batch_size)
         return
-    train_deep_model(args.model, data, args.pred_len, device, args.seed)
+    train_deep_model(args.model, data, args.pred_len, device, args.seed,
+                     batch_size=args.batch_size)
 
 
 if __name__ == "__main__":

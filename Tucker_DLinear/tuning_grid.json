@@ -6,16 +6,16 @@
   "epochs":       100,
   "patience":     15,
   "min_epochs":   20,
-  "batch_size":   64,
+  "batch_size":   32,
   "loss":         "mse",
   "norm":         false,
   "tie_spatial":  false,
   "kernel_size":  31,
   "lr_g_mult":    0.25,
 
-  "lr":           [1e-3, 4e-3, 1e-2],
-  "weight_decay": [1e-2, 1e-1, 5e-1],
-  "wd_g_mult":    [5, 10, 100],
+  "lr":           [4e-3, 1e-2, 4e-2],
+  "weight_decay": [1e-2, 1e-1, 1e-3],
+  "wd_g_mult":    [10, 50, 100, 300],
 
   "_spatial_temporal_pairs": [
     {"rank_W": 15, "rank_H": 10, "rank_L": 1,  "rank_P_max": 1},

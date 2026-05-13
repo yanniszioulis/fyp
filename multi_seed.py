@@ -29,7 +29,7 @@ MODEL_DIR = {
     "patchtst":       "PatchTST",
     "hot":            "HOT",
     "tucker_dlinear": "Tucker_DLinear",
-    "dyngwn":         "DynGWN",
+    "gwn":            "GWN",
 }
 
 
@@ -45,11 +45,16 @@ def latest_run_dir(model: str, pred_len: int) -> str:
     )
 
 
-def run_one(model: str, pred_len: int, seed: int) -> dict:
+def run_one(model: str, pred_len: int, seed: int,
+            batch_size: int | None = None) -> dict:
     bar = "=" * 72
-    print(f"\n{bar}\n  RUNNING  model={model}  seed={seed}\n{bar}", flush=True)
+    bs_str = f"  batch_size={batch_size}" if batch_size is not None else ""
+    print(f"\n{bar}\n  RUNNING  model={model}  seed={seed}{bs_str}\n{bar}",
+          flush=True)
     cmd = [sys.executable, "train.py", "--model", model,
            "--pred_len", str(pred_len), "--seed", str(seed)]
+    if batch_size is not None:
+        cmd += ["--batch_size", str(batch_size)]
     subprocess.run(cmd, check=True)
     run_dir = latest_run_dir(model, pred_len)
     with open(os.path.join(run_dir, "metrics_test.json")) as f:
@@ -130,6 +135,8 @@ def main():
                     default=["dlinear", "tucker_dlinear"])
     ap.add_argument("--out", default=None,
                     help="Optional JSON path to dump all per-run results.")
+    ap.add_argument("--batch_size", type=int, default=None,
+                    help="Override train.py's BATCH_SIZE for every run.")
     args = ap.parse_args()
 
     bad = [m for m in args.models if m not in MODEL_DIR]
@@ -139,7 +146,8 @@ def main():
     results: list[dict] = []
     for model in args.models:
         for seed in args.seeds:
-            results.append(run_one(model, args.pred_len, seed))
+            results.append(run_one(model, args.pred_len, seed,
+                                   batch_size=args.batch_size))
 
     print_summary(results, args.seeds)
 

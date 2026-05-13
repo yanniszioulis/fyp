@@ -3,11 +3,11 @@
 
   "epochs":       100,
   "patience":     15,
-  "batch_size":   64,
+  "batch_size":   32,
   "loss":         "mse",
   "revin":        false,
 
-  "kernel_size":  [5, 13, 21, 31],
-  "lr":           [3e-4, 1e-3, 4e-3],
+  "kernel_size":  [5, 13, 21, 31, 41, 51],
+  "lr":           [3e-4, 1e-3, 4e-3, 1e-2],
   "weight_decay": [0.0, 1e-4, 1e-3, 1e-2]
 }

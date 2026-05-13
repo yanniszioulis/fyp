@@ -39,7 +39,7 @@ every combo's score, the ranking, and the winner.
 
 Notes
 -----
-* Supported models: dlinear, patchtst, hot, tucker_dlinear. DynGWN is
+* Supported models: dlinear, patchtst, hot, tucker_dlinear. GWN is
   currently excluded (its `_variants` block requires a grid adjacency we
   haven't wired up yet).
 * String knobs in grids are coerced: "on" → True, "off" → False.

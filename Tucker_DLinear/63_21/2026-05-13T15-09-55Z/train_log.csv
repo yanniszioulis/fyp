@@ -1,0 +1,16 @@
+epoch,train_loss,val_loss,lr,epoch_time_s
+1,nan,nan,0.004,0.818
+2,nan,nan,0.004,0.643
+3,nan,nan,0.004,0.637
+4,nan,nan,0.004,0.628
+5,nan,nan,0.004,0.650
+6,nan,nan,0.004,0.635
+7,nan,nan,0.004,0.644
+8,nan,nan,0.004,0.642
+9,nan,nan,0.004,0.629
+10,nan,nan,0.004,0.634
+11,nan,nan,0.004,0.640
+12,nan,nan,0.004,0.642
+13,nan,nan,0.004,0.640
+14,nan,nan,0.004,0.635
+15,nan,nan,0.004,0.642

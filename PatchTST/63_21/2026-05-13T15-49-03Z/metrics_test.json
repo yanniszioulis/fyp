@@ -1,0 +1,13 @@
+{
+  "model": "patchtst",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.16663131297790032,
+  "best_epoch": 7,
+  "stop_epoch": 22,
+  "test_mse": 0.22533875703811646,
+  "test_rmse": 0.47469859599341185,
+  "test_mae": 0.29077818989753723,
+  "space": "standardized_log_iv"
+}

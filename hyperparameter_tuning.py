@@ -93,7 +93,7 @@ TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear")
 
 # Grid-key buckets.
 TRAINER_KEYS    = {"epochs", "patience", "min_epochs", "batch_size"}
-OPTIMIZER_KEYS  = {"lr", "weight_decay"}
+OPTIMIZER_KEYS  = {"lr", "weight_decay", "lr_g_mult", "wd_g_mult"}
 META_KEYS       = {"loss"}            # currently always MSE; ignored
 TUCKER_PAIR_KEY = "_spatial_temporal_pair"
 
@@ -255,7 +255,25 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
 
     lr = float(opt_kw["lr"])
     wd = float(opt_kw.get("weight_decay", 0.0))
-    optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=wd)
+    if name == "tucker_dlinear":
+        # Mirror train.py: AdamW with per-group LR / WD for the G core vs
+        # the factor matrices, and grad_clip=1.0. lr_g_mult / wd_g_mult
+        # are taken from the grid (default 1.0 = uniform).
+        g_params, other_params = [], []
+        for pname, p in adapter.named_parameters():
+            (g_params if pname.endswith(".G") else other_params).append(p)
+        lr_g = lr * float(opt_kw.get("lr_g_mult", 1.0))
+        wd_g = wd * float(opt_kw.get("wd_g_mult", 1.0))
+        optimizer = torch.optim.AdamW(
+            [{"params": other_params, "lr": lr,   "weight_decay": wd},
+             {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
+        )
+        grad_clip = 1.0
+    else:
+        lr_g = None
+        wd_g = None
+        optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=wd)
+        grad_clip = None
 
     epochs     = int(trainer_kw.get("epochs",     EPOCHS))
     patience   = int(trainer_kw.get("patience",   PATIENCE))
@@ -277,7 +295,8 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
         last_epoch = epoch
         t0 = time.time()
         tr_loss = _epoch(adapter, Xtr, Ytr, batch_size, device,
-                         optimizer=optimizer, generator=gen)
+                         optimizer=optimizer, generator=gen,
+                         grad_clip=grad_clip)
         va_loss = _epoch(adapter, Xva, Yva, batch_size, device, optimizer=None)
         dt = time.time() - t0
 
@@ -308,9 +327,12 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
         "lookback":        LOOKBACK,
         "combo":           combo,
         "model_kwargs":    resolved,
-        "optimizer":       "Adam",
+        "optimizer":       "AdamW" if name == "tucker_dlinear" else "Adam",
         "lr":              lr,
         "weight_decay":    wd,
+        "lr_g":            lr_g,
+        "wd_g":            wd_g,
+        "grad_clip":       grad_clip,
         "epochs":          epochs,
         "patience":        patience,
         "min_epochs":      min_epochs,

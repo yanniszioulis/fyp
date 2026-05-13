@@ -71,17 +71,25 @@ from var import fit_var_p, make_step_window_fn  # noqa: E402
 # Edit these to set the lr / weight_decay used at training time. Adam
 # optimiser; all other training knobs (epochs, patience, min_epochs) are
 # shared, see below.
-LR_DLINEAR        = 4e-4
-LR_PATCHTST       = 3e-4
+LR_DLINEAR        = 4e-3
+LR_PATCHTST       = 1e-3
 LR_HOT            = 3e-4
 LR_TUCKER_DLINEAR = 1e-3
 LR_DYNGWN         = 1e-3
 
-WD_DLINEAR        = 1e-4
+WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
 WD_HOT            = 0.05
-WD_TUCKER_DLINEAR = 1e-3
+WD_TUCKER_DLINEAR = 1e-1
 WD_DYNGWN         = 1e-3
+
+# Tucker-only (with AdamW): the G core gets its own multipliers on top of
+# LR_TUCKER_DLINEAR / WD_TUCKER_DLINEAR. The factor matrices stay at the
+# base values. Lower G LR dampens gauge-direction noise; higher G WD
+# regularises the dominant (overfit-prone) parameter group.
+# Set both to 1.0 to apply the base values uniformly.
+LR_TUCKER_DLINEAR_G_MULT = 0.25
+WD_TUCKER_DLINEAR_G_MULT = 10
 
 # Shared trainer settings (same for every deep model).
 EPOCHS     = 100
@@ -295,21 +303,22 @@ def build_model(name: str, pred_len: int, n_channels: int,
     (adapter, resolved_kwargs)."""
     L, P, C = LOOKBACK, pred_len, n_channels
     if name == "dlinear":
-        kw = dict(seq_len=L, pred_len=P, n_channels=C)
+        # Matches the prior tuning winner (combo_0044): kernel_size=31.
+        kw = dict(seq_len=L, pred_len=P, n_channels=C, kernel_size=31)
         m = DLinear(**kw)
-        return _DLinearAdapter(m), {**kw, "kernel_size": 13, "revin": False,
+        return _DLinearAdapter(m), {**kw, "revin": False,
                                     "revin_affine": False, "revin_eps": 1e-5}
     if name == "patchtst":
-        kw = dict(c_in=C, seq_len=L, pred_len=P)
+        # Matches the prior tuning winner (combo_0001): patch_len=stride=7,
+        # n_heads=2, d_ff=64, dropout=0.1, head_dropout=0.01, revin=False.
+        kw = dict(
+            c_in=C, seq_len=L, pred_len=P,
+            patch_len=7, stride=7, d_model=32, n_heads=2,
+            n_layers=2, d_ff=64, attn_dropout=0.0, dropout=0.1,
+            head_dropout=0.01, revin=False, padding_patch="end",
+        )
         m = PatchTST(**kw)
-        return _PatchTSTAdapter(m), {
-            **kw,
-            "patch_len": 7, "stride": 7, "d_model": 32, "n_heads": 4,
-            "n_layers": 2, "d_ff": 128, "attn_dropout": 0.0, "dropout": 0.3,
-            "head_dropout": 0.2, "res_attention": True, "revin": False,
-            "affine": False, "padding_patch": "end", "decomposition": False,
-            "kernel_size": 25, "store_attn": False,
-        }
+        return _PatchTSTAdapter(m), kw
     if name == "hot":
         kw = dict(context_length=L, prediction_length=P)
         m = HOT(**kw)
@@ -321,11 +330,13 @@ def build_model(name: str, pred_len: int, n_channels: int,
             "pe": "rope", "norm": False, "head_type": "flatten",
         }
     if name == "tucker_dlinear":
-        # No __init__ defaults for the ranks; pick a balanced config.
+        # Matches the prior tuning winner (combo_0351): full spatial rank,
+        # temporal rank 16. tie_spatial=True ties A_Wi=A_Wo and A_Hi=A_Ho
+        # to kill the input/output spatial-factor gauge subspace.
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            rank_L=63, rank_P=min(21, P), rank_W=15, rank_H=10,
-            kernel_size=31, norm=False,
+            rank_L=1, rank_P=min(2, P), rank_W=n_money, rank_H=n_tau,
+            kernel_size=31, norm=False, tie_spatial=False,
         )
         m = TuckerDLinear(**kw)
         return _TuckerAdapter(m, n_tau, n_money), kw
@@ -371,7 +382,8 @@ def _iter_batches(X: np.ndarray, Y: np.ndarray, batch: int,
         yield xb, yb
 
 
-def _epoch(model, X, Y, batch, device, optimizer=None, generator=None):
+def _epoch(model, X, Y, batch, device, optimizer=None, generator=None,
+           grad_clip=None):
     train = optimizer is not None
     model.train(train)
     loss_fn = nn.MSELoss()
@@ -385,6 +397,8 @@ def _epoch(model, X, Y, batch, device, optimizer=None, generator=None):
             if train:
                 optimizer.zero_grad()
                 loss.backward()
+                if grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
             bs = xb.shape[0]
             total += loss.item() * bs
@@ -423,7 +437,31 @@ def train_deep_model(name: str, data: dict, pred_len: int,
 
     lr = LR_BY_MODEL[name]
     wd = WD_BY_MODEL[name]
-    optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=wd)
+    if name == "tucker_dlinear":
+        # AdamW with decoupled per-group LR and WD. The G core (≈99.99%
+        # of params) gets its own multipliers: lower LR dampens gauge-
+        # direction noise, larger WD regularises the dominant overfit-
+        # prone parameter group. Factor matrices (A_L, A_P, A_W, A_H,
+        # bias) — tiny in count but structurally meaningful — stay at
+        # base lr / wd.
+        g_params, other_params = [], []
+        for pname, p in adapter.named_parameters():
+            (g_params if pname.endswith(".G") else other_params).append(p)
+        lr_g = lr * LR_TUCKER_DLINEAR_G_MULT
+        wd_g = wd * WD_TUCKER_DLINEAR_G_MULT
+        optimizer = torch.optim.AdamW(
+            [{"params": other_params, "lr": lr,   "weight_decay": wd},
+             {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
+        )
+    else:
+        lr_g = None
+        wd_g = None
+        optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=wd)
+
+    # Tucker's overcomplete parameterisation causes a large epoch-1 gradient
+    # spike before Adam's second-moment estimates build up (see notes). Clip
+    # the grad norm to 1.0 to kill the spike and stabilise early training.
+    grad_clip = 1.0 if name == "tucker_dlinear" else None
 
     ts      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     out_dir = os.path.join(ROOT, MODEL_DIR[name],
@@ -433,8 +471,12 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     print(f"[{name}  pred_len={pred_len}  device={device}]")
     print(f"  windows: train={len(Xtr)}  val={len(Xva)}  test={len(Xte)}")
     print(f"  params:  {n_params:,}")
-    print(f"  lr={lr}  wd={wd}  batch={BATCH_SIZE}  epochs<={EPOCHS}  "
-          f"patience={PATIENCE} (min_epochs={MIN_EPOCHS})")
+    lr_str = f"lr={lr}" + (f" (lr_G={lr_g:.4g})" if lr_g is not None else "")
+    wd_str = f"wd={wd}" + (f" (wd_G={wd_g:.4g})" if wd_g is not None else "")
+    opt_name = "AdamW" if name == "tucker_dlinear" else "Adam"
+    print(f"  {opt_name}  {lr_str}  {wd_str}  batch={BATCH_SIZE}  "
+          f"epochs<={EPOCHS}  patience={PATIENCE} (min_epochs={MIN_EPOCHS})"
+          f"{f'  grad_clip={grad_clip}' if grad_clip is not None else ''}")
     print(f"  out:     {os.path.relpath(out_dir, ROOT)}")
 
     log_path = os.path.join(out_dir, "train_log.csv")
@@ -452,7 +494,8 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     for epoch in range(1, EPOCHS + 1):
         t0 = time.time()
         tr_loss = _epoch(adapter, Xtr, Ytr, BATCH_SIZE, device,
-                         optimizer=optimizer, generator=gen)
+                         optimizer=optimizer, generator=gen,
+                         grad_clip=grad_clip)
         va_loss = _epoch(adapter, Xva, Yva, BATCH_SIZE, device,
                          optimizer=None)
         dt = time.time() - t0

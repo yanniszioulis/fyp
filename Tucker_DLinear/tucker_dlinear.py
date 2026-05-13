@@ -17,8 +17,16 @@ A_Hi = A_Ho = I_H reduces the model to a per-cell rank-(rank_L, rank_P)
 temporal map. The init exploits this — when rank_W = W and rank_H = H the
 spatial factors are initialised as identity and the core's spatial
 diagonal is set to 1/seq_len, exactly recovering DLinear's per-cell
-uniform-average init. When spatial ranks are reduced, the model falls
-back to the global-broadcast init (T = 1/seq_len uniformly).
+uniform-average init.
+
+When spatial ranks are reduced (rank_W < W or rank_H < H), the spatial
+factors are initialised to orthonormal D × rank columns and the core
+keeps the same per-(rank-W, rank-H) diagonal pattern G[0, b, c, 0, b, c]
+= 1/seq_len. The implicit spatial map A @ A.T becomes a rank-r orthogonal
+projector — the Frobenius-optimal rank-r approximation of I_D — so the
+forward at init is "project the input surface onto the rank-r spatial
+subspace, average over lookback". Output magnitude stays bounded by
+||x||_F regardless of rank.
 
 Hyperparameters (passed to TuckerDLinear.__init__):
     seq_len      int — input window length (lookback).
@@ -70,6 +78,22 @@ class _SurfaceMovingAvg(nn.Module):
         return x.permute(0, 2, 1).reshape(B, L, W, H)
 
 
+def _orth(D: int, rank: int) -> torch.Tensor:
+    """Orthonormal D × rank init.
+
+    Returns I_D when rank == D (full-rank case; preserves the DLinear-equivalent
+    init path bitwise). When rank < D, returns the Q-factor of QR(random) — a
+    random orthonormal basis for a rank-r subspace of R^D. The implicit spatial
+    map A @ A.T is then a rank-r orthogonal projector, the best rank-r Frobenius
+    approximation of I_D.
+    """
+    if rank == D:
+        return torch.eye(D)
+    a = torch.randn(D, rank)
+    q, _ = torch.linalg.qr(a)
+    return q
+
+
 class _TuckerLinear(nn.Module):
     """
     Tucker-decomposed linear map [B, L, W, H] -> [B, P, W, H].
@@ -113,6 +137,7 @@ class _TuckerLinear(nn.Module):
         rank_P: int,
         rank_W: int,
         rank_H: int,
+        tie_spatial: bool = True,
     ):
         super().__init__()
         if not (1 <= rank_L <= seq_len):
@@ -124,78 +149,88 @@ class _TuckerLinear(nn.Module):
         if not (1 <= rank_H <= H):
             raise ValueError(f"rank_H must be in [1, H={H}], got {rank_H}")
 
-        self.seq_len  = seq_len
-        self.pred_len = pred_len
-        self.W        = W
-        self.H        = H
-        self.rank_L   = rank_L
-        self.rank_P   = rank_P
-        self.rank_W   = rank_W
-        self.rank_H   = rank_H
+        self.seq_len     = seq_len
+        self.pred_len    = pred_len
+        self.W           = W
+        self.H           = H
+        self.rank_L      = rank_L
+        self.rank_P      = rank_P
+        self.rank_W      = rank_W
+        self.rank_H      = rank_H
+        self.tie_spatial = tie_spatial
 
         self.A_L  = nn.Parameter(torch.empty(seq_len,  rank_L))
-        self.A_Wi = nn.Parameter(torch.empty(W,        rank_W))
-        self.A_Hi = nn.Parameter(torch.empty(H,        rank_H))
         self.A_P  = nn.Parameter(torch.empty(pred_len, rank_P))
-        self.A_Wo = nn.Parameter(torch.empty(W,        rank_W))
-        self.A_Ho = nn.Parameter(torch.empty(H,        rank_H))
+        if tie_spatial:
+            # Single shared spatial factor used as both input and output. Kills
+            # the asymmetric (A_Wi, A_Wo) and (A_Hi, A_Ho) gauge freedom — the
+            # dilation/skew directions in the spatial-factor gauge group — and
+            # keeps only the orthogonal-rotation residue.
+            self.A_W = nn.Parameter(torch.empty(W, rank_W))
+            self.A_H = nn.Parameter(torch.empty(H, rank_H))
+        else:
+            self.A_Wi = nn.Parameter(torch.empty(W, rank_W))
+            self.A_Hi = nn.Parameter(torch.empty(H, rank_H))
+            self.A_Wo = nn.Parameter(torch.empty(W, rank_W))
+            self.A_Ho = nn.Parameter(torch.empty(H, rank_H))
         self.G    = nn.Parameter(
             torch.empty(rank_L, rank_W, rank_H, rank_P, rank_W, rank_H)
         )
 
         with torch.no_grad():
             # Temporal factors: column 0 = 1 (uniform). Higher-rank columns
-            # carry small noise to break symmetries during optimisation.
+            # carry small noise so gradient can flow into the higher temporal-
+            # rank slices of G (which are zero at init) during training.
             self.A_L.normal_(0.0, 1e-2); self.A_L[:, 0] = 1.0
             self.A_P.normal_(0.0, 1e-2); self.A_P[:, 0] = 1.0
-            # Spatial factors: identity at full rank (channel-independent capable);
-            # otherwise column 0 = 1 (global broadcast) plus small noise.
-            full_W = (rank_W == W)
-            full_H = (rank_H == H)
-            if full_W:
-                self.A_Wi.copy_(torch.eye(W))
-                self.A_Wo.copy_(torch.eye(W))
+            # Spatial factors: orthonormal D × rank columns. At full spatial
+            # rank _orth returns identity, exactly preserving the previous
+            # DLinear-equivalent path. At partial spatial rank A @ A.T is a
+            # rank-r orthogonal projector — the Frobenius-optimal rank-r
+            # approximation of I_D — keeping the init scale bounded
+            # (||out||_F ≤ ||x||_F) regardless of rank.
+            if tie_spatial:
+                self.A_W.copy_(_orth(W, rank_W))
+                self.A_H.copy_(_orth(H, rank_H))
             else:
-                self.A_Wi.normal_(0.0, 1e-2); self.A_Wi[:, 0] = 1.0
-                self.A_Wo.normal_(0.0, 1e-2); self.A_Wo[:, 0] = 1.0
-            if full_H:
-                self.A_Hi.copy_(torch.eye(H))
-                self.A_Ho.copy_(torch.eye(H))
-            else:
-                self.A_Hi.normal_(0.0, 1e-2); self.A_Hi[:, 0] = 1.0
-                self.A_Ho.normal_(0.0, 1e-2); self.A_Ho[:, 0] = 1.0
-            # Core: zero except for deliberate seed entries. Cross-cell G entries
-            # are O(R_W*R_H) in number and even small noise on each (~1e-2) sums
-            # to O(0.3) noise on every output cell, swamping the 1/seq_len signal.
-            # Symmetry-breaking instead flows from the temporal factors' higher-
-            # rank columns, which only enter the output through the (currently
-            # zero) higher-temporal-rank slices of G — gradients pull those slices
-            # off zero during training.
+                # Init A_Wi = A_Wo (and A_Hi = A_Ho) to the same orthonormal
+                # matrix so the implicit spatial map is a projector at init
+                # in both tied and untied modes. Training is free to drift
+                # them apart in the untied case.
+                Q_W = _orth(W, rank_W)
+                Q_H = _orth(H, rank_H)
+                self.A_Wi.copy_(Q_W); self.A_Wo.copy_(Q_W)
+                self.A_Hi.copy_(Q_H); self.A_Ho.copy_(Q_H)
+            # Core: G[0, b, c, 0, b, c] = 1/seq_len for (b, c) in
+            # [rank_W] × [rank_H], else 0. At full spatial rank this is the
+            # per-cell DLinear-equivalent init (output = lookback mean per
+            # cell, recovered bitwise). At partial spatial rank, combined
+            # with orthonormal A_W/A_H, the implicit map is
+            # T = (1/L) · P_W ⊗ P_H along (input cell, output cell): the
+            # output projects the input surface onto the rank-r spatial
+            # subspace and averages over lookback. Bounded scale; no
+            # collapse to a single global scalar like the previous fallback.
             self.G.zero_()
-            if full_W and full_H:
-                # Channel-independent uniform-average map: each output cell
-                # averages its own input cell across the lookback. With A_Wi,
-                # A_Wo, A_Hi, A_Ho = identity and A_L, A_P first columns = 1,
-                # G[0, w, h, 0, w, h] = 1/seq_len makes T = (1/seq_len)*delta
-                # along (wi=wo, hi=ho) — exactly DLinear's init.
-                inv = 1.0 / seq_len
-                for w in range(W):
-                    for h in range(H):
-                        self.G[0, w, h, 0, w, h] = inv
-            else:
-                # Global broadcast init: T = 1/seq_len uniformly across all
-                # input/output indices. Same baseline as the previous CP version.
-                self.G[0, 0, 0, 0, 0, 0] = 1.0 / seq_len
+            inv = 1.0 / seq_len
+            for b in range(rank_W):
+                for c in range(rank_H):
+                    self.G[0, b, c, 0, b, c] = inv
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.tie_spatial:
+            A_Wi = A_Wo = self.A_W
+            A_Hi = A_Ho = self.A_H
+        else:
+            A_Wi, A_Wo = self.A_Wi, self.A_Wo
+            A_Hi, A_Ho = self.A_Hi, self.A_Ho
         z = torch.einsum(
             'nlwh,la,wb,hc->nabc',
-            x, self.A_L, self.A_Wi, self.A_Hi,
+            x, self.A_L, A_Wi, A_Hi,
         )
         mid = torch.einsum('nabc,abcdef->ndef', z, self.G)
         return torch.einsum(
             'ndef,pd,we,hf->npwh',
-            mid, self.A_P, self.A_Wo, self.A_Ho,
+            mid, self.A_P, A_Wo, A_Ho,
         )
 
 
@@ -219,6 +254,7 @@ class TuckerDLinear(nn.Module):
         rank_H: int,
         kernel_size: int = 31,
         norm: bool = False,
+        tie_spatial: bool = True,
     ):
         super().__init__()
         self.seq_len     = seq_len
@@ -231,12 +267,15 @@ class TuckerDLinear(nn.Module):
         self.rank_H      = rank_H
         self.kernel_size = kernel_size
         self.norm        = norm
+        self.tie_spatial = tie_spatial
 
         self.decomp       = _SurfaceMovingAvg(kernel_size)
         self.trend_map    = _TuckerLinear(seq_len, pred_len, W, H,
-                                          rank_L, rank_P, rank_W, rank_H)
+                                          rank_L, rank_P, rank_W, rank_H,
+                                          tie_spatial=tie_spatial)
         self.seasonal_map = _TuckerLinear(seq_len, pred_len, W, H,
-                                          rank_L, rank_P, rank_W, rank_H)
+                                          rank_L, rank_P, rank_W, rank_H,
+                                          tie_spatial=tie_spatial)
         self.bias         = nn.Parameter(torch.zeros(pred_len, W, H))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

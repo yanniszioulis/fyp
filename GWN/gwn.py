@@ -113,7 +113,7 @@ class GWN(nn.Module):
         self.dropout   = dropout
 
         order = 2
-        rank  = 10
+        rank  = 3   # adaptive-adjacency latent rank; IV surfaces are ~3–5 factor
 
         # Register static supports as buffers so they follow the module to
         # any device without manual .to(device) inside the gcn forward.

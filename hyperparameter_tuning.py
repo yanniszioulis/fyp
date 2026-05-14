@@ -269,6 +269,15 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
              {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
         )
         grad_clip = 1.0
+    elif name in ("hot", "patchtst"):
+        # Mirror train.py: AdamW + grad_clip=1.0. AdamW's decoupled weight
+        # decay matters for transformers (Adam couples WD through the
+        # second-moment normalisation in ways that destabilise attention),
+        # and grad_clip is the standard transformer init stabiliser.
+        lr_g = None
+        wd_g = None
+        optimizer = torch.optim.AdamW(adapter.parameters(), lr=lr, weight_decay=wd)
+        grad_clip = 1.0
     else:
         lr_g = None
         wd_g = None
@@ -327,7 +336,7 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
         "lookback":        LOOKBACK,
         "combo":           combo,
         "model_kwargs":    resolved,
-        "optimizer":       "AdamW" if name == "tucker_dlinear" else "Adam",
+        "optimizer":       "AdamW" if name in ("tucker_dlinear", "hot", "patchtst") else "Adam",
         "lr":              lr,
         "weight_decay":    wd,
         "lr_g":            lr_g,

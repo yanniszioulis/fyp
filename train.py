@@ -393,17 +393,24 @@ def build_model(name: str, pred_len: int, n_channels: int,
         m = TuckerDLinear(**kw)
         return _TuckerAdapter(m, n_tau, n_money), kw
     if name == "gwn":
-        kw = dict(num_nodes=C, seq_len=L, pred_len=P)
+        # Small GWN starting point (~40K params, vs ~6M with the paper's
+        # defaults). The reference defaults assume traffic-prediction-
+        # scale graphs; for our 150-node IV surface, end_conv_1 =
+        # Conv2d(skip, end, (1, end_kernel)) at (256, 512, 51) was the
+        # entire 6M parameter count by itself. Shrinking skip→16, end→32
+        # and collapsing to blocks=2, layers=1 puts the model in the same
+        # ballpark as the small DLinear / Tucker / HOT candidates.
+        kw = dict(
+            num_nodes=C, seq_len=L, pred_len=P,
+            in_dim=1, supports=None,
+            gcn_bool=True, addaptadj=True, aptinit=None,
+            residual_channels=16, dilation_channels=16,
+            skip_channels=16, end_channels=32,
+            kernel_size=2, blocks=2, layers=1,
+            dropout=0.3,
+        )
         m = GWN(**kw)
-        return _GWNAdapter(m), {
-            **kw,
-            "dropout": 0.3, "supports": None,
-            "gcn_bool": True, "addaptadj": True, "aptinit": None,
-            "in_dim": 1,
-            "residual_channels": 32, "dilation_channels": 32,
-            "skip_channels": 256, "end_channels": 512,
-            "kernel_size": 2, "blocks": 4, "layers": 2,
-        }
+        return _GWNAdapter(m), kw
     raise ValueError(f"Unknown model: {name}")
 
 

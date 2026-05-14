@@ -79,7 +79,7 @@ LR_GWN            = 1e-3
 
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
-WD_HOT            = 0.3
+WD_HOT            = 0.1
 WD_TUCKER_DLINEAR = 1e-1
 WD_GWN            = 1e-3
 
@@ -297,6 +297,51 @@ class _GWNAdapter(_Adapter):
         return z.squeeze(-1)
 
 
+def build_adapter_from_kwargs(name: str, model_kwargs: dict,
+                              n_tau: int, n_money: int) -> nn.Module:
+    """Construct an adapter-wrapped model from explicit model_kwargs
+    (no defaults applied). Used by --from_winner to reproduce a tuning
+    combo exactly. Mirrors evaluate.rebuild_adapter."""
+    if name == "dlinear":
+        return _DLinearAdapter(DLinear(**model_kwargs))
+    if name == "patchtst":
+        return _PatchTSTAdapter(PatchTST(**model_kwargs))
+    if name == "hot":
+        return _HOTAdapter(HOT(**model_kwargs), n_tau, n_money)
+    if name == "tucker_dlinear":
+        return _TuckerAdapter(TuckerDLinear(**model_kwargs), n_tau, n_money)
+    if name == "gwn":
+        return _GWNAdapter(GWN(**model_kwargs))
+    raise ValueError(f"Unknown model: {name}")
+
+
+def load_winner_config(name: str, pred_len: int) -> dict:
+    """Read <ModelDir>/tuning_results/<lookback>_<pred_len>/summary.json,
+    locate the winner combo, and return its config.json dict augmented
+    with `_winner_combo` and `_winner_source` (path relative to ROOT)."""
+    summary_path = os.path.join(
+        ROOT, MODEL_DIR[name], "tuning_results",
+        f"{LOOKBACK}_{pred_len}", "summary.json",
+    )
+    if not os.path.isfile(summary_path):
+        raise SystemExit(
+            f"--from_winner: no tuning summary at "
+            f"{os.path.relpath(summary_path, ROOT)} "
+            f"(run hyperparameter_tuning.py first).")
+    with open(summary_path) as f:
+        summary = json.load(f)
+    winner = summary.get("winner")
+    if not winner:
+        raise SystemExit(
+            f"--from_winner: no winner in {os.path.relpath(summary_path, ROOT)}")
+    cfg_path = os.path.join(ROOT, winner["config_path"])
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    cfg["_winner_combo"]  = winner["combo_id"]
+    cfg["_winner_source"] = os.path.relpath(cfg_path, ROOT)
+    return cfg
+
+
 def build_model(name: str, pred_len: int, n_channels: int,
                 n_tau: int, n_money: int) -> tuple[nn.Module, dict]:
     """Construct a model using its own __init__ defaults. Returns
@@ -320,18 +365,16 @@ def build_model(name: str, pred_len: int, n_channels: int,
         m = PatchTST(**kw)
         return _PatchTSTAdapter(m), kw
     if name == "hot":
-        # Matches the prior tuning winner (kronecker_sum, combo_0096):
-        # d_hidden=128, n_blocks=2, n_head=2, patch_size=7, dropout=0.05,
-        # head_dropout=0.01, attention_type='kronecker_sum'. (Previous
-        # build_model called HOT() with no kwargs, so it ran with HOT's
-        # __init__ defaults — d_hidden=64, kronecker_product, etc. —
-        # NOT the tuning winner.)
+        # Typical small HOT that lives in the current tuning grid (one
+        # representative point per axis: middle-of-grid). Lets us smoke-
+        # test HOT locally on MPS at a fast size before kicking off the
+        # full sweep.
         kw = dict(
             context_length=L, prediction_length=P,
-            d_hidden=64, n_blocks=1, n_head=2, patch_size=7,
-            attention_type="kronecker_sum",
-            dropout=0.3, attn_dropout=0.0, head_dropout=0.1,
-            pe="rope", norm=False, head_type="flatten",
+            d_hidden=8, n_blocks=1, n_head=1, patch_size=7,
+            attention_type="kronecker_product",
+            dropout=0.1, attn_dropout=0.0, head_dropout=0.1,
+            pe="rope", norm=False, head_type="mean",
         )
         m = HOT(**kw)
         return _HOTAdapter(m, n_tau, n_money), kw
@@ -431,8 +474,15 @@ def _predict(model, X, batch, device) -> np.ndarray:
 
 def train_deep_model(name: str, data: dict, pred_len: int,
                      device: torch.device, seed: int,
-                     batch_size: int = BATCH_SIZE):
-    """Train one deep model with the shared trainer; save artefacts."""
+                     batch_size: int = BATCH_SIZE,
+                     winner_cfg: dict | None = None):
+    """Train one deep model with the shared trainer; save artefacts.
+
+    If `winner_cfg` is provided (the saved config.json from a tuning
+    winner), its `model_kwargs`, optimizer choice, `lr`, `weight_decay`,
+    `lr_g`, `wd_g`, `grad_clip`, `min_epochs`, and `batch_size` override
+    the train.py defaults. Used by multi_seed.py --from_winner.
+    """
     torch.manual_seed(seed)
     np.random.seed(seed)
     gen = torch.Generator().manual_seed(seed)
@@ -443,50 +493,62 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     Xva, Yva = data["val"]
     Xte, Yte = data["test"]
 
-    adapter, resolved = build_model(
-        name, pred_len, C, grid.n_tau, grid.n_money,
-    )
+    # Resolve model + trainer knobs. winner_cfg, if given, fully drives
+    # them so we reproduce the tuning combo exactly (same optimizer,
+    # same grad_clip policy, same min_epochs).
+    if winner_cfg is None:
+        adapter, resolved = build_model(
+            name, pred_len, C, grid.n_tau, grid.n_money,
+        )
+        lr = LR_BY_MODEL[name]
+        wd = WD_BY_MODEL[name]
+        min_epochs = MIN_EPOCHS
+        # AdamW for the channel-independent / transformer / Tucker
+        # families; Adam for GWN. Grad-clip on the same set.
+        use_adamw = name in ("tucker_dlinear", "hot", "patchtst", "dlinear")
+        grad_clip = 1.0 if use_adamw else None
+        if name == "tucker_dlinear":
+            # G core gets its own multipliers; factor matrices stay at
+            # base lr / wd.
+            lr_g = lr * LR_TUCKER_DLINEAR_G_MULT
+            wd_g = wd * WD_TUCKER_DLINEAR_G_MULT
+        else:
+            lr_g = wd_g = None
+    else:
+        resolved = winner_cfg["model_kwargs"]
+        adapter  = build_adapter_from_kwargs(
+            name, resolved, grid.n_tau, grid.n_money,
+        )
+        lr  = float(winner_cfg["lr"])
+        wd  = float(winner_cfg["weight_decay"])
+        min_epochs = int(winner_cfg["min_epochs"])
+        batch_size = int(winner_cfg["batch_size"])
+        use_adamw  = (winner_cfg.get("optimizer") == "AdamW")
+        gc = winner_cfg.get("grad_clip")
+        grad_clip = float(gc) if gc is not None else None
+        lr_g = winner_cfg.get("lr_g")
+        wd_g = winner_cfg.get("wd_g")
+        if lr_g is not None:
+            lr_g = float(lr_g)
+        if wd_g is not None:
+            wd_g = float(wd_g)
+
     adapter.to(device)
     n_params = sum(p.numel() for p in adapter.parameters())
 
-    lr = LR_BY_MODEL[name]
-    wd = WD_BY_MODEL[name]
-    if name == "tucker_dlinear":
-        # AdamW with decoupled per-group LR and WD. The G core (≈99.99%
-        # of params) gets its own multipliers: lower LR dampens gauge-
-        # direction noise, larger WD regularises the dominant overfit-
-        # prone parameter group. Factor matrices (A_L, A_P, A_W, A_H,
-        # bias) — tiny in count but structurally meaningful — stay at
-        # base lr / wd.
+    if name == "tucker_dlinear" and lr_g is not None:
         g_params, other_params = [], []
         for pname, p in adapter.named_parameters():
             (g_params if pname.endswith(".G") else other_params).append(p)
-        lr_g = lr * LR_TUCKER_DLINEAR_G_MULT
-        wd_g = wd * WD_TUCKER_DLINEAR_G_MULT
         optimizer = torch.optim.AdamW(
             [{"params": other_params, "lr": lr,   "weight_decay": wd},
              {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
         )
-    elif name in ("hot", "patchtst", "dlinear"):
-        # AdamW for consistency across the deep models. For transformers
-        # (HOT, PatchTST) this matters: Adam couples WD through the second-
-        # moment normalisation in ways that destabilise attention. For
-        # DLinear it's a no-op while WD_DLINEAR=0 but lets us add decoupled
-        # WD later without re-tuning.
-        lr_g = None
-        wd_g = None
-        optimizer = torch.optim.AdamW(adapter.parameters(), lr=lr, weight_decay=wd)
+        opt_name = "AdamW"
     else:
-        lr_g = None
-        wd_g = None
-        optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=wd)
-
-    # Grad-norm clip:
-    # - Tucker:   clips the epoch-1 spike from its overcomplete parameterisation.
-    # - PatchTST / HOT: standard transformer stabiliser.
-    # - DLinear:  consistency with the other deep models; tames any rare
-    #             large-batch gradient bursts on the channel-independent maps.
-    grad_clip = 1.0 if name in ("tucker_dlinear", "hot", "patchtst", "dlinear") else None
+        opt_cls  = torch.optim.AdamW if use_adamw else torch.optim.Adam
+        optimizer = opt_cls(adapter.parameters(), lr=lr, weight_decay=wd)
+        opt_name = "AdamW" if use_adamw else "Adam"
 
     ts      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     out_dir = os.path.join(ROOT, MODEL_DIR[name],
@@ -498,10 +560,12 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     print(f"  params:  {n_params:,}")
     lr_str = f"lr={lr}" + (f" (lr_G={lr_g:.4g})" if lr_g is not None else "")
     wd_str = f"wd={wd}" + (f" (wd_G={wd_g:.4g})" if wd_g is not None else "")
-    opt_name = "AdamW" if name in ("tucker_dlinear", "hot", "patchtst", "dlinear") else "Adam"
     print(f"  {opt_name}  {lr_str}  {wd_str}  batch={batch_size}  "
-          f"epochs<={EPOCHS}  patience={PATIENCE} (min_epochs={MIN_EPOCHS})"
+          f"epochs<={EPOCHS}  patience={PATIENCE} (min_epochs={min_epochs})"
           f"{f'  grad_clip={grad_clip}' if grad_clip is not None else ''}")
+    if winner_cfg is not None:
+        print(f"  from_winner: {winner_cfg['_winner_source']} "
+              f"(combo={winner_cfg['_winner_combo']})")
     print(f"  out:     {os.path.relpath(out_dir, ROOT)}")
 
     log_path = os.path.join(out_dir, "train_log.csv")
@@ -539,8 +603,8 @@ def train_deep_model(name: str, data: dict, pred_len: int,
                         f"{lr:.8g}", f"{dt:.3f}"])
         log_f.flush()
 
-        # Early stop only after MIN_EPOCHS.
-        if epoch >= MIN_EPOCHS and (epoch - best_epoch) >= PATIENCE:
+        # Early stop only after min_epochs.
+        if epoch >= min_epochs and (epoch - best_epoch) >= PATIENCE:
             stop_epoch = epoch
             print(f"  early stop at epoch {epoch} "
                   f"(best val={best_val:.6f} @ epoch {best_epoch})")
@@ -579,18 +643,25 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     hyper = {
         "model":          name,
         "model_kwargs":   resolved,
-        "optimizer":      "Adam",
+        "optimizer":      opt_name,
         "lr":             lr,
         "weight_decay":   wd,
+        "lr_g":           lr_g,
+        "wd_g":           wd_g,
+        "grad_clip":      grad_clip,
         "epochs":         EPOCHS,
         "patience":       PATIENCE,
-        "min_epochs":     MIN_EPOCHS,
+        "min_epochs":     min_epochs,
         "batch_size":     batch_size,
         "lookback":       LOOKBACK,
         "pred_len":       pred_len,
         "seed":           seed,
         "device":         str(device),
         "n_params":       n_params,
+        "winner_source":  (winner_cfg["_winner_source"]
+                           if winner_cfg is not None else None),
+        "winner_combo":   (winner_cfg["_winner_combo"]
+                           if winner_cfg is not None else None),
         "data_end":       data.get("data_end"),
         "first_date":     data.get("first_date"),
         "last_date":      data.get("last_date"),
@@ -726,7 +797,13 @@ def main():
     ap.add_argument("--seed",       type=int,   default=42)
     ap.add_argument("--batch_size", type=int,   default=BATCH_SIZE,
                     help=f"Mini-batch size. Default: {BATCH_SIZE} "
-                         "(the BATCH_SIZE constant in train.py).")
+                         "(the BATCH_SIZE constant in train.py). "
+                         "Ignored when --from_winner is set.")
+    ap.add_argument("--from_winner", action="store_true",
+                    help="Override train.py defaults with the tuning "
+                         "winner's config.json for (--model, --pred_len). "
+                         "Reads <ModelDir>/tuning_results/63_<pred_len>/"
+                         "summary.json. Not valid with --model var/all.")
     args = ap.parse_args()
 
     if args.train_frac + args.val_frac >= 1.0:
@@ -746,6 +823,10 @@ def main():
           f"val={data['val'][0].shape[0]}  test={data['test'][0].shape[0]}")
     print(f"  test starts predicting at: {data['test_first_target_date']}\n")
 
+    if args.from_winner and args.model in ("var", "all"):
+        raise SystemExit("--from_winner requires a single deep model "
+                         "(not 'var' or 'all').")
+
     if args.model == "var":
         train_var(data, args.pred_len, args.seed)
         return
@@ -754,8 +835,11 @@ def main():
             train_deep_model(name, data, args.pred_len, device, args.seed,
                              batch_size=args.batch_size)
         return
+
+    winner_cfg = (load_winner_config(args.model, args.pred_len)
+                  if args.from_winner else None)
     train_deep_model(args.model, data, args.pred_len, device, args.seed,
-                     batch_size=args.batch_size)
+                     batch_size=args.batch_size, winner_cfg=winner_cfg)
 
 
 if __name__ == "__main__":

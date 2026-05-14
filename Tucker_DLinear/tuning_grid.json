@@ -5,7 +5,7 @@
 
   "epochs":       100,
   "patience":     15,
-  "min_epochs":   20,
+  "min_epochs":   30,
   "batch_size":   32,
   "loss":         "mse",
   "norm":         false,
@@ -13,17 +13,16 @@
   "kernel_size":  31,
   "lr_g_mult":    0.25,
 
-  "lr":           [4e-3, 1e-2, 4e-2],
+  "lr":           [1e-3, 1e-2],
   "weight_decay": [1e-2, 1e-1, 1e-3],
-  "wd_g_mult":    [10, 50, 100, 300],
+  "wd_g_mult":    [10, 50, 100],
 
   "_spatial_temporal_pairs": [
     {"rank_W": 15, "rank_H": 10, "rank_L": 1,  "rank_P_max": 1},
     {"rank_W": 15, "rank_H": 10, "rank_L": 1,  "rank_P_max": 2},
-    {"rank_W": 15, "rank_H": 10, "rank_L": 1,  "rank_P_max": 4},
-    {"rank_W": 15, "rank_H": 10, "rank_L": 2,  "rank_P_max": 4},
-    {"rank_W": 15, "rank_H": 10, "rank_L": 4,  "rank_P_max": 8},
+    {"rank_W": 10, "rank_H": 7,  "rank_L": 1,  "rank_P_max": 1},
     {"rank_W": 10, "rank_H": 7,  "rank_L": 1,  "rank_P_max": 2},
+    {"rank_W": 7,  "rank_H": 5,  "rank_L": 1,  "rank_P_max": 1},
     {"rank_W": 7,  "rank_H": 5,  "rank_L": 1,  "rank_P_max": 2}
   ]
 }

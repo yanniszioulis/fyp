@@ -2,17 +2,17 @@
   "model": "dlinear",
   "variant": null,
   "tuning_dir": "DLinear/tuning_results/63_21",
-  "winner_combo": "combo_0044",
-  "val_loss": 0.16470180318559377,
-  "best_epoch": 7,
+  "winner_combo": "combo_0073",
+  "val_loss": 0.16318146207519837,
+  "best_epoch": 4,
   "model_kwargs": {
     "seq_len": 63,
     "pred_len": 21,
     "n_channels": 150,
     "revin": false,
-    "kernel_size": 31
+    "kernel_size": 41
   },
   "n_params": 403200,
   "tuning_seed": 42,
-  "checkpoint": "DLinear/tuning_results/63_21/combo_0044/best_model.pt"
+  "checkpoint": "DLinear/tuning_results/63_21/combo_0073/best_model.pt"
 }

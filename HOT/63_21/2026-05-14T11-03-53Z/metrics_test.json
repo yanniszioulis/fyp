@@ -1,0 +1,13 @@
+{
+  "model": "hot",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.17930487395221623,
+  "best_epoch": 14,
+  "stop_epoch": 29,
+  "test_mse": 0.2695007622241974,
+  "test_rmse": 0.5191346282268188,
+  "test_mae": 0.33348825573921204,
+  "space": "standardized_log_iv"
+}

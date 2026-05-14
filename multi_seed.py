@@ -4,14 +4,18 @@ multi_seed.py — run train.py for a list of (model, seed) pairs and report
 seed-to-seed noise in best_val_mse / test_mse. Used to decide whether the
 val-loss gap between two models is real or within run-to-run variability.
 
-Each model uses whatever defaults are currently set in train.py
-(LR_*, WD_*, build_model kwargs, grad_clip, per-group LR for tucker, etc.) —
-this script does not override any of those. It just sweeps --seed.
+By default each model uses whatever defaults are currently set in
+train.py (LR_*, WD_*, build_model kwargs, grad_clip, per-group LR for
+tucker, etc.). Pass --from_winner to instead drive every run from the
+tuning winner's config.json for (model, pred_len) — i.e. reproduce the
+hyperparameter_tuning.py result across seeds, using its model_kwargs,
+optimizer choice, lr/wd/lr_g/wd_g/grad_clip/min_epochs/batch_size.
 
 Usage:
     python multi_seed.py --pred_len 21
     python multi_seed.py --pred_len 21 --seeds 0 1 2 3 4
     python multi_seed.py --pred_len 21 --models dlinear tucker_dlinear
+    python multi_seed.py --pred_len 21 --from_winner
 """
 
 from __future__ import annotations
@@ -46,15 +50,19 @@ def latest_run_dir(model: str, pred_len: int) -> str:
 
 
 def run_one(model: str, pred_len: int, seed: int,
-            batch_size: int | None = None) -> dict:
+            batch_size: int | None = None,
+            from_winner: bool = False) -> dict:
     bar = "=" * 72
     bs_str = f"  batch_size={batch_size}" if batch_size is not None else ""
-    print(f"\n{bar}\n  RUNNING  model={model}  seed={seed}{bs_str}\n{bar}",
-          flush=True)
+    fw_str = "  from_winner" if from_winner else ""
+    print(f"\n{bar}\n  RUNNING  model={model}  seed={seed}"
+          f"{bs_str}{fw_str}\n{bar}", flush=True)
     cmd = [sys.executable, "train.py", "--model", model,
            "--pred_len", str(pred_len), "--seed", str(seed)]
     if batch_size is not None:
         cmd += ["--batch_size", str(batch_size)]
+    if from_winner:
+        cmd += ["--from_winner"]
     subprocess.run(cmd, check=True)
     run_dir = latest_run_dir(model, pred_len)
     with open(os.path.join(run_dir, "metrics_test.json")) as f:
@@ -132,11 +140,19 @@ def main():
     ap.add_argument("--pred_len", type=int, default=21)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4])
     ap.add_argument("--models", nargs="+",
-                    default=["dlinear", "tucker_dlinear"])
+                    default=["dlinear", "patchtst", "tucker_dlinear"])
     ap.add_argument("--out", default=None,
                     help="Optional JSON path to dump all per-run results.")
     ap.add_argument("--batch_size", type=int, default=None,
-                    help="Override train.py's BATCH_SIZE for every run.")
+                    help="Override train.py's BATCH_SIZE for every run. "
+                         "Ignored under --from_winner (winner's batch "
+                         "size wins).")
+    ap.add_argument("--from_winner", action="store_true",
+                    help="For each model, load the tuning winner's "
+                         "config.json from <ModelDir>/tuning_results/"
+                         "63_<pred_len>/summary.json and use its "
+                         "model_kwargs + optimizer settings instead of "
+                         "train.py's defaults.")
     args = ap.parse_args()
 
     bad = [m for m in args.models if m not in MODEL_DIR]
@@ -147,7 +163,8 @@ def main():
     for model in args.models:
         for seed in args.seeds:
             results.append(run_one(model, args.pred_len, seed,
-                                   batch_size=args.batch_size))
+                                   batch_size=args.batch_size,
+                                   from_winner=args.from_winner))
 
     print_summary(results, args.seeds)
 

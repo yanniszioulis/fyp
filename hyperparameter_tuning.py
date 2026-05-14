@@ -39,9 +39,9 @@ every combo's score, the ranking, and the winner.
 
 Notes
 -----
-* Supported models: dlinear, patchtst, hot, tucker_dlinear. GWN is
-  currently excluded (its `_variants` block requires a grid adjacency we
-  haven't wired up yet).
+* Supported models: dlinear, patchtst, hot, tucker_dlinear, gwn.
+  GWN's grid uses `nhid` as a unified channel knob — the build branch
+  expands it into residual/dilation/skip/end channels.
 * String knobs in grids are coerced: "on" → True, "off" → False.
 * Resume by default: combos whose params already match a saved
   `config.json` are reused (their existing combo_id is kept, no retrain).
@@ -71,6 +71,7 @@ from train import (
     BATCH_SIZE,
     DLinear,
     EPOCHS,
+    GWN,
     HOT,
     LOOKBACK,
     MIN_EPOCHS,
@@ -80,6 +81,7 @@ from train import (
     ROOT,
     TuckerDLinear,
     _DLinearAdapter,
+    _GWNAdapter,
     _HOTAdapter,
     _PatchTSTAdapter,
     _TuckerAdapter,
@@ -89,7 +91,7 @@ from train import (
 )
 
 
-TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear")
+TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn")
 
 # Grid-key buckets.
 TRAINER_KEYS    = {"epochs", "patience", "min_epochs", "batch_size"}
@@ -227,6 +229,22 @@ def build_model_for_tuning(name: str, model_kw: dict, pred_len: int,
     if name == "tucker_dlinear":
         kw = dict(seq_len=L, pred_len=P, W=n_money, H=n_tau, **model_kw)
         return _TuckerAdapter(TuckerDLinear(**kw), n_tau, n_money), kw
+    if name == "gwn":
+        # `nhid` collapses the four GWN channel widths: residual = dilation
+        # = skip = nhid, end = 2 * nhid. Other GWN init args are fixed to
+        # mirror train.py's small starting point (in_dim=1, supports=None,
+        # gcn_bool=True, addaptadj=True).
+        mk   = dict(model_kw)
+        nhid = int(mk.pop("nhid"))
+        kw = dict(
+            num_nodes=C, seq_len=L, pred_len=P,
+            in_dim=1, supports=None,
+            gcn_bool=True, addaptadj=True, aptinit=None,
+            residual_channels=nhid, dilation_channels=nhid,
+            skip_channels=nhid,     end_channels=2 * nhid,
+            **mk,
+        )
+        return _GWNAdapter(GWN(**kw)), kw
     raise ValueError(f"Unsupported model: {name!r}")
 
 

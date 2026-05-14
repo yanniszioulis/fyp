@@ -1,20 +1,17 @@
 {
-  "_note": "Local small-capacity grid. Earlier finding: nh8 b2 l1 (~30k params) tied Persist on precovid c63 h21 test MSE while the tuned nh16 b3 l2 (~6M) lost to it; DLinear (also tiny) leads. This grid stays in the small zone and sweeps nhid x layers x dropout to look for a config that beats Persist. batch_size=32 sized for local MPS/CPU.",
-
-  "_variants": [
-    {"name": "grid_plus_adaptive", "fix": {"graph_mode": "grid_plus_adaptive"}}
-  ],
+  "_note": "Small GWN sweep, anchored on the 40K-param starting point in train.py (nhid=16, blocks=2, layers=1, dropout=0.3, lr=1e-3, wd=1e-3) which got val=0.164 / test_mse=0.246 on h21 — between VAR (0.254) and DLinear (0.228). nhid = residual_channels = dilation_channels = skip_channels; end_channels = 2 * nhid. adj_rank is hardcoded to 3 in gwn.py.",
 
   "epochs":       100,
   "patience":     15,
-  "batch_size":   64,
+  "min_epochs":   20,
+  "batch_size":   32,
   "loss":         "mse",
   "kernel_size":  2,
-  "blocks":       [2, 4],
-  "lr":           [1e-3, 1e-2],
-  "weight_decay": [1e-3, 1e-2],
 
-  "nhid":         [4, 8, 16],
+  "nhid":         [8, 16, 32],
+  "blocks":       [2, 4],
   "layers":       [1, 2],
-  "dropout":      [0.3, 0.5]
+  "dropout":      [0.1, 0.3],
+  "lr":           [3e-4, 1e-3, 3e-3],
+  "weight_decay": [1e-4, 1e-3]
 }

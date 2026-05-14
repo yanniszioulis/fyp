@@ -18,12 +18,12 @@ data_end=2023-12-29 — override only if you also overrode them in tuning.
 
 Outputs
 -------
-<ModelDir>/test_results/63_<pred_len>/[<variant>/]
+<ModelDir>/_test_results/63_<pred_len>/[<variant>/]
     metrics_test.json    # mse, rmse, mae in standardized log-IV space
     preds.npy            # (N_test, pred_len, n_channels)
     source.json          # which tuning combo this was loaded from
 
-test_results/63_<pred_len>/
+_test_results/63_<pred_len>/
     comparison.json
     comparison.csv
 
@@ -283,7 +283,7 @@ def main():
             print(f"\n[var]  refitting VAR(1) on {r['train_end']} train rows ...")
             preds, source = evaluate_var(data, args.pred_len)
             metrics = compute_metrics(preds, Yte)
-            out_dir = os.path.join(ROOT, MODEL_DIR["var"], "test_results",
+            out_dir = os.path.join(ROOT, MODEL_DIR["var"], "_test_results",
                                    f"{LOOKBACK}_{args.pred_len}")
             save_per_model(out_dir, preds, metrics, source)
             print(f"  test: mse={metrics['test_mse']:.6f}  "
@@ -307,7 +307,7 @@ def main():
             preds, source = evaluate_tuned(name, v_name, v_dir, data, device)
             metrics = compute_metrics(preds, Yte)
             out_subdir = os.path.join(
-                ROOT, MODEL_DIR[name], "test_results",
+                ROOT, MODEL_DIR[name], "_test_results",
                 f"{LOOKBACK}_{args.pred_len}",
                 *([v_name] if v_name else []),
             )
@@ -330,7 +330,7 @@ def main():
 
     # Comparison artefacts.
     rows_sorted = sorted(rows, key=lambda r: r["test_mse"])
-    comp_dir = os.path.join(ROOT, "test_results", f"{LOOKBACK}_{args.pred_len}")
+    comp_dir = os.path.join(ROOT, "_test_results", f"{LOOKBACK}_{args.pred_len}")
     os.makedirs(comp_dir, exist_ok=True)
 
     comparison = {

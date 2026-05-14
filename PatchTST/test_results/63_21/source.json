@@ -2,9 +2,9 @@
   "model": "patchtst",
   "variant": null,
   "tuning_dir": "PatchTST/tuning_results/63_21",
-  "winner_combo": "combo_0360",
-  "val_loss": 0.14784219021914494,
-  "best_epoch": 12,
+  "winner_combo": "combo_0053",
+  "val_loss": 0.15851523113949872,
+  "best_epoch": 55,
   "model_kwargs": {
     "c_in": 150,
     "seq_len": 63,
@@ -15,13 +15,13 @@
     "padding_patch": "end",
     "attn_dropout": 0.0,
     "n_heads": 2,
-    "n_layers": 2,
-    "d_model": 64,
-    "d_ff": 256,
-    "dropout": 0.1,
-    "head_dropout": 0.01
+    "n_layers": 1,
+    "d_model": 16,
+    "d_ff": 32,
+    "dropout": 0.05,
+    "head_dropout": 0.1
   },
-  "n_params": 114583,
+  "n_params": 5894,
   "tuning_seed": 42,
-  "checkpoint": "PatchTST/tuning_results/63_21/combo_0360/best_model.pt"
+  "checkpoint": "PatchTST/tuning_results/63_21/combo_0053/best_model.pt"
 }

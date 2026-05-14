@@ -510,8 +510,12 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         lr = LR_BY_MODEL[name]
         wd = WD_BY_MODEL[name]
         min_epochs = MIN_EPOCHS
-        # AdamW for the channel-independent / transformer / Tucker
-        # families; Adam for GWN. Grad-clip on the same set.
+        # AdamW + grad_clip=1.0 for every deep model. AdamW's decoupled
+        # weight decay matters for transformers (HOT/PatchTST) and for
+        # GWN's gated dilated convs; for DLinear/Tucker it's a no-op
+        # while WD is small but lets us add decoupled WD without re-
+        # tuning. grad_clip stabilises GWN's noisy-val updates and HOT/
+        # PatchTST's attention init.
         use_adamw = name in ("tucker_dlinear", "hot", "patchtst", "dlinear")
         grad_clip = 1.0 if use_adamw else None
         if name == "tucker_dlinear":

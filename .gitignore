@@ -19,7 +19,7 @@ venv/
 # Data (large, local-only)
 SPX_calls_surfaces.csv
 SPX_puts_surfaces.csv
-data_prep/*.csv
+_data_prep/*.csv
 
 # Generated outputs.
 # Tracked across machines: best_model.pt, config.json, start_dates.npy,
@@ -29,6 +29,8 @@ preds.npy
 true.npy
 checkpoint.pt
 *.ckpt
+
+_trading/
 
 # Legacy DynGWN data / artifacts
 DynGWN/data/**
@@ -63,4 +65,4 @@ report/*.synctex.gz
 !report/main.tex
 !report/main.pdf
 
-data_prep/data/*
+_data_prep/data/*

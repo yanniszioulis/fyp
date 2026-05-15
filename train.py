@@ -79,7 +79,7 @@ LR_GWN            = 1e-3
 
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
-WD_HOT            = 0.1
+WD_HOT            = 0.3
 WD_TUCKER_DLINEAR = 1e-1
 WD_GWN            = 1e-3
 
@@ -371,10 +371,10 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # full sweep.
         kw = dict(
             context_length=L, prediction_length=P,
-            d_hidden=8, n_blocks=1, n_head=1, patch_size=7,
+            d_hidden=8, n_blocks=2, n_head=2, patch_size=7,
             attention_type="kronecker_product",
-            dropout=0.1, attn_dropout=0.0, head_dropout=0.1,
-            pe="rope", norm=False, head_type="mean",
+            dropout=0.1, attn_dropout=0.0, head_dropout=0.01,
+            pe="nope", norm=False, head_type="flatten",
         )
         m = HOT(**kw)
         return _HOTAdapter(m, n_tau, n_money), kw
@@ -482,13 +482,17 @@ def _predict(model, X, batch, device) -> np.ndarray:
 def train_deep_model(name: str, data: dict, pred_len: int,
                      device: torch.device, seed: int,
                      batch_size: int = BATCH_SIZE,
-                     winner_cfg: dict | None = None):
+                     winner_cfg: dict | None = None,
+                     out_dir: str | None = None):
     """Train one deep model with the shared trainer; save artefacts.
 
     If `winner_cfg` is provided (the saved config.json from a tuning
     winner), its `model_kwargs`, optimizer choice, `lr`, `weight_decay`,
     `lr_g`, `wd_g`, `grad_clip`, `min_epochs`, and `batch_size` override
     the train.py defaults. Used by multi_seed.py --from_winner.
+
+    `out_dir` overrides the default timestamped output path. eval_seeds.py
+    uses this to route outputs directly to the canonical seed slot.
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -561,9 +565,10 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         optimizer = opt_cls(adapter.parameters(), lr=lr, weight_decay=wd)
         opt_name = "AdamW" if use_adamw else "Adam"
 
-    ts      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    out_dir = os.path.join(ROOT, MODEL_DIR[name],
-                           f"{LOOKBACK}_{pred_len}", ts)
+    if out_dir is None:
+        ts      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        out_dir = os.path.join(ROOT, MODEL_DIR[name],
+                               f"{LOOKBACK}_{pred_len}", ts)
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"[{name}  pred_len={pred_len}  device={device}]")

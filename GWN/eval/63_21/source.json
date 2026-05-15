@@ -1,0 +1,29 @@
+{
+  "model": "gwn",
+  "variant": null,
+  "tuning_dir": "GWN/tuning_results/63_21",
+  "winner_combo": "combo_0034",
+  "val_loss": 0.15489852690613767,
+  "best_epoch": 10,
+  "model_kwargs": {
+    "num_nodes": 150,
+    "seq_len": 63,
+    "pred_len": 21,
+    "in_dim": 1,
+    "supports": null,
+    "gcn_bool": true,
+    "addaptadj": true,
+    "aptinit": null,
+    "residual_channels": 8,
+    "dilation_channels": 8,
+    "skip_channels": 8,
+    "end_channels": 16,
+    "kernel_size": 2,
+    "blocks": 4,
+    "layers": 1,
+    "dropout": 0.3
+  },
+  "n_params": 11369,
+  "tuning_seed": 42,
+  "checkpoint": "GWN/tuning_results/63_21/combo_0034/best_model.pt"
+}

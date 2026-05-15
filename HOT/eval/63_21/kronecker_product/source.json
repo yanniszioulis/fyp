@@ -1,0 +1,26 @@
+{
+  "model": "hot",
+  "variant": "kronecker_product",
+  "tuning_dir": "HOT/tuning_results/63_21/kronecker_product",
+  "winner_combo": "combo_0205",
+  "val_loss": 0.1708013675810684,
+  "best_epoch": 2,
+  "model_kwargs": {
+    "context_length": 63,
+    "prediction_length": 21,
+    "norm": false,
+    "pe": "rope",
+    "patch_size": 7,
+    "attn_dropout": 0.0,
+    "head_type": "mean",
+    "n_blocks": 2,
+    "n_head": 2,
+    "d_hidden": 64,
+    "dropout": 0.05,
+    "head_dropout": 0.1,
+    "attention_type": "kronecker_product"
+  },
+  "n_params": 167765,
+  "tuning_seed": 42,
+  "checkpoint": "HOT/tuning_results/63_21/kronecker_product/combo_0205/best_model.pt"
+}

@@ -7,7 +7,7 @@ For pred_len ∈ {5, 21, 63}, draw one subplot per horizon offset in
     x : target calendar date (the date being predicted at that horizon)
     y : mean squared error across the 150 IV cells of that
         single (window, horizon) forecast, in standardized log-IV space
-    line: one per model loaded from `<ModelDir>/test_results/63_<pred_len>/
+    line: one per model loaded from `<ModelDir>/eval/63_<pred_len>/
           [<variant>/]preds.npy` (output of evaluate.py)
 
 If `pred_len` is smaller than a requested horizon, that subplot is left
@@ -33,7 +33,7 @@ from train import LOOKBACK, MODEL_DIR, ROOT, load_dataset
 
 
 HORIZONS    = (1, 5, 10, 21)
-DEEP_NAMES  = ("dlinear", "patchtst", "hot", "tucker_dlinear")
+DEEP_NAMES  = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn")
 ALL_NAMES   = (*DEEP_NAMES, "var")
 
 
@@ -41,7 +41,7 @@ ALL_NAMES   = (*DEEP_NAMES, "var")
 
 def find_preds_files(name: str, pred_len: int):
     """Return [(display_name, preds_path), ...]. One entry per variant."""
-    base = os.path.join(ROOT, MODEL_DIR[name], "test_results",
+    base = os.path.join(ROOT, MODEL_DIR[name], "eval",
                         f"{LOOKBACK}_{pred_len}")
     if not os.path.isdir(base):
         return []
@@ -115,7 +115,7 @@ def main():
                          "Raw line is shown faintly underneath when MA > 1.")
     ap.add_argument("--out",        type=str,   default=None,
                     help="Output figure path. Defaults to "
-                         "test_results/63_<pred_len>/errors_by_horizon.png")
+                         "_test_results/63_<pred_len>/errors_by_horizon.png")
     args = ap.parse_args()
 
     # Load targets via the same pipeline used by evaluate.py.
@@ -213,7 +213,7 @@ def main():
     fig.tight_layout(rect=[0, 0.03, 1, 0.97])
 
     out = args.out or os.path.join(
-        ROOT, "test_results", f"{LOOKBACK}_{args.pred_len}",
+        ROOT, "_test_results", f"{LOOKBACK}_{args.pred_len}",
         "errors_by_horizon.png")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     fig.savefig(out, dpi=150, bbox_inches="tight")

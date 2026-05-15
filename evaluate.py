@@ -18,7 +18,7 @@ data_end=2023-12-29 — override only if you also overrode them in tuning.
 
 Outputs
 -------
-<ModelDir>/_test_results/63_<pred_len>/[<variant>/]
+<ModelDir>/eval/63_<pred_len>/[<variant>/]
     metrics_test.json    # mse, rmse, mae in standardized log-IV space
     preds.npy            # (N_test, pred_len, n_channels)
     source.json          # which tuning combo this was loaded from
@@ -48,6 +48,7 @@ import torch
 
 from train import (
     DLinear,
+    GWN,
     HOT,
     LOOKBACK,
     MODEL_DIR,
@@ -55,6 +56,7 @@ from train import (
     ROOT,
     TuckerDLinear,
     _DLinearAdapter,
+    _GWNAdapter,
     _HOTAdapter,
     _PatchTSTAdapter,
     _TuckerAdapter,
@@ -66,7 +68,7 @@ from train import (
 )
 
 
-DEEP_NAMES = ("dlinear", "patchtst", "hot", "tucker_dlinear")
+DEEP_NAMES = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn")
 ALL_NAMES  = (*DEEP_NAMES, "var")
 
 MODEL_CLASS_BY_NAME = {
@@ -74,12 +76,14 @@ MODEL_CLASS_BY_NAME = {
     "patchtst":       PatchTST,
     "hot":            HOT,
     "tucker_dlinear": TuckerDLinear,
+    "gwn":            GWN,
 }
 ADAPTER_BY_NAME = {
     "dlinear":        _DLinearAdapter,
     "patchtst":       _PatchTSTAdapter,
     "hot":            _HOTAdapter,
     "tucker_dlinear": _TuckerAdapter,
+    "gwn":            _GWNAdapter,
 }
 EVAL_BATCH = 64
 
@@ -283,7 +287,7 @@ def main():
             print(f"\n[var]  refitting VAR(1) on {r['train_end']} train rows ...")
             preds, source = evaluate_var(data, args.pred_len)
             metrics = compute_metrics(preds, Yte)
-            out_dir = os.path.join(ROOT, MODEL_DIR["var"], "_test_results",
+            out_dir = os.path.join(ROOT, MODEL_DIR["var"], "eval",
                                    f"{LOOKBACK}_{args.pred_len}")
             save_per_model(out_dir, preds, metrics, source)
             print(f"  test: mse={metrics['test_mse']:.6f}  "
@@ -307,7 +311,7 @@ def main():
             preds, source = evaluate_tuned(name, v_name, v_dir, data, device)
             metrics = compute_metrics(preds, Yte)
             out_subdir = os.path.join(
-                ROOT, MODEL_DIR[name], "_test_results",
+                ROOT, MODEL_DIR[name], "eval",
                 f"{LOOKBACK}_{args.pred_len}",
                 *([v_name] if v_name else []),
             )

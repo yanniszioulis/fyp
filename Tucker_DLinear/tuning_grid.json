@@ -16,9 +16,9 @@
   "g_init_noise":     1e-3,
 
   "lr":               1e-3,
-  "weight_decay":     1e-3,
+  "weight_decay":     [1e-3, 1e-2],
   "lr_g_mult":        0.25,
-  "wd_g_mult":        10,
+  "wd_g_mult":        [10, 30],
 
   "_trend_pairs": [
     {"rank_L_trend": 1, "rank_P_trend_max": 1, "rank_W_trend": 10, "rank_H_trend": 7},

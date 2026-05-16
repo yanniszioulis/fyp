@@ -65,6 +65,7 @@ import shutil
 import time
 
 import numpy as np
+import pandas as pd
 import torch
 
 from train import (
@@ -86,6 +87,7 @@ from train import (
     _PatchTSTAdapter,
     _TuckerAdapter,
     _epoch,
+    _predict,
     load_dataset,
     pick_device,
 )
@@ -97,7 +99,6 @@ TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn")
 TRAINER_KEYS    = {"epochs", "patience", "min_epochs", "batch_size"}
 OPTIMIZER_KEYS  = {"lr", "weight_decay", "lr_g_mult", "wd_g_mult"}
 META_KEYS       = {"loss"}            # currently always MSE; ignored
-TUCKER_PAIR_KEY = "_spatial_temporal_pair"
 
 
 # ─── Grid expansion ───────────────────────────────────────────────────────
@@ -178,9 +179,28 @@ def split_combo(combo: dict) -> tuple[dict, dict, dict]:
 
 def expand_grid(grid: dict, model_name: str,
                 pred_len: int) -> list[tuple[str | None, dict]]:
-    """Return [(variant_name | None, flat_combo_dict), ...]."""
+    """Return [(variant_name | None, flat_combo_dict), ...].
+
+    Grid structure:
+      - Top-level keys (no leading underscore) are normal axes — list
+        values cross-product, scalar values stay fixed.
+      - Underscore-prefixed keys ending in '_pairs' (with a list value)
+        are "pair axes" — bundles of correlated kwargs that must vary
+        together. Each entry in such a list is a dict of kwargs merged
+        into the combo verbatim. Multiple pair axes are supported and
+        cross-product with each other and with the top-level axes.
+      - Any key (top-level or pair-sourced) ending in '_max' is clamped
+        to pred_len and the suffix is stripped — used for rank_P_*
+        entries that must not exceed the forecast horizon.
+      - '_variants' (optional): list of named variants, each with a
+        'fix' dict that overrides base axes.
+    """
     variants = grid.get("_variants") or [{"name": None, "fix": {}}]
     base     = {k: v for k, v in grid.items() if not k.startswith("_")}
+
+    pair_axis_keys = [k for k, v in grid.items()
+                      if k.startswith("_") and k.endswith("_pairs")
+                      and isinstance(v, list)]
 
     out: list[tuple[str | None, dict]] = []
     for v in variants:
@@ -193,21 +213,20 @@ def expand_grid(grid: dict, model_name: str,
             axes_keys.append(k)
             axes_vals.append(vv if isinstance(vv, list) else [vv])
 
-        # TuckerDLinear's bundled spatial+temporal rank axis.
-        if model_name == "tucker_dlinear":
-            pairs = grid.get("_spatial_temporal_pairs")
-            if pairs:
-                axes_keys.append(TUCKER_PAIR_KEY)
-                axes_vals.append(pairs)
+        # Append each pair axis as a single cartesian-product dimension.
+        for pair_key in pair_axis_keys:
+            axes_keys.append(pair_key)
+            axes_vals.append(grid[pair_key])
 
         for tup in itertools.product(*axes_vals):
             combo = dict(zip(axes_keys, tup))
-            if model_name == "tucker_dlinear" and TUCKER_PAIR_KEY in combo:
-                pair = combo.pop(TUCKER_PAIR_KEY)
-                combo["rank_W"] = pair["rank_W"]
-                combo["rank_H"] = pair["rank_H"]
-                combo["rank_L"] = pair["rank_L"]
-                combo["rank_P"] = min(pred_len, pair["rank_P_max"])
+            # Merge each chosen pair's kwargs into the combo.
+            for pair_key in pair_axis_keys:
+                combo.update(combo.pop(pair_key))
+            # Apply '_max' clamp-to-pred_len rule.
+            for k in list(combo.keys()):
+                if k.endswith("_max"):
+                    combo[k[:-4]] = min(pred_len, int(combo.pop(k)))
             out.append((v_name, combo))
     return out
 
@@ -378,6 +397,61 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
     return config, best_state
 
 
+# ─── Test-set evaluation for a newly-promoted winner ─────────────────────
+
+def evaluate_winner_on_test(name: str, model_kwargs: dict,
+                            best_state: dict, data: dict, pred_len: int,
+                            device: torch.device) -> dict:
+    """Re-build the model from the saved kwargs, load the best-val state,
+    predict on the test set, and break the test MSE down by calendar year
+    of each window's last-target date. Returns
+        {"overall": float, "per_year": {year: float, ...}, "n_test": int}
+    in the same standardised-log-IV space the loss is computed in.
+    """
+    grid = data["grid"]
+    C    = data["rows"]["n_channels"]
+    # build_model_for_tuning re-adds shape kwargs (seq_len, pred_len, W,
+    # H, c_in, n_channels, etc.) from its arguments — the saved
+    # model_kwargs already contains them after run_one_combo, so strip
+    # them here to avoid duplicate-keyword errors.
+    _SHAPE_KEYS = {
+        "seq_len", "pred_len", "W", "H",
+        "c_in", "n_channels", "num_nodes",
+        "context_length", "prediction_length",
+    }
+    clean_mk = {k: v for k, v in model_kwargs.items()
+                if k not in _SHAPE_KEYS}
+    adapter, _ = build_model_for_tuning(
+        name, clean_mk, pred_len, C, grid.n_tau, grid.n_money,
+    )
+    adapter.load_state_dict(best_state)
+    adapter.to(device)
+    adapter.eval()
+
+    Xte, Yte = data["test"]
+    preds = _predict(adapter, Xte, BATCH_SIZE, device)
+    overall = float(((preds - Yte) ** 2).mean())
+
+    dates = data.get("test_target_last_dates")
+    per_year: dict[int, float] = {}
+    n_per_year: dict[int, int]   = {}
+    if dates is not None and len(dates) == len(Yte):
+        years = pd.DatetimeIndex(dates).year.to_numpy()
+        for yr in sorted(set(int(y) for y in years)):
+            mask = years == yr
+            if mask.sum() == 0:
+                continue
+            per_year[yr]   = float(((preds[mask] - Yte[mask]) ** 2).mean())
+            n_per_year[yr] = int(mask.sum())
+
+    return {
+        "overall":    overall,
+        "per_year":   per_year,
+        "n_per_year": n_per_year,
+        "n_test":     int(len(Yte)),
+    }
+
+
 # ─── Per-model sweep ──────────────────────────────────────────────────────
 
 def run_sweep_for_model(name: str, pred_len: int, data: dict,
@@ -518,6 +592,35 @@ def run_sweep_for_model(name: str, pred_len: int, data: dict,
                 print(f"     ** new running winner ({combo_id}, "
                       f"val={winner_val:.6f}) **")
 
+                # Test-set evaluation: overall + per-year. Print only
+                # (does not feed back into selection — winners are still
+                # chosen on val loss). Failures here must not crash the
+                # sweep; they're logged loudly and we continue.
+                if best_state is not None:
+                    try:
+                        tm = evaluate_winner_on_test(
+                            name, config["model_kwargs"], best_state,
+                            data, pred_len, device,
+                        )
+                        per_y_str = "  ".join(
+                            f"{y}: {mse:.6f} (n={tm['n_per_year'].get(y, 0)})"
+                            for y, mse in sorted(tm["per_year"].items())
+                        ) or "(no date info)"
+                        print(f"     test MSE overall: {tm['overall']:.6f}  "
+                              f"(n={tm['n_test']})")
+                        print(f"     test MSE per year:  {per_y_str}")
+                        # Persist alongside the winner's config.json.
+                        config["test_metrics"] = tm
+                        with open(os.path.join(combo_dir,
+                                               "config.json"), "w") as f:
+                            json.dump(config, f, indent=2, default=str)
+                        # Also record on the leaderboard row.
+                        leaderboard[-1]["test_mse"] = tm["overall"]
+                        leaderboard[-1]["test_mse_per_year"] = tm["per_year"]
+                    except Exception as e:
+                        print(f"     test eval FAILED: "
+                              f"{type(e).__name__}: {e}")
+
         # Variant summary.
         scored = [r for r in leaderboard if r["best_val_loss"] is not None]
         ranked = sorted(scored, key=lambda r: r["best_val_loss"])
@@ -611,6 +714,18 @@ def main():
           f"val={data['val'][0].shape[0]}  test={data['test'][0].shape[0]}  "
           f"(test held out; never used in tuning)")
     print(f"  test starts predicting at: {data['test_first_target_date']}")
+
+    # Compute per-window last-target date for the test set so each
+    # newly-promoted winner can be evaluated overall + per-year.
+    df = pd.read_csv(args.csv_path)
+    if data_end is not None:
+        df = df[df["date"] <= data_end].reset_index(drop=True)
+    all_dates = pd.to_datetime(df["date"].to_numpy())
+    L, P = LOOKBACK, args.pred_len
+    starts = np.arange(r["N"] - L - P + 1)
+    target_end = starts + L + P
+    test_starts = starts[target_end > r["val_end"]]
+    data["test_target_last_dates"] = all_dates[test_starts + L + P - 1]
 
     for name in names:
         run_sweep_for_model(name, args.pred_len, data, device,

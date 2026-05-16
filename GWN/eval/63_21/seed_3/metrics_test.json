@@ -1,0 +1,13 @@
+{
+  "model": "gwn",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.1633977995367043,
+  "best_epoch": 18,
+  "stop_epoch": 33,
+  "test_mse": 0.24490095674991608,
+  "test_rmse": 0.4948746879260608,
+  "test_mae": 0.3053548038005829,
+  "space": "standardized_log_iv"
+}

@@ -1,7 +1,0 @@
-{
-  "test_mse": 0.2324783056974411,
-  "test_rmse": 0.4821600415810513,
-  "test_mae": 0.3054291903972626,
-  "n_test": 1007,
-  "space": "standardized_log_iv"
-}

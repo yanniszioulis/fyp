@@ -1,53 +1,92 @@
 """
-TuckerDLinear — DLinear over W x H surfaces with Tucker-decomposed weights.
+TuckerDLinear — two-branch (trend + seasonal) DLinear over W x H
+surfaces with Tucker-decomposed weights.
 
-Treats the input as a lookback window of W x H surfaces and decomposes it
-into trend (per-cell moving average along time) and seasonal (residual)
-components, mirroring standard DLinear. Each component is mapped to the
-prediction horizon by a linear map whose implicit weight tensor — full
-shape [L, W, H, P, W, H] — is represented as a Tucker decomposition with
-a six-mode core G and six factor matrices A_L, A_Wi, A_Hi, A_P, A_Wo,
-A_Ho. Input/output spatial factors are independently parameterised but
-share their rank (rank_W applies to A_Wi and A_Wo; rank_H to A_Hi and
-A_Ho).
+Decomposition
+-------------
+A single moving average splits the input into two bands:
 
-At full spatial ranks (rank_W = W, rank_H = H), this Tucker class strictly
-contains channel-independent DLinear: setting A_Wi = A_Wo = I_W and
-A_Hi = A_Ho = I_H reduces the model to a per-cell rank-(rank_L, rank_P)
-temporal map. The init exploits this — when rank_W = W and rank_H = H the
-spatial factors are initialised as identity and the core's spatial
-diagonal is set to 1/seq_len, exactly recovering DLinear's per-cell
-uniform-average init.
+    trend    = MA(x, kernel_trend)
+    seasonal = x - trend
 
-When spatial ranks are reduced (rank_W < W or rank_H < H), the spatial
-factors are initialised to orthonormal D × rank columns and the core
-keeps the same per-(rank-W, rank-H) diagonal pattern G[0, b, c, 0, b, c]
-= 1/seq_len. The implicit spatial map A @ A.T becomes a rank-r orthogonal
-projector — the Frobenius-optimal rank-r approximation of I_D — so the
-forward at init is "project the input surface onto the rank-r spatial
-subspace, average over lookback". Output magnitude stays bounded by
-||x||_F regardless of rank.
+This mirrors standard DLinear's trend/seasonal split, applied per (W, H)
+cell along the lookback. The decomposition is parameter-free.
 
-Hyperparameters (passed to TuckerDLinear.__init__):
-    seq_len      int — input window length (lookback).
-    pred_len     int — forecast horizon length.
-    W            int — width of the surface grid (e.g. moneyness axis).
-    H            int — height of the surface grid (e.g. tau axis).
-    rank_L       int — Tucker rank along the lookback axis. In [1, seq_len].
-    rank_P       int — Tucker rank along the forecast horizon. In [1, pred_len].
-    rank_W       int — shared Tucker rank for A_Wi and A_Wo. In [1, W].
-    rank_H       int — shared Tucker rank for A_Hi and A_Ho. In [1, H].
-    kernel_size  int — moving-avg kernel for trend/seasonality decomposition.
-                       Must be odd. Default: 13.
-    norm         bool — joint per-window normalisation across (L, W, H):
-                        strip the surface-wide mean and std before
-                        decomposition and the linear maps, add back at
-                        the output. Preserves cross-cell structure within
-                        a window while removing the overall vol
-                        level/scale. Default: True.
+Each band is mapped to the forecast horizon by its own Tucker linear
+map with independent ranks. The output is the sum plus a static
+spatial bias:
 
-Input:  [B, L, W, H]
-Output: [B, P, W, H]
+    out = trend_map(trend) + seasonal_map(seasonal) + bias
+
+Tucker linear map
+-----------------
+Each _TuckerLinear represents an implicit weight tensor
+T[l, wi, hi, p, wo, ho] of shape [L, W, H, P, W, H] via a six-mode core
+G and six factor matrices A_L, A_Wi, A_Hi, A_P, A_Wo, A_Ho.
+
+The ranks decouple temporal and spatial capacity:
+
+    rank_L  in [1, seq_len]   how many temporal modes from the lookback
+    rank_P  in [1, pred_len]  how many horizon shapes the output can take
+    rank_W  in [1, W]         spatial rank along the moneyness axis
+    rank_H  in [1, H]         spatial rank along the tenor axis
+
+When rank_W = W and rank_H = H, the spatial factors initialise to
+identity, so the map preserves the input surface exactly through the
+spatial pathway at init and all spatial mixing must be learned in G.
+When rank_W < W or rank_H < H, the spatial factors form a random
+orthonormal basis for a rank-r subspace, so the spatial pathway
+projects through that subspace by construction — a low-rank inductive
+bias on the spatial structure.
+
+Initialisation
+--------------
+The init has a single goal: at step 0, the model predicts the lookback
+mean broadcast across the horizon, with all higher-rank channels seeded
+to receive nonzero gradient. Concretely:
+
+  A_L[:, 0]              = 1/sqrt(L) · 1  (uniform; "rank-0 mean path")
+  A_L[:, 1:]             orthonormal noise (Gram-Schmidt'd)
+  A_P[:, 0]              = 1/sqrt(P) · 1  (uniform)
+  A_P[:, 1:]             orthonormal noise
+  A_Wi, A_Wo             orthonormal (identity if rank_W = W)
+  A_Hi, A_Ho             orthonormal (identity if rank_H = H)
+  G[0, b, c, 0, b, c]    = sqrt(P/L) · 1  (rank-0 diagonal warm start)
+  G rest                 ~ N(0, 1e-3) noise
+
+When rank_W = W and rank_H = H (spatial factors are identity), the
+rank-0 forward at init evaluates exactly to the per-cell lookback
+mean broadcast across the horizon:
+    out[p, w, h] = (1/L) · sum_l x[l, w, h]
+which is exactly DLinear's trend init. When rank_W < W or rank_H < H,
+the spatial pathway projects the input through a random orthonormal
+rank-r subspace, so the rank-0 forward becomes
+    out[p, w, h] = (P_W ⊗ P_H)(mean_l(x[l, :, :]))[w, h]
+where P_W, P_H are the rank-r orthogonal projectors. For bands whose
+mean is approximately zero (e.g. the seasonal residual), this
+projected init is also approximately zero — fine in practice — but
+the equality with the per-cell mean is no longer exact.
+
+The dense noise on the rest of G keeps gradient flowing into
+A_L[:, 1:] / A_P[:, 1:] / off-diagonal G entries from step 1 —
+otherwise those channels would be gradient-stranded since they'd
+start at exactly zero output.
+
+Persistence init was tried earlier and removed: starting the model at
+"predict yesterday's surface" placed it in a basin where it had to
+climb out to discover the mean-reverting structure that DLinear-style
+training finds naturally. Mean init is the cleaner first-principles
+choice.
+
+Output bias
+-----------
+A static spatial bias [W, H] is added at the end. This lets the model
+learn the typical surface shape without leaking it into horizon-
+dependent capacity. Any horizon-dependent structure must come from the
+conditional path (A_P · G), not from a free [P, W, H] offset.
+
+Input:  [B, seq_len,  W, H]
+Output: [B, pred_len, W, H]
 """
 
 import torch
@@ -56,7 +95,12 @@ import torch.nn.functional as F
 
 
 class _SurfaceMovingAvg(nn.Module):
-    """Pointwise moving average along the lookback axis (per spatial cell)."""
+    """Pointwise moving average along the lookback axis (per spatial cell).
+
+    Replicate-pads both ends so the output has the same length as the
+    input. The kernel must be a positive odd integer so the padding is
+    symmetric.
+    """
 
     def __init__(self, kernel_size: int):
         super().__init__()
@@ -73,19 +117,21 @@ class _SurfaceMovingAvg(nn.Module):
             left  = x[:, :1].expand(-1, self.pad, -1, -1)
             right = x[:, -1:].expand(-1, self.pad, -1, -1)
             x = torch.cat([left, x, right], dim=1)
+        # Treat (W, H) cells as channels for the 1D pool.
         x = x.reshape(B, L + 2 * self.pad, W * H).permute(0, 2, 1)
         x = F.avg_pool1d(x, kernel_size=self.kernel_size, stride=1)
         return x.permute(0, 2, 1).reshape(B, L, W, H)
 
 
-def _orth(D: int, rank: int) -> torch.Tensor:
-    """Orthonormal D × rank init.
+def _orth_basis(D: int, rank: int) -> torch.Tensor:
+    """Return a D × rank orthonormal matrix.
 
-    Returns I_D when rank == D (full-rank case; preserves the DLinear-equivalent
-    init path bitwise). When rank < D, returns the Q-factor of QR(random) — a
-    random orthonormal basis for a rank-r subspace of R^D. The implicit spatial
-    map A @ A.T is then a rank-r orthogonal projector, the best rank-r Frobenius
-    approximation of I_D.
+    When rank == D, returns the identity I_D (gives the spatial pathway
+    a clean identity init at full rank). When rank < D, returns the Q
+    factor of QR(random) — a uniformly random orthonormal basis for a
+    rank-r subspace of R^D. The implicit projector A @ A.T is then a
+    rank-r orthogonal projector, the best rank-r Frobenius approximation
+    of I_D.
     """
     if rank == D:
         return torch.eye(D)
@@ -94,37 +140,42 @@ def _orth(D: int, rank: int) -> torch.Tensor:
     return q
 
 
-class _TuckerLinear(nn.Module):
+def _uniform_then_orth(D: int, rank: int) -> torch.Tensor:
+    """Return D × rank with col 0 fixed to the unit-norm uniform vector
+    and cols 1+ forming an orthonormal basis for the orthogonal
+    complement (via Gram-Schmidt on Gaussian noise).
+
+    The fixed col-0 carries the rank-0 mean path; cols 1+ start as a
+    random orthonormal direction set that's free to specialise during
+    training, with gradient seeded by the dense G noise.
     """
-    Tucker-decomposed linear map [B, L, W, H] -> [B, P, W, H].
+    A = torch.randn(D, rank)
+    A[:, 0] = torch.ones(D) / (D ** 0.5)
+    for k in range(1, rank):
+        v = A[:, k].clone()
+        for j in range(k):
+            v = v - (A[:, j] @ v) * A[:, j]
+        A[:, k] = v / (v.norm() + 1e-12)
+    return A
+
+
+class _TuckerLinear(nn.Module):
+    """Tucker-decomposed linear map [B, L, W, H] -> [B, P, W, H].
 
     Implicit weight tensor (never materialised):
-        T[l, wi, hi, p, wo, ho] = sum_{a,b,c,d,e,f}
+        T[l, wi, hi, p, wo, ho] = sum_{a, b, c, d, e, f}
               G[a, b, c, d, e, f]
-              * A_L[l, a]   * A_Wi[wi, b] * A_Hi[hi, c]
-              * A_P[p, d]   * A_Wo[wo, e] * A_Ho[ho, f]
+              * A_L[l, a]  * A_Wi[wi, b] * A_Hi[hi, c]
+              * A_P[p, d]  * A_Wo[wo, e] * A_Ho[ho, f]
 
-    Ranks
-        rank_L  in [1, seq_len]   lookback temporal rank
-        rank_P  in [1, pred_len]  forecast temporal rank
-        rank_W  in [1, W]         shared rank for A_Wi and A_Wo
-        rank_H  in [1, H]         shared rank for A_Hi and A_Ho
+    Forward computes three einsum contractions:
+        z   = einsum('nlwh, la, wb, hc -> nabc', x, A_L, A_Wi, A_Hi)
+        mid = einsum('nabc, abcdef -> ndef',     z, G)
+        out = einsum('ndef, pd, we, hf -> npwh', mid, A_P, A_Wo, A_Ho)
 
-    At rank_W = W and rank_H = H, channel-independent DLinear is contained
-    in this class: the spatial factors initialise to identity and the
-    core's spatial diagonal G[0, w, h, 0, w, h] = 1/seq_len reproduces
-    DLinear's per-cell uniform-average map. When rank_W < W or rank_H < H,
-    information is forced to mix across spatial cells through the shared
-    rank dimension, and the init falls back to global broadcast.
-
-    Forward computes the contractions in three steps:
-        z[n, a, b, c]   = sum_{l, wi, hi}
-                          x[n, l, wi, hi]
-                          * A_L[l, a] * A_Wi[wi, b] * A_Hi[hi, c]
-        mid[n, d, e, f] = sum_{a, b, c} z[n, a, b, c] * G[a, b, c, d, e, f]
-        out[n, p, w, h] = sum_{d, e, f}
-                          mid[n, d, e, f]
-                          * A_P[p, d] * A_Wo[w, e] * A_Ho[h, f]
+    At init the forward evaluates to the lookback mean broadcast across
+    the horizon (the standard DLinear trend init):
+        out[p, w, h] ≈ (1/L) · sum_l x[l, w, h]
     """
 
     def __init__(
@@ -137,109 +188,127 @@ class _TuckerLinear(nn.Module):
         rank_P: int,
         rank_W: int,
         rank_H: int,
-        tie_spatial: bool = True,
+        g_init_noise: float = 1e-3,
     ):
         super().__init__()
         if not (1 <= rank_L <= seq_len):
-            raise ValueError(f"rank_L must be in [1, seq_len={seq_len}], got {rank_L}")
+            raise ValueError(f"rank_L must be in [1, {seq_len}], got {rank_L}")
         if not (1 <= rank_P <= pred_len):
-            raise ValueError(f"rank_P must be in [1, pred_len={pred_len}], got {rank_P}")
+            raise ValueError(f"rank_P must be in [1, {pred_len}], got {rank_P}")
         if not (1 <= rank_W <= W):
-            raise ValueError(f"rank_W must be in [1, W={W}], got {rank_W}")
+            raise ValueError(f"rank_W must be in [1, {W}], got {rank_W}")
         if not (1 <= rank_H <= H):
-            raise ValueError(f"rank_H must be in [1, H={H}], got {rank_H}")
+            raise ValueError(f"rank_H must be in [1, {H}], got {rank_H}")
 
-        self.seq_len     = seq_len
-        self.pred_len    = pred_len
-        self.W           = W
-        self.H           = H
-        self.rank_L      = rank_L
-        self.rank_P      = rank_P
-        self.rank_W      = rank_W
-        self.rank_H      = rank_H
-        self.tie_spatial = tie_spatial
+        self.seq_len  = seq_len
+        self.pred_len = pred_len
+        self.W = W
+        self.H = H
+        self.rank_L = rank_L
+        self.rank_P = rank_P
+        self.rank_W = rank_W
+        self.rank_H = rank_H
 
         self.A_L  = nn.Parameter(torch.empty(seq_len,  rank_L))
         self.A_P  = nn.Parameter(torch.empty(pred_len, rank_P))
-        if tie_spatial:
-            # Single shared spatial factor used as both input and output. Kills
-            # the asymmetric (A_Wi, A_Wo) and (A_Hi, A_Ho) gauge freedom — the
-            # dilation/skew directions in the spatial-factor gauge group — and
-            # keeps only the orthogonal-rotation residue.
-            self.A_W = nn.Parameter(torch.empty(W, rank_W))
-            self.A_H = nn.Parameter(torch.empty(H, rank_H))
-        else:
-            self.A_Wi = nn.Parameter(torch.empty(W, rank_W))
-            self.A_Hi = nn.Parameter(torch.empty(H, rank_H))
-            self.A_Wo = nn.Parameter(torch.empty(W, rank_W))
-            self.A_Ho = nn.Parameter(torch.empty(H, rank_H))
+        self.A_Wi = nn.Parameter(torch.empty(W, rank_W))
+        self.A_Hi = nn.Parameter(torch.empty(H, rank_H))
+        self.A_Wo = nn.Parameter(torch.empty(W, rank_W))
+        self.A_Ho = nn.Parameter(torch.empty(H, rank_H))
         self.G    = nn.Parameter(
             torch.empty(rank_L, rank_W, rank_H, rank_P, rank_W, rank_H)
         )
 
         with torch.no_grad():
-            # Temporal factors: column 0 = 1 (uniform). Higher-rank columns
-            # carry small noise so gradient can flow into the higher temporal-
-            # rank slices of G (which are zero at init) during training.
-            self.A_L.normal_(0.0, 1e-2); self.A_L[:, 0] = 1.0
-            self.A_P.normal_(0.0, 1e-2); self.A_P[:, 0] = 1.0
-            # Spatial factors: orthonormal D × rank columns. At full spatial
-            # rank _orth returns identity, exactly preserving the previous
-            # DLinear-equivalent path. At partial spatial rank A @ A.T is a
-            # rank-r orthogonal projector — the Frobenius-optimal rank-r
-            # approximation of I_D — keeping the init scale bounded
-            # (||out||_F ≤ ||x||_F) regardless of rank.
-            if tie_spatial:
-                self.A_W.copy_(_orth(W, rank_W))
-                self.A_H.copy_(_orth(H, rank_H))
-            else:
-                # Init A_Wi = A_Wo (and A_Hi = A_Ho) to the same orthonormal
-                # matrix so the implicit spatial map is a projector at init
-                # in both tied and untied modes. Training is free to drift
-                # them apart in the untied case.
-                Q_W = _orth(W, rank_W)
-                Q_H = _orth(H, rank_H)
-                self.A_Wi.copy_(Q_W); self.A_Wo.copy_(Q_W)
-                self.A_Hi.copy_(Q_H); self.A_Ho.copy_(Q_H)
-            # Core: G[0, b, c, 0, b, c] = 1/seq_len for (b, c) in
-            # [rank_W] × [rank_H], else 0. At full spatial rank this is the
-            # per-cell DLinear-equivalent init (output = lookback mean per
-            # cell, recovered bitwise). At partial spatial rank, combined
-            # with orthonormal A_W/A_H, the implicit map is
-            # T = (1/L) · P_W ⊗ P_H along (input cell, output cell): the
-            # output projects the input surface onto the rank-r spatial
-            # subspace and averages over lookback. Bounded scale; no
-            # collapse to a single global scalar like the previous fallback.
-            self.G.zero_()
-            inv = 1.0 / seq_len
+            # Temporal factors: col 0 = unit-uniform (mean path),
+            # cols 1+ = orthonormal noise. The uniform col 0 means the
+            # rank-0 forward evaluates to a sum over l of (1/sqrt(L)) ·
+            # x[l, ...], which becomes the per-cell mean after the G
+            # diagonal multiplies by sqrt(P/L) (see below).
+            self.A_L.copy_(_uniform_then_orth(seq_len,  rank_L))
+            self.A_P.copy_(_uniform_then_orth(pred_len, rank_P))
+
+            # Spatial factors: orthonormal columns. At full rank these
+            # are identity; at partial rank they're a random orthonormal
+            # basis. A_Wi = A_Wo (and A_Hi = A_Ho) at init so the
+            # spatial pathway is a symmetric projector at step 0;
+            # training is free to drift them apart.
+            Q_W = _orth_basis(W, rank_W)
+            Q_H = _orth_basis(H, rank_H)
+            self.A_Wi.copy_(Q_W); self.A_Wo.copy_(Q_W)
+            self.A_Hi.copy_(Q_H); self.A_Ho.copy_(Q_H)
+
+            # G: small dense noise + a single diagonal warm start on
+            # the rank-0 path. The (0, b, c, 0, b, c) diagonal entries
+            # are set to sqrt(P/L) so the rank-0 forward at init reads
+            #     out[p, w, h] = (1/sqrt(L) sum_l x[l, w, h]) · sqrt(P/L) · (1/sqrt(P))
+            #                  = (1/L) sum_l x[l, w, h]
+            # which is exactly the per-cell mean of the lookback,
+            # broadcast across all horizons — the standard DLinear
+            # trend init.
+            #
+            # The dense N(0, g_init_noise) noise on the remaining G
+            # entries gives all higher-rank channels of A_L, A_P, A_Wi,
+            # A_Hi, A_Wo, A_Ho nonzero gradient from step 1. Without it,
+            # cols 1+ of those factors would be gradient-stranded
+            # (because G's higher-rank slices would be exactly zero,
+            # producing zero contribution and zero gradient).
+            self.G.normal_(0.0, g_init_noise)
+            g_diag = (pred_len / seq_len) ** 0.5
             for b in range(rank_W):
                 for c in range(rank_H):
-                    self.G[0, b, c, 0, b, c] = inv
+                    self.G[0, b, c, 0, b, c] += g_diag
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.tie_spatial:
-            A_Wi = A_Wo = self.A_W
-            A_Hi = A_Ho = self.A_H
-        else:
-            A_Wi, A_Wo = self.A_Wi, self.A_Wo
-            A_Hi, A_Ho = self.A_Hi, self.A_Ho
         z = torch.einsum(
-            'nlwh,la,wb,hc->nabc',
-            x, self.A_L, A_Wi, A_Hi,
+            'nlwh, la, wb, hc -> nabc',
+            x, self.A_L, self.A_Wi, self.A_Hi,
         )
-        mid = torch.einsum('nabc,abcdef->ndef', z, self.G)
+        mid = torch.einsum('nabc, abcdef -> ndef', z, self.G)
         return torch.einsum(
-            'ndef,pd,we,hf->npwh',
-            mid, self.A_P, A_Wo, A_Ho,
+            'ndef, pd, we, hf -> npwh',
+            mid, self.A_P, self.A_Wo, self.A_Ho,
         )
 
 
 class TuckerDLinear(nn.Module):
-    """
-    DLinear over W x H surfaces with Tucker-decomposed weights.
+    """Two-branch (trend + seasonal) DLinear over W x H surfaces with
+    Tucker-decomposed weights.
 
-    Input:  [B, seq_len,  W, H]
-    Output: [B, pred_len, W, H]
+    The trend branch sees the heavily-smoothed signal and should
+    preserve the full surface — defaults to full spatial rank so that
+    no signal is destroyed by the spatial pathway.
+
+    The seasonal branch sees the high-frequency residual and benefits
+    from low-rank spatial structure (the residual lives mostly in the
+    dominant shape modes — level/slope/skew/butterfly). Its defaults
+    are moderate spatial rank.
+
+    Both branches have small temporal rank by default; this is the
+    standard DLinear-style "single temporal mode plus a few free
+    directions" setup.
+
+    Args:
+        seq_len, pred_len  : lookback and forecast horizon lengths.
+        W, H               : surface width (moneyness) and height (tenor).
+        rank_L_trend       : trend branch temporal rank along lookback.
+        rank_P_trend       : trend branch temporal rank along horizon.
+        rank_W_trend       : trend branch spatial rank along W. Default W
+                             (full rank → identity factor at init → no
+                             signal loss through the spatial pathway).
+        rank_H_trend       : trend branch spatial rank along H. Default H.
+        rank_L_seasonal    : seasonal branch temporal rank along lookback.
+        rank_P_seasonal    : seasonal branch temporal rank along horizon.
+        rank_W_seasonal    : seasonal branch spatial rank along W.
+                             Default 6 (low-rank spatial bias).
+        rank_H_seasonal    : seasonal branch spatial rank along H.
+                             Default 4.
+        kernel_trend       : MA kernel size for the trend/seasonal
+                             split. Default 41.
+        g_init_noise       : std of the dense noise on the non-diagonal
+                             entries of G; controls how strong the
+                             gradient signal is for the higher-rank
+                             factor channels. Default 1e-3.
     """
 
     def __init__(
@@ -248,48 +317,59 @@ class TuckerDLinear(nn.Module):
         pred_len: int,
         W: int,
         H: int,
-        rank_L: int,
-        rank_P: int,
-        rank_W: int,
-        rank_H: int,
-        kernel_size: int = 31,
-        norm: bool = False,
-        tie_spatial: bool = True,
+        rank_L_trend: int = 2,
+        rank_P_trend: int = 2,
+        rank_W_trend: int = None,    # default: W (full spatial rank)
+        rank_H_trend: int = None,    # default: H (full spatial rank)
+        rank_L_seasonal: int = 4,
+        rank_P_seasonal: int = 2,
+        rank_W_seasonal: int = 6,
+        rank_H_seasonal: int = 4,
+        kernel_trend: int = 41,
+        g_init_noise: float = 1e-3,
     ):
         super().__init__()
-        self.seq_len     = seq_len
-        self.pred_len    = pred_len
-        self.W           = W
-        self.H           = H
-        self.rank_L      = rank_L
-        self.rank_P      = rank_P
-        self.rank_W      = rank_W
-        self.rank_H      = rank_H
-        self.kernel_size = kernel_size
-        self.norm        = norm
-        self.tie_spatial = tie_spatial
+        # Default trend spatial ranks to full.
+        if rank_W_trend is None:
+            rank_W_trend = W
+        if rank_H_trend is None:
+            rank_H_trend = H
 
-        self.decomp       = _SurfaceMovingAvg(kernel_size)
-        self.trend_map    = _TuckerLinear(seq_len, pred_len, W, H,
-                                          rank_L, rank_P, rank_W, rank_H,
-                                          tie_spatial=tie_spatial)
-        self.seasonal_map = _TuckerLinear(seq_len, pred_len, W, H,
-                                          rank_L, rank_P, rank_W, rank_H,
-                                          tie_spatial=tie_spatial)
-        self.bias         = nn.Parameter(torch.zeros(pred_len, W, H))
+        # Clip seasonal ranks to be within valid range (so callers don't
+        # have to know W and H upfront when passing defaults).
+        rank_W_seasonal = min(rank_W_seasonal, W)
+        rank_H_seasonal = min(rank_H_seasonal, H)
+
+        self.seq_len  = seq_len
+        self.pred_len = pred_len
+        self.W = W
+        self.H = H
+        self.kernel_trend = kernel_trend
+
+        self.decomp = _SurfaceMovingAvg(kernel_trend)
+
+        self.trend_map = _TuckerLinear(
+            seq_len, pred_len, W, H,
+            rank_L=rank_L_trend,    rank_P=rank_P_trend,
+            rank_W=rank_W_trend,    rank_H=rank_H_trend,
+            g_init_noise=g_init_noise,
+        )
+        self.seasonal_map = _TuckerLinear(
+            seq_len, pred_len, W, H,
+            rank_L=rank_L_seasonal, rank_P=rank_P_seasonal,
+            rank_W=rank_W_seasonal, rank_H=rank_H_seasonal,
+            g_init_noise=g_init_noise,
+        )
+
+        # Static spatial bias. Lets the model learn a typical surface
+        # shape without leaking that into the horizon-dependent path.
+        self.bias = nn.Parameter(torch.zeros(W, H))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.norm:
-            mu  = x.mean(dim=(1, 2, 3), keepdim=True)
-            std = torch.sqrt(x.var(dim=(1, 2, 3), keepdim=True, unbiased=False) + 1e-5)
-            x_in = (x - mu) / std
-        else:
-            x_in = x
-
-        trend    = self.decomp(x_in)
-        seasonal = x_in - trend
-        out      = self.trend_map(trend) + self.seasonal_map(seasonal) + self.bias
-
-        if self.norm:
-            out = (out * std) + mu
-        return out
+        trend    = self.decomp(x)
+        seasonal = x - trend
+        return (
+            self.trend_map(trend)
+            + self.seasonal_map(seasonal)
+            + self.bias
+        )

@@ -80,7 +80,7 @@ LR_GWN            = 1e-3
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
 WD_HOT            = 0.3
-WD_TUCKER_DLINEAR = 1e-1
+WD_TUCKER_DLINEAR = 1e-2
 WD_GWN            = 1e-3
 
 # Tucker-only (with AdamW): the G core gets its own multipliers on top of
@@ -89,7 +89,7 @@ WD_GWN            = 1e-3
 # regularises the dominant (overfit-prone) parameter group.
 # Set both to 1.0 to apply the base values uniformly.
 LR_TUCKER_DLINEAR_G_MULT = 0.25
-WD_TUCKER_DLINEAR_G_MULT = 10
+WD_TUCKER_DLINEAR_G_MULT = 30
 
 # Shared trainer settings (same for every deep model).
 EPOCHS     = 100
@@ -379,16 +379,23 @@ def build_model(name: str, pred_len: int, n_channels: int,
         m = HOT(**kw)
         return _HOTAdapter(m, n_tau, n_money), kw
     if name == "tucker_dlinear":
-        # Current best config, validated via multi_seed (94,660 params,
-        # val mean 0.165, test mean 0.226, ~tied with DLinear within seed
-        # noise). Full spatial rank with very low temporal rank (rL=1,
-        # rP=2) — partial-rank-aware orthonormal init + AdamW with
-        # per-group LR/WD (lr_g_mult=0.25, wd_g_mult=10) + grad_clip=1.0
-        # are wired up automatically in train_deep_model.
+        # Two-branch (trend + seasonal) DLinear with Tucker-decomposed
+        # weights. Trend uses full spatial rank (W × H, default in
+        # TuckerDLinear) so the spatial pathway is identity at init.
+        # Seasonal uses a low-rank spatial bias (rank_W=6, rank_H=4)
+        # since the high-frequency residual lives mostly in the dominant
+        # surface modes (level/slope/skew/butterfly).
+        # Mean init: at step 0 each branch outputs the per-cell lookback
+        # mean of its band, broadcast across the horizon — same starting
+        # point as DLinear's trend init.
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            rank_L=1, rank_P=min(2, P), rank_W=n_money, rank_H=n_tau,
-            kernel_size=31, norm=False, tie_spatial=False,
+            rank_L_trend=1,    rank_P_trend=min(2, P),
+            rank_W_trend=10, rank_H_trend=7,
+            rank_L_seasonal=4, rank_P_seasonal=min(1, P),
+            rank_W_seasonal=3, rank_H_seasonal=3,
+            kernel_trend=41,
+            g_init_noise=1e-3,
         )
         m = TuckerDLinear(**kw)
         return _TuckerAdapter(m, n_tau, n_money), kw

@@ -371,10 +371,10 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # full sweep.
         kw = dict(
             context_length=L, prediction_length=P,
-            d_hidden=8, n_blocks=2, n_head=2, patch_size=7,
+            d_hidden=8, n_blocks=1, n_head=2, patch_size=7,
             attention_type="kronecker_product",
             dropout=0.1, attn_dropout=0.0, head_dropout=0.01,
-            pe="nope", norm=False, head_type="flatten",
+            pe="rope", norm=False, head_type="mean",
         )
         m = HOT(**kw)
         return _HOTAdapter(m, n_tau, n_money), kw

@@ -226,7 +226,7 @@ class HOT(nn.Module):
         for name, val in [("dropout", dropout), ("attn_dropout", attn_dropout), ("head_dropout", head_dropout)]:
             if not (0.0 <= val < 1.0):
                 raise ValueError(f"{name} must be in [0, 1), got {val}")
-        d_mlp = 4 * d_hidden
+        d_mlp = d_hidden
         self.patch_size        = patch_size
         self.context_length    = context_length
         self.prediction_length = prediction_length
@@ -246,7 +246,7 @@ class HOT(nn.Module):
         # Input to transformer blocks: [B, H, W, Tp', d]
         # KroneckerAttention iterates dims 1..3 (H, W, Tp') → 3 modes.
         num_modes = 3
-        rope_dims = [1, 2, 3] if pe == "rope" else []
+        rope_dims = [3] if pe == "rope" else []
         self.blocks = nn.ModuleList([
             TransformerBlock(d_hidden=d_hidden, d_mlp=d_mlp, n_head=n_head,
                              dropout=dropout, attn_dropout=attn_dropout,

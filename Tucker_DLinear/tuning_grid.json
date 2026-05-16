@@ -31,6 +31,8 @@
     {"rank_L_seasonal": 2, "rank_P_seasonal_max": 2, "rank_W_seasonal": 5, "rank_H_seasonal": 3},
     {"rank_L_seasonal": 2, "rank_P_seasonal_max": 2, "rank_W_seasonal": 8, "rank_H_seasonal": 6},
     {"rank_L_seasonal": 4, "rank_P_seasonal_max": 4, "rank_W_seasonal": 5, "rank_H_seasonal": 3},
-    {"rank_L_seasonal": 4, "rank_P_seasonal_max": 4, "rank_W_seasonal": 8, "rank_H_seasonal": 6}
+    {"rank_L_seasonal": 4, "rank_P_seasonal_max": 4, "rank_W_seasonal": 8, "rank_H_seasonal": 6},
+    {"rank_L_seasonal": 1, "rank_P_seasonal_max": 1, "rank_W_seasonal": 15, "rank_H_seasonal": 10},
+    {"rank_L_seasonal": 2, "rank_P_seasonal_max": 2, "rank_W_seasonal": 15, "rank_H_seasonal": 10}
   ]
 }

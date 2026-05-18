@@ -404,8 +404,8 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # Matches the prior tuning winner (combo_0044): kernel_size=31.
         kw = dict(seq_len=L, pred_len=P, n_channels=C, kernel_size=31)
         m = DLinear(**kw)
-        return _DLinearAdapter(m), {**kw, "revin": False,
-                                    "revin_affine": False, "revin_eps": 1e-5}
+        return _DLinearAdapter(m), {**kw, "revin": True,
+                                    "revin_affine": True, "revin_eps": 1e-5}
     if name == "patchtst":
         # Matches the prior tuning winner (combo_0001): patch_len=stride=7,
         # n_heads=2, d_ff=64, dropout=0.1, head_dropout=0.01, revin=False.
@@ -426,7 +426,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
             context_length=L, prediction_length=P,
             d_hidden=64, n_blocks=1, n_head=8, patch_size=7,
             attention_type="kronecker_sum",
-            dropout=0.0, attn_dropout=0.0, head_dropout=0.0,
+            dropout=0.1, attn_dropout=0.0, head_dropout=0.05,
             pe="rope", norm=True, head_type="flatten",
         )
         m = HOT(**kw)
@@ -462,7 +462,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
         kw = dict(
             num_nodes=C, seq_len=L, pred_len=P,
             in_dim=1, supports=None,
-            gcn_bool=True, addaptadj=True, aptinit=None,
+            gcn_bool=True, addaptadj=False, aptinit=None,
             residual_channels=8, dilation_channels=8,
             skip_channels=8, end_channels=16,
             kernel_size=2, blocks=4, layers=1,

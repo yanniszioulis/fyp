@@ -45,12 +45,10 @@ Hyperparameters (passed to HOT.__init__):
     pe                 str    — positional encoding: 'rope' applies RoPE on
                                 the H, W, and temporal axes; 'nope' disables
                                 all positional encoding. Default: 'rope'.
-    norm               bool   — joint per-window normalisation: strip the
-                                surface-wide mean and std across (H, W, T),
-                                apply, then add back at the output.
-                                Preserves cross-cell structure within a
-                                window while removing the overall vol
-                                level/scale. Default: True.
+    norm               bool   — per-cell, per-window RevIN normalisation
+                                (Kim et al. 2022): strip each (H, W) cell's
+                                mean/std over the lookback T, apply, then
+                                add back at the output. Default: True.
     head_type          str    — 'flatten' (default) applies a Flatten+Linear
                                 head over [Tp, d]; 'mean' averages over Tp
                                 before the linear head. (PatchTST uses the 'flatten' approach, while the reference HOT uses 'mean'.)
@@ -277,8 +275,9 @@ class HOT(nn.Module):
         bs, H, W, T = x.shape
 
         if self.norm:
-            mu  = x.mean(dim=(1, 2, 3), keepdim=True)
-            std = torch.sqrt(x.var(dim=(1, 2, 3), keepdim=True, unbiased=False) + 1e-5)
+            # Per-cell RevIN: reduce over T only, keep per-(H, W) stats.
+            mu  = x.mean(dim=3, keepdim=True)
+            std = torch.sqrt(x.var(dim=3, keepdim=True, unbiased=False) + 1e-5)
             x_input = (x - mu) / std
         else:
             x_input = x

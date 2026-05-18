@@ -173,13 +173,11 @@ class _PerCellRevIN(nn.Module):
     before tokenisation; restore them on the forecast at the end of the
     forward pass.
 
-    Differs from DLinear's / PatchTST's `JointRevIN` (and HOT's `norm`
-    flag), which strip a *single* scalar mean/std jointly over (L, C):
-    those preserve cross-channel structure within a window but cannot
-    handle wide per-cell level differences (e.g. ATM ≈ 12 % vs deep
-    wings ≈ 30 %). The per-cell variant is what iTransformer uses
-    natively and is well-suited here because each cell is already its
-    own token in the architecture.
+    Equivalent in spirit to the per-channel `RevIN` in DLinear /
+    PatchTST and HOT's `norm` flag — all of them reduce over T only
+    and keep per-cell stats. Kept as its own class here because the
+    iTransformer forward operates on [B, T, n_cells] tokens directly,
+    so the layer takes `n_cells` and the affine params are per-cell.
 
     With affine=False (default), this is a pure pre/post operation —
     nothing learnable. With affine=True, per-cell γ/β are applied after

@@ -8,15 +8,15 @@ Hyperparameters (passed to DLinear.__init__):
     kernel_size  int  — moving-average kernel for trend/seasonality
                         decomposition. Must be odd and <= seq_len.
                         Default: 13.
-    revin        bool — joint per-window RevIN norm/denorm around the
-                        model: strips mean/std jointly over (L, C),
-                        preserving cross-channel structure within the
-                        window. Default: True. This is a deviation from
-                        the original DLinear (Zeng et al. 2022), added
-                        for parity with PatchTST / HOT / TuckerDLinear in
-                        this project. Pass revin=False to reproduce the
-                        original behaviour.
-    revin_affine bool — learnable scalar scale/bias inside RevIN.
+    revin        bool — per-cell RevIN norm/denorm around the model:
+                        each channel's lookback mean/std are stripped
+                        before the linear maps and reapplied after, in
+                        the style of Kim et al. 2022 and matching the
+                        per-cell RevIN used by PatchTST / HOT /
+                        iTransformer in this project. Default: False
+                        (the original Zeng et al. 2022 DLinear does no
+                        normalisation).
+    revin_affine bool — learnable per-channel scale/bias inside RevIN.
                         Default: False.
     revin_eps    float — numerical stabilizer in std computation.
                         Default: 1e-5.
@@ -42,24 +42,25 @@ class _MovingAvg(nn.Module):
         return self.avg(x.permute(0, 2, 1)).permute(0, 2, 1)
 
 
-class JointRevIN(nn.Module):
+class RevIN(nn.Module):
     """
-    Joint RevIN: per-window mean/std reduction over all non-batch
-    axes. For input [B, L, C], reduces over (L, C) jointly and
-    produces scalar mean/std per window. Strips overall window
-    level/scale while preserving cross-channel structure.
+    Per-cell RevIN (Kim et al. 2022): for input [B, T, C], reduce over
+    T only and keep per-channel mean/std. Each cell's own lookback
+    level/scale is stripped before the model and reapplied after.
 
-    Affine parameters, if enabled, are scalar (one pair per
-    window broadcasting across all positions).
+    Affine parameters, if enabled, are per-channel (one pair per
+    feature, broadcasting across batch and time).
     """
 
-    def __init__(self, eps: float = 1e-5, affine: bool = False):
+    def __init__(self, num_features: int, eps: float = 1e-5,
+                 affine: bool = False):
         super().__init__()
+        self.num_features = num_features
         self.eps = eps
         self.affine = affine
         if affine:
-            self.affine_weight = nn.Parameter(torch.ones(1))
-            self.affine_bias   = nn.Parameter(torch.zeros(1))
+            self.affine_weight = nn.Parameter(torch.ones(num_features))
+            self.affine_bias   = nn.Parameter(torch.zeros(num_features))
 
     def forward(self, x, mode: str):
         if mode == "norm":
@@ -70,7 +71,7 @@ class JointRevIN(nn.Module):
         raise NotImplementedError(mode)
 
     def _get_statistics(self, x):
-        dims = tuple(range(1, x.ndim))
+        dims = tuple(range(1, x.ndim - 1))
         self.mean  = x.mean(dim=dims, keepdim=True).detach()
         self.stdev = torch.sqrt(
             x.var(dim=dims, keepdim=True, unbiased=False) + self.eps
@@ -112,7 +113,9 @@ class DLinear(nn.Module):
         self.b_t = nn.Parameter(torch.zeros(n_channels, pred_len))
         self.revin = revin
         if revin:
-            self.revin_layer = JointRevIN(eps=revin_eps, affine=revin_affine)
+            self.revin_layer = RevIN(
+                num_features=n_channels, eps=revin_eps, affine=revin_affine,
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # [B, S, C]
         if self.revin:

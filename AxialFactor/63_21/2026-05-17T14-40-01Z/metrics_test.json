@@ -1,0 +1,13 @@
+{
+  "model": "axial_factor",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.18225388383681684,
+  "best_epoch": 5,
+  "stop_epoch": 20,
+  "test_mse": 0.27127623558044434,
+  "test_rmse": 0.5208418527542159,
+  "test_mae": 0.3161734342575073,
+  "space": "standardized_log_iv"
+}

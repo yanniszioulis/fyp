@@ -1,0 +1,112 @@
+{
+  "timestamp": "2026-05-16T20:41:55.088454+00:00",
+  "config": {
+    "pred_len": 21,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "data_end": "2023-12-29",
+    "epochs": 100,
+    "patience": 15,
+    "min_epochs": 15
+  },
+  "persistence_test_mse": 0.23051267862319946,
+  "persistence_test_per_year": {
+    "2019": 0.03209090232849121,
+    "2020": 0.5765395164489746,
+    "2021": 0.09612393379211426,
+    "2022": 0.15087760984897614,
+    "2023": 0.09654492139816284
+  },
+  "results": {
+    "A": [
+      {
+        "variant": "A",
+        "seed": 0,
+        "best_val": 0.1627484468843188,
+        "best_epoch": 37,
+        "stop_epoch": 52,
+        "test_mse": 0.23911094665527344,
+        "n_params": 11369
+      },
+      {
+        "variant": "A",
+        "seed": 1,
+        "best_val": 0.16186479314658087,
+        "best_epoch": 52,
+        "stop_epoch": 67,
+        "test_mse": 0.2505398094654083,
+        "n_params": 11369
+      },
+      {
+        "variant": "A",
+        "seed": 2,
+        "best_val": 0.17033020606557014,
+        "best_epoch": 19,
+        "stop_epoch": 34,
+        "test_mse": 0.25785520672798157,
+        "n_params": 11369
+      }
+    ],
+    "B": [
+      {
+        "variant": "B",
+        "seed": 0,
+        "best_val": 0.16665818727765952,
+        "best_epoch": 17,
+        "stop_epoch": 32,
+        "test_mse": 0.24178211390972137,
+        "n_params": 10469
+      },
+      {
+        "variant": "B",
+        "seed": 1,
+        "best_val": 0.1631055837959999,
+        "best_epoch": 29,
+        "stop_epoch": 44,
+        "test_mse": 0.23838460445404053,
+        "n_params": 10469
+      },
+      {
+        "variant": "B",
+        "seed": 2,
+        "best_val": 0.17149203011088415,
+        "best_epoch": 17,
+        "stop_epoch": 32,
+        "test_mse": 0.24001243710517883,
+        "n_params": 10469
+      }
+    ],
+    "C": [
+      {
+        "variant": "C",
+        "seed": 0,
+        "best_val": 0.1640284597229353,
+        "best_epoch": 37,
+        "stop_epoch": 52,
+        "test_mse": 0.23901858925819397,
+        "n_params": 11881
+      },
+      {
+        "variant": "C",
+        "seed": 1,
+        "best_val": 0.16583170612188977,
+        "best_epoch": 29,
+        "stop_epoch": 44,
+        "test_mse": 0.23640376329421997,
+        "n_params": 11881
+      },
+      {
+        "variant": "C",
+        "seed": 2,
+        "best_val": 0.1652617848980024,
+        "best_epoch": 17,
+        "stop_epoch": 32,
+        "test_mse": 0.2413603961467743,
+        "n_params": 11881
+      }
+    ]
+  }
+}

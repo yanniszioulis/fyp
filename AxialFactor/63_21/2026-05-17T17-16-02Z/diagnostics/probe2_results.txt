@@ -1,0 +1,35 @@
+PROBE 2 (AR): Per-factor AR(1) dynamics
+=======================================
+
+Method:
+  - Read model.temporal.rho() and model.temporal.mu.
+  - Build per-factor implicit horizon shape ρ_f^h, h=1..P.
+  - Cross-factor cosine similarity of those shapes.
+  - Participation-ratio rank of the [F, P] shape matrix.
+
+Per-factor AR persistences ρ_f: [+0.8596, +0.8506, +0.8390, +0.8916]
+Per-factor AR long-run means μ_f: [-0.0075, -0.0079, -0.0059, -0.0103]
+
+Implicit horizon shape  ρ_f^h  (h = 1, 5, 10, 15, 21):
+  factor |       h= 1        h= 5        h=10        h=15        h=21
+  f   0  | +8.5964e-01  +4.6944e-01  +2.2038e-01  +1.0345e-01  +4.1749e-02
+  f   1  | +8.5064e-01  +4.4538e-01  +1.9836e-01  +8.8345e-02  +3.3470e-02
+  f   2  | +8.3900e-01  +4.1572e-01  +1.7283e-01  +7.1848e-02  +2.5060e-02
+  f   3  | +8.9156e-01  +5.6331e-01  +3.1731e-01  +1.7874e-01  +8.9768e-02
+
+Effective rank of [F, P] horizon-shape matrix: 1.164  (out of 4 possible)
+
+Cross-factor horizon-shape cosine similarity:
+  +1.000  +0.999  +0.997  +0.992
+  +0.999  +1.000  +0.999  +0.987
+  +0.997  +0.999  +1.000  +0.980
+  +0.992  +0.987  +0.980  +1.000
+  max |off-diag|: 0.999
+
+Interpretation hint:
+  - Well-separated ρ_f (e.g. one near 1, one near 0.5, etc.)
+    AND |off-diag| < 0.9 ⇒ AR fix delivered distinct per-factor
+    dynamics — collapse broken at the architectural level.
+  - ρ_f cluster at one value AND |off-diag| ≈ 1 ⇒ data does not
+    support multiple timescales; factor framework is the wrong
+    tool for this prediction problem (or AR(1) is too restrictive).

@@ -1,0 +1,13 @@
+{
+  "model": "itransformer",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.1665335654782846,
+  "best_epoch": 17,
+  "stop_epoch": 32,
+  "test_mse": 0.22530047595500946,
+  "test_rmse": 0.4746582728184662,
+  "test_mae": 0.29428908228874207,
+  "space": "standardized_log_iv"
+}

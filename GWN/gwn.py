@@ -43,6 +43,47 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def build_gaussian_adjacency(grid_spec,
+                             sigma_money: float = 0.03,
+                             sigma_tau: float = 0.05) -> torch.Tensor:
+    """Build a 150x150 (or n_money*n_tau × n_money*n_tau) row-normalized
+    Gaussian-kernel adjacency over the (tau, moneyness) grid.
+
+    Node ordering matches parse_grid() in train.py: tau-outer,
+    moneyness-inner, so node index k = h * n_money + w where h is the
+    tenor index and w is the moneyness index.
+
+    Args:
+        grid_spec: a GridSpec from train.parse_grid() with attributes
+                   n_tau, n_money, tau_vals, money_vals.
+        sigma_money, sigma_tau: Gaussian kernel bandwidths over raw
+                   moneyness and raw tau (years).
+
+    Returns:
+        torch.Tensor of shape (N, N), float32, row-normalized.
+    """
+    n_money = grid_spec.n_money
+    n_tau   = grid_spec.n_tau
+    N = n_money * n_tau
+
+    money = torch.as_tensor(grid_spec.money_vals, dtype=torch.float64)
+    tau   = torch.as_tensor(grid_spec.tau_vals,   dtype=torch.float64)
+
+    # Per-node coordinates.
+    h_idx = torch.arange(N) // n_money     # tau index
+    w_idx = torch.arange(N) %  n_money     # moneyness index
+    m_coord = money[w_idx]                 # (N,)
+    t_coord = tau[h_idx]                   # (N,)
+
+    dm = m_coord.unsqueeze(0) - m_coord.unsqueeze(1)   # (N, N)
+    dt = t_coord.unsqueeze(0) - t_coord.unsqueeze(1)
+    A_raw = torch.exp(-(dm ** 2 / sigma_money ** 2 + dt ** 2 / sigma_tau ** 2))
+    # Diagonal already = 1 by construction.
+
+    A = A_raw / A_raw.sum(dim=1, keepdim=True)
+    return A.to(torch.float32)
+
+
 class nconv(nn.Module):
     def forward(self, x: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
         return torch.einsum("ncvl,vw->ncwl", (x, A)).contiguous()

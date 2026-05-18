@@ -1,0 +1,37 @@
+PROBE 1.5: factor_queries + stacked-loadings SVD
+=================================================
+
+Method:
+  - factor_queries (model.extractor.factor_queries) is [F, d_model].
+    SVD → singular values, effective rank ((Σs)²/Σs²),
+    cumulative explained variance.
+  - spatial_loadings stacked as [F, W*H]: same SVD treatment.
+  - Pairwise cosine similarity of the F query rows (and, for
+    cross-check, the F stacked-loading rows).
+
+factor_queries shape: (4, 16)
+  singular values:        0.2535, 0.2454, 0.2149, 0.2018
+  effective rank:        3.966  (out of 4 possible)
+  cumulative ev:          k=1:30.4%, k=2:58.9%, k=3:80.7%, k=4:100.0%
+
+  pairwise cosine similarity:
+    +1.000  +0.002  -0.001  -0.002
+    +0.002  +1.000  -0.003  -0.001
+    -0.001  -0.003  +1.000  -0.002
+    -0.002  -0.001  -0.002  +1.000
+  max |off-diag|:        0.003
+
+stacked spatial_loadings shape: (4, 150)
+  singular values:        2.1486, 0.2671, 0.2527, 0.2028
+  effective rank:        1.720  (out of 4 possible)
+  cumulative ev:          k=1:96.3%, k=2:97.8%, k=3:99.1%, k=4:100.0%
+
+  pairwise cosine similarity:
+    +1.000  -0.947  -0.951  +0.944
+    -0.947  +1.000  +0.966  -0.948
+    -0.951  +0.966  +1.000  -0.948
+    +0.944  -0.948  -0.948  +1.000
+  max |off-diag|:        0.966
+
+Verdict:
+  Neither queries nor stacked loadings show a clean rank-1 collapse at the parameter level. The near-collinearity reported in probe 4 may be emerging from the attention dynamics on the test set rather than being baked into the parameters. Family 2 / 3 fixes are indicated.

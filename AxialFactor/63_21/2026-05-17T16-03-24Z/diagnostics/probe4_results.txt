@@ -1,0 +1,36 @@
+PROBE 4: Spatial loading inspection
+===================================
+
+Loadings shape: (4, 15, 10)  (F=4 factors, W=15 moneyness, H=10 tau).
+Total variation: mean |Δ| across the named axis (W-axis = adjacent moneyness, H-axis = adjacent τ).
+
+Loading smoothness (total variation):
+  factor 0: tv_W=0.0192  tv_H=0.0197
+  factor 1: tv_W=0.0177  tv_H=0.0194
+  factor 2: tv_W=0.0183  tv_H=0.0169
+  factor 3: tv_W=0.0178  tv_H=0.0177
+
+Rank-1 separability (top SV / sum SVs of the W×H loading):
+  factor 0:  67.3%
+  factor 1:  70.3%
+  factor 2:  68.6%
+  factor 3:  67.8%
+
+Inter-factor inner-product matrix (normalised loadings):
+  +1.000  -0.947  -0.951  +0.944
+  -0.947  +1.000  +0.966  -0.948
+  -0.951  +0.966  +1.000  -0.948
+  +0.944  -0.948  -0.948  +1.000
+
+Best-match cosine similarity to top-F train-surface PCAs:
+  factor 0: |sim|=0.961 (signed -0.961) with PC1
+  factor 1: |sim|=0.972 (signed +0.972) with PC1
+  factor 2: |sim|=0.970 (signed +0.970) with PC1
+  factor 3: |sim|=0.983 (signed -0.983) with PC1
+
+Interpretation hint:
+  - Smooth, rank-1-separable, near-orthogonal loadings AND high
+    |sim| to PCs (>0.8) ⇒ bottleneck has learned the factor
+    structure correctly.
+  - Noisy loadings, low separability, low |sim| (<0.5) ⇒ the
+    static reconstruction is poorly learned.

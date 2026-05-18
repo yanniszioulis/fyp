@@ -1,0 +1,27 @@
+PROBE 1: Cross-cell head similarity
+====================================
+
+head_weight shape: (150, 8, 21)
+Flattened to: (150, 168)
+
+Pairwise cosine similarity (off-diagonal):
+  mean: +0.987
+  p5:   +0.966
+  p25:  +0.982
+  p50:  +0.989  (median)
+  p75:  +0.994
+  p95:  +0.998
+
+SVD analysis (of the stacked [N_cells, d*P] head matrix):
+  effective rank (participation ratio): 1.76  (out of 150)
+  cumulative variance explained:
+    k= 1:   98.7%
+    k= 2:   99.4%
+    k= 3:   99.6%
+    k= 5:   99.9%
+    k=10:  100.0%
+
+Interpretation hint:
+  - mean cos > 0.9 AND eff_rank < 3 ⇒ heads collapsed; v2 ≈ v1.
+  - mean cos < 0.5 AND eff_rank > 20 ⇒ heads genuinely diverse.
+  - intermediate ⇒ heads cluster into a few patterns, not 150 independent maps.

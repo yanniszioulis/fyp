@@ -1,0 +1,45 @@
+PROBE 3: Per-regime factor amplitude trajectories
+==================================================
+
+g_pred captured from model.temporal output (forward hook).
+g_true obtained by least-squares projection of the de-meaned
+true future surface onto the spatial loadings:
+    g_true[b, p, :] = pinv(loadings) @ vec(Y_true_norm[b, p]).
+
+Trajectory MSE per (regime × factor):
+                     | factor0  factor1  factor2  factor3
+  -------------------+---------------------------------------
+  COVID              |  1.8829   4.6081   5.8119   7.8830
+  Reflation calm     |  0.2444   0.6400   0.7959   0.6944
+  Bear 2022          |  0.4466   1.1872   2.0328   0.8789
+  Normalisation      |  0.4478   0.7166   2.3217   1.5439
+
+Mean amplitudes at h ∈ {1, 10, 21} per (regime × factor):
+  (rows: regime;  cols: 'pred / true' at each h)
+  COVID:
+    factor 0:  h 1: +0.018 / -0.110 | h10: +0.166 / -0.116 | h21: +0.225 / -0.146
+    factor 1:  h 1: -0.084 / +0.246 | h10: -0.185 / +0.269 | h21: -0.297 / +0.346
+    factor 2:  h 1: -0.025 / +0.459 | h10: -0.149 / +0.548 | h21: -0.234 / +0.660
+    factor 3:  h 1: +0.316 / -0.446 | h10: +0.428 / -0.562 | h21: +0.552 / -0.714
+  Reflation calm:
+    factor 0:  h 1: -0.000 / +0.064 | h10: -0.010 / +0.052 | h21: -0.035 / +0.066
+    factor 1:  h 1: -0.050 / -0.147 | h10: -0.026 / -0.133 | h21: -0.081 / -0.159
+    factor 2:  h 1: +0.023 / -0.357 | h10: +0.026 / -0.407 | h21: -0.006 / -0.459
+    factor 3:  h 1: +0.355 / +0.170 | h10: +0.432 / +0.176 | h21: +0.522 / +0.183
+  Bear 2022:
+    factor 0:  h 1: +0.021 / +0.197 | h10: +0.106 / +0.269 | h21: +0.090 / +0.358
+    factor 1:  h 1: -0.081 / +0.115 | h10: -0.112 / +0.094 | h21: -0.189 / +0.083
+    factor 2:  h 1: -0.012 / +0.619 | h10: -0.093 / +0.744 | h21: -0.109 / +0.936
+    factor 3:  h 1: +0.332 / -0.289 | h10: +0.392 / -0.335 | h21: +0.439 / -0.410
+  Normalisation:
+    factor 0:  h 1: +0.005 / -0.057 | h10: +0.007 / -0.050 | h21: -0.050 / -0.070
+    factor 1:  h 1: -0.064 / -0.213 | h10: -0.041 / -0.284 | h21: -0.059 / -0.349
+    factor 2:  h 1: +0.013 / -0.487 | h10: +0.014 / -0.606 | h21: +0.017 / -0.785
+    factor 3:  h 1: +0.360 / +0.635 | h10: +0.420 / +0.810 | h21: +0.464 / +1.048
+
+Interpretation hint:
+  - Predicted ≈ true within each regime ⇒ factor path is correct;
+    look elsewhere for the regime gap.
+  - Predicted trajectories similar across regimes but true
+    trajectories differ ⇒ temporal map is regime-blind ⇒ need
+    conditional dynamics.

@@ -1,0 +1,13 @@
+{
+  "model": "dlinear",
+  "pred_len": 5,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.06377797217569342,
+  "best_epoch": 6,
+  "stop_epoch": 21,
+  "test_mse": 0.06762483716011047,
+  "test_rmse": 0.26004775938298424,
+  "test_mae": 0.17018958926200867,
+  "space": "standardized_log_iv"
+}

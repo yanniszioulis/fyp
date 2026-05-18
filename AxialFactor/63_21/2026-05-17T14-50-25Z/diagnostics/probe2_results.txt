@@ -1,0 +1,27 @@
+PROBE 2: Per-factor temporal map analysis
+=========================================
+
+Weight tensor: model.temporal.weight, shape [F=4, d_model=16, P=21].
+Per-factor SVD of W[f] = U diag(S) V^T (S ∈ R^{min(D,P)}).
+
+Per-factor effective rank (participation ratio  (Σs)² / Σs²):
+  factor 0: 2.88  (out of 16 possible)
+  factor 1: 2.95  (out of 16 possible)
+  factor 2: 2.93  (out of 16 possible)
+  factor 3: 2.77  (out of 16 possible)
+
+Per-factor rank-k explained variance:
+  factor 0: rank-1= 92.4%  rank-2= 97.3%  rank-3= 98.1%
+  factor 1: rank-1= 92.1%  rank-2= 97.2%  rank-3= 97.9%
+  factor 2: rank-1= 91.6%  rank-2= 97.3%  rank-3= 98.3%
+  factor 3: rank-1= 92.1%  rank-2= 97.5%  rank-3= 98.3%
+
+Cross-factor top-trajectory cosine similarity matrix:
+  +1.000  -0.999  -0.999  +0.998
+  -0.999  +1.000  +0.999  -0.997
+  -0.999  +0.999  +1.000  -0.997
+  +0.998  -0.997  -0.997  +1.000
+
+Interpretation hint:
+  - Low effective rank (<3) + high |off-diag sim| (>0.7) ⇒ map collapsed; capacity wasted.
+  - High effective rank (>5) + mixed-sign or near-zero off-diag ⇒ rich per-factor dynamics.

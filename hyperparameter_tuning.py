@@ -340,10 +340,10 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
     for epoch in range(1, epochs + 1):
         last_epoch = epoch
         t0 = time.time()
-        tr_loss = _epoch(adapter, Xtr, Ytr, batch_size, device,
-                         optimizer=optimizer, generator=gen,
-                         grad_clip=grad_clip)
-        va_loss = _epoch(adapter, Xva, Yva, batch_size, device, optimizer=None)
+        tr_loss, _, _ = _epoch(adapter, Xtr, Ytr, batch_size, device,
+                               optimizer=optimizer, generator=gen,
+                               grad_clip=grad_clip)
+        va_loss, _, _ = _epoch(adapter, Xva, Yva, batch_size, device, optimizer=None)
         dt = time.time() - t0
 
         improved = va_loss < best_val

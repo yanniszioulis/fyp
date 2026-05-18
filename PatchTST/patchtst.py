@@ -18,12 +18,10 @@ Hyperparameters (passed to PatchTST.__init__):
     head_dropout   float  — dropout in the prediction head. Default: 0.
     res_attention  bool   — pass attention scores residually between layers.
                             Default: True.
-    revin          bool   — joint per-window RevIN norm/denorm around the
-                            model: strips mean/std jointly over (L, C),
-                            preserving cross-channel structure within the
-                            window. Default: True.
-    affine         bool   — learnable affine in RevIN (only if revin=True).
-                            Default: False.
+    revin          bool   — per-window, per-channel RevIN norm/denorm around
+                            the model (Kim et al. 2022). Default: True.
+    affine         bool   — learnable per-channel affine in RevIN (only if
+                            revin=True). Default: False.
     padding_patch  str    — 'end' replicates the last value `stride` times
                             before unfolding (adds +1 patch). Default: 'end'.
     decomposition  bool   — DLinear-style trend/residual moving-average
@@ -51,11 +49,9 @@ from torch import Tensor
 
 class RevIN(nn.Module):
     """
-    Joint RevIN: per-window mean/std reduction over all non-batch axes
-    (L and C jointly). Strips overall window level/scale while preserving
-    cross-channel structure within the window. The `num_features` argument
-    is retained for API compatibility but only affects affine parameter
-    shape (which is now scalar regardless).
+    Reversible Instance Normalisation (Kim et al. 2022): per-window,
+    per-channel mean/std normalisation that is inverted after the model
+    to restore the original level/scale.
     """
     def __init__(self, num_features: int, eps: float = 1e-5, affine: bool = False):
         super().__init__()
@@ -63,9 +59,8 @@ class RevIN(nn.Module):
         self.eps = eps
         self.affine = affine
         if affine:
-            # Joint RevIN: one scalar pair, broadcasting across all positions.
-            self.affine_weight = nn.Parameter(torch.ones(1))
-            self.affine_bias   = nn.Parameter(torch.zeros(1))
+            self.affine_weight = nn.Parameter(torch.ones(num_features))
+            self.affine_bias   = nn.Parameter(torch.zeros(num_features))
 
     def forward(self, x: Tensor, mode: str) -> Tensor:
         if mode == "norm":
@@ -76,7 +71,8 @@ class RevIN(nn.Module):
         raise NotImplementedError(mode)
 
     def _get_statistics(self, x: Tensor):
-        dims = tuple(range(1, x.ndim))
+        # x: [B, T, C] — reduce over T only, keep per-channel stats.
+        dims = tuple(range(1, x.ndim - 1))
         self.mean  = x.mean(dim=dims, keepdim=True).detach()
         self.stdev = torch.sqrt(x.var(dim=dims, keepdim=True, unbiased=False) + self.eps).detach()
 

@@ -254,14 +254,20 @@ def build_model_for_tuning(name: str, model_kw: dict, pred_len: int,
         # `nhid` collapses the four GWN channel widths: residual = dilation
         # = skip = nhid, end = 2 * nhid. Other GWN init args are fixed to
         # mirror train.py's small starting point (in_dim=1, supports=None,
-        # gcn_bool=True, addaptadj=False — static graph by default; the
-        # grid can still override addaptadj if you want to sweep it).
-        mk   = dict(model_kw)
-        nhid = int(mk.pop("nhid"))
+        # gcn_bool=True, addaptadj=False — static graph by default). Grid
+        # values for keys that overlap the hard-coded ones are popped
+        # from `mk` first with the hard-coded value as the fallback, so
+        # the grid can sweep them (e.g. addaptadj: [false, true]) without
+        # the `**mk` splat colliding with the explicit kwargs.
+        mk        = dict(model_kw)
+        nhid      = int(mk.pop("nhid"))
+        addaptadj = bool(mk.pop("addaptadj", False))
+        gcn_bool  = bool(mk.pop("gcn_bool",  True))
+        aptinit   = mk.pop("aptinit", None)
         kw = dict(
             num_nodes=C, seq_len=L, pred_len=P,
             in_dim=1, supports=None,
-            gcn_bool=True, addaptadj=False, aptinit=None,
+            gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit,
             residual_channels=nhid, dilation_channels=nhid,
             skip_channels=nhid,     end_channels=2 * nhid,
             **mk,

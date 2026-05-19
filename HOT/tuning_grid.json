@@ -14,8 +14,8 @@
   "attn_dropout": 0.0,
   "min_epochs": 30,
   "n_blocks": 1,
-
-  "head_type":    ["mean", "flatten"],
+  "head_type": "mean",
+  
   "n_head":       [4, 8],
   "d_hidden":     [64, 128],
   "lr":           [2e-4, 5e-3],

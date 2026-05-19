@@ -76,7 +76,7 @@ from var import fit_var_p, make_step_window_fn  # noqa: E402
 # shared, see below.
 LR_DLINEAR        = 4e-3
 LR_PATCHTST       = 1e-3
-LR_HOT            = 2e-4
+LR_HOT            = 5e-3
 LR_TUCKER_DLINEAR = 1e-3
 LR_GWN            = 1e-3
 LR_AXIAL_FACTOR   = 1e-3
@@ -84,7 +84,7 @@ LR_ITRANSFORMER   = 1e-3
 
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
-WD_HOT            = 0.2
+WD_HOT            = 0.3
 WD_TUCKER_DLINEAR = 1e-2
 WD_GWN            = 1e-3
 # AxialFactor: no model-specific LR/WD grouping yet. The small factor
@@ -409,11 +409,16 @@ def build_model(name: str, pred_len: int, n_channels: int,
     if name == "patchtst":
         # Matches the prior tuning winner (combo_0001): patch_len=stride=7,
         # n_heads=2, d_ff=64, dropout=0.1, head_dropout=0.01, revin=False.
+        # `decomposition` enables the DLinear-style trend/residual split
+        # (two independent backbones + heads, summed); `kernel_size` is
+        # the moving-average kernel used only when decomposition=True
+        # (must be odd).
         kw = dict(
             c_in=C, seq_len=L, pred_len=P,
             patch_len=7, stride=7, d_model=32, n_heads=8,
             n_layers=2, d_ff=64, attn_dropout=0.0, dropout=0.2,
             head_dropout=0.05, revin=True, padding_patch="end",
+            decomposition=True, kernel_size=31,
         )
         m = PatchTST(**kw)
         return _PatchTSTAdapter(m), kw
@@ -426,8 +431,8 @@ def build_model(name: str, pred_len: int, n_channels: int,
             context_length=L, prediction_length=P,
             d_hidden=64, n_blocks=1, n_head=8, patch_size=7,
             attention_type="kronecker_sum",
-            dropout=0.1, attn_dropout=0.0, head_dropout=0.05,
-            pe="rope", norm=True, head_type="flatten",
+            dropout=0.2, attn_dropout=0.0, head_dropout=0.0,
+            pe="rope", norm=True, head_type="mean",
         )
         m = HOT(**kw)
         return _HOTAdapter(m, n_tau, n_money), kw

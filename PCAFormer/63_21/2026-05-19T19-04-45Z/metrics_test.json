@@ -1,0 +1,13 @@
+{
+  "model": "pcaformer",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.18370779870340886,
+  "best_epoch": 3,
+  "stop_epoch": 18,
+  "test_mse": 0.24199524521827698,
+  "test_rmse": 0.4919301222920558,
+  "test_mae": 0.3011227250099182,
+  "space": "standardized_log_iv"
+}

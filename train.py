@@ -57,7 +57,7 @@ import torch.nn as nn
 # Make the per-model packages importable as top-level modules.
 ROOT = os.path.dirname(os.path.abspath(__file__))
 for sub in ("DLinear", "PatchTST", "HOT", "Tucker_DLinear", "GWN",
-            "AxialFactor", "iTransformer", "VAR"):
+            "PCAFormer", "iTransformer", "VAR"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
 from dlinear import DLinear                # noqa: E402
@@ -65,7 +65,7 @@ from patchtst import PatchTST              # noqa: E402
 from hot import HOT                        # noqa: E402
 from tucker_dlinear import TuckerDLinear   # noqa: E402
 from gwn import GWN                        # noqa: E402
-from axial_factor import AxialFactor       # noqa: E402
+from pcaformer import PCAFormer            # noqa: E402
 from itransformer import ITransformer      # noqa: E402
 from var import fit_var_p, make_step_window_fn  # noqa: E402
 
@@ -79,7 +79,7 @@ LR_PATCHTST       = 1e-3
 LR_HOT            = 5e-3
 LR_TUCKER_DLINEAR = 1e-3
 LR_GWN            = 1e-3
-LR_AXIAL_FACTOR   = 1e-3
+LR_PCAFORMER      = 1e-3
 LR_ITRANSFORMER   = 1e-3
 
 WD_DLINEAR        = 0.0
@@ -87,10 +87,9 @@ WD_PATCHTST       = 1e-4
 WD_HOT            = 0.3
 WD_TUCKER_DLINEAR = 1e-2
 WD_GWN            = 1e-3
-# AxialFactor: no model-specific LR/WD grouping yet. The small factor
-# bottleneck is the regularisation, so we start with PatchTST-like
-# defaults (light WD, AdamW) and revisit if tuning suggests otherwise.
-WD_AXIAL_FACTOR   = 1e-4
+# PCAFormer: frozen PCA basis is the main regulariser; the transformer
+# itself is unconstrained. PatchTST-style defaults (light WD, AdamW).
+WD_PCAFORMER      = 1e-3
 # iTransformer: same shape of starting point — light WD, AdamW. The
 # attention-on-cells design is structurally similar to PatchTST's
 # attention-on-patches; matching its WD is the natural default.
@@ -113,7 +112,7 @@ BATCH_SIZE = 32
 LOOKBACK   = 63   # fixed across the project
 VALID_PRED_LEN = (1, 5, 10, 21, 63)
 DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
-                  "axial_factor", "itransformer")
+                  "pcaformer", "itransformer")
 
 # Folder names per model (where outputs land relative to repo root).
 MODEL_DIR = {
@@ -122,7 +121,7 @@ MODEL_DIR = {
     "hot":            "HOT",
     "tucker_dlinear": "Tucker_DLinear",
     "gwn":            "GWN",
-    "axial_factor":   "AxialFactor",
+    "pcaformer":      "PCAFormer",
     "itransformer":   "iTransformer",
     "var":            "VAR",
 }
@@ -317,10 +316,10 @@ class _GWNAdapter(_Adapter):
         return z.squeeze(-1)
 
 
-class _AxialFactorAdapter(_Adapter):
+class _PCAFormerAdapter(_Adapter):
     def __init__(self, model, n_tau, n_money):
         super().__init__(model)
-        # AxialFactor takes [B, L, W, H]; same convention as TuckerDLinear.
+        # PCAFormer takes [B, L, W, H]; same convention as TuckerDLinear.
         self.H, self.W = n_tau, n_money
 
     def forward(self, x):
@@ -335,7 +334,7 @@ class _ITransformerAdapter(_Adapter):
     def __init__(self, model, n_tau, n_money):
         super().__init__(model)
         # ITransformer takes [B, L, W, H]; same shape convention as
-        # AxialFactor / TuckerDLinear, so the reshape is identical.
+        # PCAFormer / TuckerDLinear, so the reshape is identical.
         self.H, self.W = n_tau, n_money
 
     def forward(self, x):
@@ -361,8 +360,8 @@ def build_adapter_from_kwargs(name: str, model_kwargs: dict,
         return _TuckerAdapter(TuckerDLinear(**model_kwargs), n_tau, n_money)
     if name == "gwn":
         return _GWNAdapter(GWN(**model_kwargs))
-    if name == "axial_factor":
-        return _AxialFactorAdapter(AxialFactor(**model_kwargs), n_tau, n_money)
+    if name == "pcaformer":
+        return _PCAFormerAdapter(PCAFormer(**model_kwargs), n_tau, n_money)
     if name == "itransformer":
         return _ITransformerAdapter(ITransformer(**model_kwargs), n_tau, n_money)
     raise ValueError(f"Unknown model: {name}")
@@ -475,18 +474,20 @@ def build_model(name: str, pred_len: int, n_channels: int,
         )
         m = GWN(**kw)
         return _GWNAdapter(m), kw
-    if name == "axial_factor":
-        # AxialFactor at default hyperparameters (n_factors=4, d_model=64,
-        # n_heads=4, norm='cell_mean', temporal_init_scale=0.02). The
-        # factor bottleneck is the regulariser; no model-specific LR/WD
-        # grouping is needed at first — default AdamW knobs apply.
+    if name == "pcaformer":
+        # PCAFormer hand-tuned to a small footprint: 3 PCs (top-3
+        # explain >95% of IV-surface variance), d_model=8, 1 encoder
+        # layer, 4 heads, FFN=32, dropout=0.3, RevIN no-affine. Frozen
+        # PCA basis is fit by train_deep_model via inner.fit_pca(Xtr)
+        # before the first epoch.
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            n_factors=4, d_model=16, n_heads=4,
-            norm="cell_full", temporal_init_scale=0.02,
+            n_factors=3, d_model=8, n_heads=4,
+            n_layers=1, d_ff=32, dropout=0.3,
+            revin_affine=False,
         )
-        m = AxialFactor(**kw)
-        return _AxialFactorAdapter(m, n_tau, n_money), kw
+        m = PCAFormer(**kw)
+        return _PCAFormerAdapter(m, n_tau, n_money), kw
     if name == "itransformer":
         # iTransformer at the conservative defaults from the model file:
         # d_model=64, n_blocks=2, n_heads=4, ffn_ratio=2, dropout=0.1,
@@ -496,7 +497,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
             d_model=64, n_blocks=1, n_heads=8,
-            ffn_ratio=2, dropout=0.5, head_init_scale=0.001,
+            ffn_ratio=4, dropout=0.3, head_init_scale=0.001,
         )
         m = ITransformer(**kw)
         return _ITransformerAdapter(m, n_tau, n_money), kw
@@ -509,7 +510,7 @@ LR_BY_MODEL = {
     "hot":            LR_HOT,
     "tucker_dlinear": LR_TUCKER_DLINEAR,
     "gwn":            LR_GWN,
-    "axial_factor":   LR_AXIAL_FACTOR,
+    "pcaformer":      LR_PCAFORMER,
     "itransformer":   LR_ITRANSFORMER,
 }
 
@@ -519,7 +520,7 @@ WD_BY_MODEL = {
     "hot":            WD_HOT,
     "tucker_dlinear": WD_TUCKER_DLINEAR,
     "gwn":            WD_GWN,
-    "axial_factor":   WD_AXIAL_FACTOR,
+    "pcaformer":      WD_PCAFORMER,
     "itransformer":   WD_ITRANSFORMER,
 }
 
@@ -645,11 +646,13 @@ def _epoch(model, X, Y, batch, device, optimizer=None, generator=None,
     Optional penalties (no-arg callables returning scalar tensors)
     fold into the training optimisation target:
         total = data_loss
-              + ortho_q_weight * ortho_q_fn()      (factor-query collinearity)
-              + ortho_L_weight * ortho_L_fn()      (spatial-loading collinearity)
-    Both are AxialFactor-specific. The reported `mean_data_loss` is the
-    MSE only (never the combined objective) so train/val numbers stay
-    comparable across models with and without the penalties.
+              + ortho_q_weight * ortho_q_fn()
+              + ortho_L_weight * ortho_L_fn()
+    No model currently registers a penalty — the hooks are kept so the
+    signature stays uniform with hyperparameter_tuning.py. The reported
+    `mean_data_loss` is the MSE only (never the combined objective) so
+    train/val numbers stay comparable across models with and without
+    the penalties.
     """
     train = optimizer is not None
     model.train(train)
@@ -742,7 +745,7 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         # tuning. grad_clip stabilises GWN's noisy-val updates and HOT/
         # PatchTST's attention init.
         use_adamw = name in ("tucker_dlinear", "hot", "patchtst", "dlinear",
-                             "axial_factor", "itransformer")
+                             "pcaformer", "itransformer")
         grad_clip = 1.0 if use_adamw else None
         if name == "tucker_dlinear":
             # G core gets its own multipliers; factor matrices stay at
@@ -773,89 +776,79 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     adapter.to(device)
     n_params = sum(p.numel() for p in adapter.parameters())
 
-    # Per-cell forecast-head bias warm-start (iTransformer).
+    # Shared forecast-head bias warm-start (iTransformer).
     #
-    # If the underlying model exposes `head_bias` of shape [W*H, P], set
-    # it to the per-cell-per-horizon training mean. This makes the
-    # model's step-0 forecast "predict each cell's historical mean
-    # trajectory" — a strong baseline in calm regimes that the model
-    # then refines, rather than spending early-training capacity
-    # learning absolute levels from scratch.
+    # If the underlying model exposes a shared `head` (nn.Linear with
+    # bias of shape [P]), set the bias to the per-horizon training
+    # mean (averaged over cells). This makes the model's step-0
+    # forecast "predict the cross-cell historical mean per horizon" —
+    # a coarse but reasonable level baseline that the model then
+    # refines, rather than spending early-training capacity learning
+    # absolute levels from scratch.
     #
     # Ytr is [N_train, P, C=H*W] with C laid out tau-outer-moneyness-
-    # inner (parse_grid convention). The model's head_bias is
-    # [W*H, P] in W-outer-H-inner order (matching its tokenisation), so
-    # we reshape (N, P, H, W) → permute to (P, W, H) → flatten to
-    # (W*H, P) to align indices.
-    #
-    # Note on future weight-decay tuning: at d_model=8 the per-cell
-    # head_weight is the model's largest parameter group (~25k params).
-    # If a future run shows train/val gap > ~1.5×, the natural fix is
-    # an AdamW param-group with higher wd on head_weight specifically.
-    # Not done now — start with uniform wd and let the data tell us.
+    # inner (parse_grid convention). Per-horizon mean is just
+    # Ytr.mean(axis=0).mean(axis=1) → shape [P].
     inner_model = getattr(adapter, "model", adapter)
-    # Skip the warm-start when per-cell RevIN is active: under RevIN
-    # the model's output is denormalised by adding the input's per-cell
-    # lookback mean back, so head_bias=0 already yields a "predict
-    # per-cell lookback mean" warm start. Leaving the bias at zero
-    # also keeps it interpretable as a learned deviation from RevIN's
-    # baseline.
-    revin_on = bool(getattr(inner_model, "revin", False))
-    if (hasattr(inner_model, "head_bias")
-            and isinstance(inner_model.head_bias, nn.Parameter)
-            and not revin_on):
-        H_g, W_g = grid.n_tau, grid.n_money
-        P_h = pred_len
-        # Ytr: numpy [N, P, C]; mean over N then reshape to [W*H, P].
-        cell_mean = Ytr.mean(axis=0)                          # [P, C]
-        cell_mean = (
-            cell_mean.reshape(P_h, H_g, W_g)
-                     .transpose(0, 2, 1)                      # [P, W, H]
-                     .transpose(1, 2, 0)                      # [W, H, P]
-                     .reshape(W_g * H_g, P_h)
-        )
-        with torch.no_grad():
-            inner_model.head_bias.copy_(
-                torch.from_numpy(cell_mean.astype(np.float32)).to(device)
-            )
-        print(f"  itransformer head_bias warm-started: "
-              f"mean={inner_model.head_bias.mean().item():+.4f}  "
-              f"std={inner_model.head_bias.std().item():.4f}  "
-              f"shape={tuple(inner_model.head_bias.shape)}")
-    elif revin_on:
-        print(f"  itransformer revin=True: head_bias kept at zero; "
-              f"per-cell RevIN supplies the level warm-start.")
+    if name == "itransformer":
+        # Skip the warm-start when per-cell RevIN is active: under RevIN
+        # the model's output is denormalised by adding the input's
+        # per-cell lookback mean back, so head.bias=0 already yields a
+        # "predict per-cell lookback mean" warm start. Leaving the bias
+        # at zero also keeps it interpretable as a learned deviation
+        # from RevIN's baseline.
+        revin_on = bool(getattr(inner_model, "revin", False))
+        head_module = getattr(inner_model, "head", None)
+        if (isinstance(head_module, nn.Linear)
+                and head_module.bias is not None
+                and head_module.out_features == pred_len
+                and not revin_on):
+            # Ytr: numpy [N, P, C]; mean over N and over cells gives [P].
+            per_horizon_mean = Ytr.mean(axis=0).mean(axis=1)         # [P]
+            with torch.no_grad():
+                head_module.bias.copy_(
+                    torch.from_numpy(per_horizon_mean.astype(np.float32)).to(device)
+                )
+            print(f"  itransformer head.bias warm-started: "
+                  f"mean={head_module.bias.mean().item():+.4f}  "
+                  f"std={head_module.bias.std().item():.4f}  "
+                  f"shape={tuple(head_module.bias.shape)}")
+        elif revin_on and isinstance(head_module, nn.Linear):
+            print(f"  itransformer revin=True: head.bias kept at zero; "
+                  f"per-cell RevIN supplies the level warm-start.")
 
-    # Optional per-model regularisers added to the training loss.
-    #
-    # AxialFactor's orthogonality penalties (factor_orthogonality_loss,
-    # loading_orthogonality_loss) are DISABLED for Ax5+: the new
-    # _PerFactorAR module fixes the underlying gradient-collapse
-    # mechanism (free per-factor temporal maps drifting onto a shared
-    # residual shape) structurally, so the penalties — which were
-    # band-aids on parameter geometry — are no longer warranted. Their
-    # methods remain on the model for ablation; just stop calling them.
-    #
-    # Re-enable by un-commenting the discovery hooks below if probes on
-    # an Ax5+ run show downstream collapse despite the AR module.
+    # PCAFormer one-shot PCA fit. The model's PCA basis must be set
+    # before the first forward pass; we fit on the same training
+    # windows the trainer is about to use, in the same RevIN-normalised
+    # space the forward will see. Mirrors the adapter's [B,L,C] →
+    # [B,L,W,H] reshape so the model fits on the canonical surface
+    # layout.
     inner = getattr(adapter, "model", adapter)
+    if name == "pcaformer":
+        Xtr_t = torch.from_numpy(Xtr).to(device)
+        N_w, L_w, C_w = Xtr_t.shape
+        surfaces = (Xtr_t
+                    .reshape(N_w, L_w, grid.n_tau, grid.n_money)
+                    .permute(0, 1, 3, 2)
+                    .contiguous())                            # [N, L, W, H]
+        inner.fit_pca(surfaces)
+        ev = inner.explained_variance_ratio(surfaces).item()
+        print(f"  pcaformer PCA basis fit on {N_w} train windows × "
+              f"{L_w} timesteps; top-{inner.n_factors} "
+              f"explained variance ratio = {ev:.4f}")
+        del Xtr_t, surfaces
+
+    # Optional per-model regularisers added to the training loss. No
+    # model currently registers a penalty (the old AxialFactor
+    # orthogonality hooks were removed with that model); the
+    # `ortho_q_fn` / `ortho_L_fn` plumbing is kept null so the
+    # `_epoch` signature stays uniform for hyperparameter_tuning.py,
+    # which calls the same helper.
     ortho_q_fn = None
     ortho_q_weight = 0.0
     ortho_L_fn = None
     ortho_L_weight = 0.0
-    # if hasattr(inner, "factor_orthogonality_loss"):
-    #     ortho_q_fn = inner.factor_orthogonality_loss
-    #     ortho_q_weight = 1e-2
-    # if hasattr(inner, "loading_orthogonality_loss"):
-    #     ortho_L_fn = inner.loading_orthogonality_loss
-    #     ortho_L_weight = 1e-2
-
-    # Probe the AR temporal module for per-epoch diagnostics. Logged at
-    # the end of every epoch so we can watch ρ_f diverge across factors
-    # (or collapse, if the AR fix doesn't suffice).
-    ar_temporal = getattr(inner, "temporal", None)
-    has_ar = ar_temporal is not None and hasattr(ar_temporal, "rho")
-    has_ortho = (ortho_q_fn is not None) or (ortho_L_fn is not None)
+    has_ortho = False
 
     if name == "tucker_dlinear" and lr_g is not None:
         g_params, other_params = [], []
@@ -893,10 +886,10 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     log_path = os.path.join(out_dir, "train_log.csv")
     log_f    = open(log_path, "w", newline="")
     log_w    = csv.writer(log_f)
-    # `ortho_q` and `ortho_L` columns are the mean per-batch
-    # factor-query and spatial-loading orthogonality penalties for the
-    # training epoch (0 when the model has no such penalty). Uniform
-    # CSV schema across models.
+    # `ortho_q` and `ortho_L` columns are the mean per-batch penalty
+    # values reported by `_epoch` (0 when no penalty is registered —
+    # currently the case for every model). Kept for CSV schema
+    # stability across the per-model train logs.
     log_w.writerow(["epoch", "train_loss", "val_loss", "lr",
                     "epoch_time_s", "ortho_q", "ortho_L"])
 
@@ -927,29 +920,8 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         marker = "  [best]" if improved else ""
         ortho_str = (f"  ortho_q={tr_ortho_q:.6f}  ortho_L={tr_ortho_L:.6f}"
                      if has_ortho else "")
-        # AR diagnostic: print per-factor persistence (ρ) and long-run
-        # mean (μ) so we can see ρ_f diverge (or collapse) by eye.
-        # Plus the AR gate at h=1, h=10, h=21 — the primary diagnostic
-        # of whether the model is using the gate to suppress AR at
-        # short horizons (the targeted Ax6 fix for Ax5's h=1 regression).
-        ar_str = ""
-        if has_ar:
-            with torch.no_grad():
-                rho_vals = ar_temporal.rho().detach().cpu().tolist()
-                mu_vals  = ar_temporal.mu.detach().cpu().tolist()
-                has_gate = hasattr(ar_temporal, "gate")
-                if has_gate:
-                    gate_vec = ar_temporal.gate().detach().cpu()
-                    g1  = gate_vec[0].item()
-                    g_mid = gate_vec[len(gate_vec) // 2].item()
-                    gN  = gate_vec[-1].item()
-            ar_str = ("  ρ=[" + " ".join(f"{r:+.2f}" for r in rho_vals)
-                      + "]  μ=[" + " ".join(f"{m:+.2f}" for m in mu_vals)
-                      + "]")
-            if has_gate:
-                ar_str += f"  ar_gate=[{g1:.2f} {g_mid:.2f} {gN:.2f}]"
         print(f"  epoch {epoch:3d}/{EPOCHS}  "
-              f"train={tr_loss:.6f}  val={va_loss:.6f}{ortho_str}{ar_str}  "
+              f"train={tr_loss:.6f}  val={va_loss:.6f}{ortho_str}  "
               f"({dt:.1f}s){marker}")
         log_w.writerow([epoch, f"{tr_loss:.8f}", f"{va_loss:.8f}",
                         f"{lr:.8g}", f"{dt:.3f}",
@@ -1041,28 +1013,6 @@ def train_deep_model(name: str, data: dict, pred_len: int,
 
     print(f"  test: mse={mse:.6f}  rmse={rmse:.6f}  mae={mae:.6f}")
     _per_regime_breakdown(preds_te, Yte, Xte, data, pred_len)
-    if has_ar:
-        # Load the best (early-stopped) AR coefficients before printing
-        # — train_log already showed end-of-training values; this is the
-        # set actually shipped via best_model.pt.
-        with torch.no_grad():
-            best_rho = best_state["model.temporal.rho_raw"].tanh().tolist()
-            best_mu  = best_state["model.temporal.mu"].tolist()
-            # Recompute the gate from the best state's parameters by
-            # temporarily reloading them. Easier than re-implementing the
-            # sigmoid math here; adapter is already restored to best_state
-            # earlier in this function.
-            if hasattr(ar_temporal, "gate"):
-                best_gate = ar_temporal.gate().detach().cpu().tolist()
-            else:
-                best_gate = None
-        rho_str = "  ".join(f"{r:+.4f}" for r in best_rho)
-        mu_str  = "  ".join(f"{m:+.4f}" for m in best_mu)
-        print(f"  Final AR persistences   ρ = [{rho_str}]")
-        print(f"  Final AR long-run means μ = [{mu_str}]")
-        if best_gate is not None:
-            gate_str = " ".join(f"{g:.3f}" for g in best_gate)
-            print(f"  Final AR gate (h=1..{len(best_gate)}) = [{gate_str}]")
     print(f"  saved → {os.path.relpath(out_dir, ROOT)}\n")
 
 

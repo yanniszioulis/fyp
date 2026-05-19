@@ -10,7 +10,13 @@
   "first_date": "2004-01-02",
   "last_date": "2023-12-29",
   "test_first_target_date": "2019-12-02",
-  "winner": null,
+  "winner": {
+    "combo_id": "combo_0022",
+    "best_val_loss": 0.18089371255300865,
+    "best_epoch": 29,
+    "config_path": "HOT/tuning_results/63_21/kronecker_product/combo_0022/config.json",
+    "checkpoint": "HOT/tuning_results/63_21/kronecker_product/combo_0022/best_model.pt"
+  },
   "ranking": [
     {
       "combo_id": "combo_0022",

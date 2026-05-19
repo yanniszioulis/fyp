@@ -3,11 +3,11 @@
   "pred_len": 21,
   "lookback": 63,
   "n_test": 1007,
-  "best_val_mse": 0.16522764609330454,
-  "best_epoch": 16,
-  "stop_epoch": 31,
-  "test_mse": 0.2308017909526825,
-  "test_rmse": 0.48041834993334975,
-  "test_mae": 0.29456445574760437,
+  "best_val_mse": 0.1698251538993291,
+  "best_epoch": 11,
+  "stop_epoch": 30,
+  "test_mse": 0.22945536673069,
+  "test_rmse": 0.47901499635260897,
+  "test_mae": 0.29138004779815674,
   "space": "standardized_log_iv"
 }

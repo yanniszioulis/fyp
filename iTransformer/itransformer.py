@@ -2,19 +2,21 @@
 iTransformer for IV-surface forecasting.
 
 Cell-as-token attention with per-cell linear time handling. Built
-after five rounds on AxialFactor showed that the factor-decomposition
-framework had a local ceiling at ~10 % above DLinear on this dataset.
-Pivots to a different architectural class entirely: keep DLinear's
-strong per-cell time map, but bolt on cross-cell self-attention as the
-mechanism for cells to share information — the piece DLinear lacks.
+after five rounds of factor-decomposition experiments (predecessor
+`AxialFactor` model, since removed) showed that route had a local
+ceiling at ~10 % above DLinear on this dataset. Pivots to a different
+architectural class entirely: keep DLinear's strong per-cell time map,
+but bolt on cross-cell self-attention as the mechanism for cells to
+share information — the piece DLinear lacks.
 
 Motivation
 ----------
 DLinear's per-cell linear (lookback → horizon) is the strong baseline.
 Adding attention over time was overkill on this data (HOT confirmed).
 Removing the per-cell time map and forcing everything through a factor
-bottleneck was also overkill (AxialFactor confirmed). The remaining
-under-exploited structure in the dataset is **cross-cell relationships**
+bottleneck was also overkill (factor-decomposition experiments
+confirmed). The remaining under-exploited structure in the dataset is
+**cross-cell relationships**
 — how moneyness × τ cells co-move at a given moment. iTransformer
 captures exactly that:
 
@@ -34,9 +36,10 @@ Architectural choices
   per-window variant used by DLinear / PatchTST). With this on, the
   model implicitly starts by predicting "per-cell lookback mean
   broadcast across horizons" — the same warm-start the no-RevIN
-  variant needed an explicit `head_bias` warm-start to express. Pass
-  `revin=False` to disable; then `train.py` warm-starts the head bias
-  to the per-cell-per-horizon training-target mean instead.
+  variant needed an explicit head-bias warm-start to express. Pass
+  `revin=False` to disable; then `train.py` warm-starts the shared
+  head bias to the per-horizon training-target mean (averaged over
+  cells) instead.
 * **Fixed 2D sinusoidal positional encoding, split-half.** The first
   d_model/2 dimensions sinusoidally encode moneyness index; the
   second d_model/2 dimensions encode τ index. Pe is built once at
@@ -53,18 +56,17 @@ Architectural choices
 * **Two transformer blocks**, pre-norm, GELU FFN inner-dim ratio 2
   (instead of the usual 4). Conservative defaults for ~1 200 training
   windows.
-* **Per-cell output head.** Each cell has its own [d_model, pred_len]
-  weight matrix and [pred_len] bias. The shared embedding +
-  cross-cell attention build a context-aware token per cell; the
-  per-cell head then decodes that token into a cell-specific forecast
-  trajectory. This is the iTransformer ↔ DLinear hybrid: cross-cell
-  information sharing in the attention, per-cell expressiveness in
-  the head. Weights are trunc_normal(std=head_init_scale=0.001); the
-  bias is zero-init at construction but **warm-started in train.py to
-  the per-cell-per-horizon training mean before the optimiser is
-  built** — the model starts by predicting the historical mean per
-  cell per horizon, a reasonable baseline that is particularly
-  accurate in calm regimes.
+* **Shared output head.** A single `nn.Linear(d_model, pred_len)` is
+  applied identically to every cell token — the canonical iTransformer
+  projection. Cell-specific behaviour is carried by (i) each cell's
+  attention-mixed token and (ii) the cell's own RevIN stats restored
+  at the end of the forward; the projector itself is one set of
+  weights shared across the W·H tokens. Weight is initialised with
+  trunc_normal(std=head_init_scale=0.001); the bias is zero-init at
+  construction. Under RevIN (default) the bias stays at zero — RevIN's
+  inverse already supplies the per-cell level. With `revin=False`,
+  `train.py` warm-starts the shared bias to the per-horizon training
+  mean (averaged over cells).
 
 Pipeline
 --------
@@ -78,7 +80,7 @@ Pipeline
      ──(N transformer blocks: pre-norm self-attn + pre-norm FFN)──▶
    tokens [B, W·H, d_model]
      ──(head_norm)──▶
-     ──(per-cell head: [d_model → pred_len] map and bias, one per cell)──▶
+     ──(shared head: nn.Linear(d_model → pred_len), applied to every token)──▶
    forecast [B, W·H, P]
      ──(reshape & permute back to grid)──▶
    forecast [B, P, W, H]
@@ -100,10 +102,10 @@ Hyperparameters (passed to ITransformer.__init__)
                               training-set size).
     dropout          float — dropout in FFN and on attention output.
                               Default 0.1.
-    head_init_scale  float — std of trunc_normal init for the output
-                              head's weight. Default 0.001 so the
-                              initial forecast is ~zero and the head
-                              learns absolute level cleanly from
+    head_init_scale  float — std of trunc_normal init for the shared
+                              output head's weight. Default 0.001 so
+                              the initial forecast is ~zero and the
+                              head learns absolute level cleanly from
                               gradient signal.
 
 Input:  [B, seq_len,  W, H]
@@ -286,9 +288,9 @@ class ITransformer(nn.Module):
         # of forward(). This is the iTransformer-canonical normalisation
         # (per-variable rather than the joint per-window variant used
         # in DLinear / PatchTST). It also folds in the "predict per-cell
-        # lookback mean" warm-start that v2 previously needed an
-        # explicit head_bias warm-start for: with zero head_bias and
-        # tiny head_weight, the model's normalised-space forecast is
+        # lookback mean" warm-start that would otherwise need an
+        # explicit head-bias warm-start: with zero head bias and
+        # tiny head weight, the model's normalised-space forecast is
         # ~0, so the de-normalised forecast is approximately the
         # per-cell lookback mean broadcast across horizons.
         if self.revin:
@@ -311,36 +313,31 @@ class ITransformer(nn.Module):
             for _ in range(n_blocks)
         ])
 
-        # Output head: pre-norm + per-cell [d_model → pred_len] map.
+        # Output head: pre-norm + shared [d_model → pred_len] map.
         #
-        # Each of the W·H cells has its own [d_model, pred_len] weight
-        # matrix and [pred_len] bias. The shared embedding + cross-cell
-        # attention build a context-aware token per cell; the per-cell
-        # head then decodes that token into a cell-specific forecast.
-        # This is the iTransformer ↔ DLinear hybrid: cross-cell info
-        # sharing in the attention, per-cell expressiveness in the head.
+        # Canonical iTransformer projection: a single nn.Linear applied
+        # identically to every cell token. Cell-specific behaviour
+        # comes from (i) the attention-mixed token (cell n carries the
+        # context relevant to cell n) and (ii) the per-cell RevIN
+        # statistics restored at the end of forward — not from
+        # cell-specific projection weights.
         #
-        # Param count: W·H · (d_model·pred_len + pred_len). At W=15,
-        # H=10, d_model=8, P=21 this is 150·(168+21) = 28 350 params —
-        # the model's largest single group. If overfitting emerges
-        # (train/val gap > ~1.5×), the first fix is a higher weight
-        # decay on `head_weight` specifically (see notes in train.py).
+        # Param count: d_model·pred_len + pred_len. At d_model=8, P=21
+        # this is 168 + 21 = 189 params — two orders of magnitude
+        # smaller than the previous per-cell head.
         #
-        # head_weight init: trunc_normal(std=head_init_scale) so the
-        # forecast at step 0 is ~ head_bias (and tiny noise around it).
-        # head_bias is zero-init at construction; train.py warm-starts
-        # it to the per-cell-per-horizon training mean before the
-        # optimiser is built, so the model starts predicting the
-        # historical mean per cell per horizon — a reasonable baseline
-        # particularly accurate in calm regimes.
+        # weight init: trunc_normal(std=head_init_scale) so the
+        # forecast at step 0 is ~ bias (and tiny noise around it).
+        # bias is zero-init at construction; under RevIN (default) it
+        # stays there because the inverse RevIN supplies the per-cell
+        # level. With revin=False, train.py warm-starts the bias to
+        # the per-horizon training mean (averaged over cells) before
+        # the optimiser is built.
         self.head_norm = nn.LayerNorm(d_model)
-        self.head_weight = nn.Parameter(
-            torch.empty(W * H, d_model, pred_len)
-        )
-        self.head_bias = nn.Parameter(torch.zeros(W * H, pred_len))
+        self.head = nn.Linear(d_model, pred_len)
         with torch.no_grad():
-            nn.init.trunc_normal_(self.head_weight, std=head_init_scale)
-            # head_bias stays at zero here — train.py warm-starts it.
+            nn.init.trunc_normal_(self.head.weight, std=head_init_scale)
+            nn.init.zeros_(self.head.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B, L, W, H]
@@ -375,14 +372,11 @@ class ITransformer(nn.Module):
         for block in self.blocks:
             tokens = block(tokens)
 
-        # Step 6: per-cell forecast head. Each cell has its own
-        # [d_model, pred_len] weight matrix; the einsum applies the
-        # n-th cell's weights to the n-th cell's token.
+        # Step 6: shared forecast head. nn.Linear broadcasts over the
+        # token dim, so every cell's token is projected with the same
+        # [d_model, pred_len] weight matrix and [pred_len] bias.
         tokens = self.head_norm(tokens)                              # [B, W*H, d]
-        forecast = (
-            torch.einsum("bnd,ndp->bnp", tokens, self.head_weight)
-            + self.head_bias                                         # [B, W*H, P]
-        )
+        forecast = self.head(tokens)                                 # [B, W*H, P]
 
         # Step 6b: invert the per-cell RevIN. Pre-norm shape is
         # [B, pred_len, n_cells], so transpose to align with how the
@@ -430,7 +424,7 @@ if __name__ == "__main__":
     #     normalised-space forecast is approximately the input's per-
     #     cell lookback mean broadcast across horizons (the "predict
     #     per-cell mean" warm-start that RevIN provides for free).
-    #   - With revin=False: head_weight is small-init'd and head_bias
+    #   - With revin=False: head.weight is small-init'd and head.bias
     #     is zero, so the forecast itself is small.
     model.zero_grad()
     with torch.no_grad():
@@ -454,11 +448,11 @@ if __name__ == "__main__":
             f"max={max_abs}"
         )
 
-    # head_bias must be exactly zero at construction. Under RevIN it
-    # stays zero (RevIN handles the level warm-start). Without RevIN,
-    # train.py warm-starts it to per-cell-per-horizon training means.
-    assert model.head_bias.abs().max().item() == 0.0, (
-        "head_bias should be zero at construction; "
+    # Shared head bias must be exactly zero at construction. Under
+    # RevIN it stays zero (RevIN handles the level warm-start). Without
+    # RevIN, train.py warm-starts it to the per-horizon training mean.
+    assert model.head.bias.abs().max().item() == 0.0, (
+        "head.bias should be zero at construction; "
         "warm-start (no-RevIN path) happens in train.py"
     )
 

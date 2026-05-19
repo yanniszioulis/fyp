@@ -74,6 +74,7 @@ from train import (
     EPOCHS,
     GWN,
     HOT,
+    ITransformer,
     LOOKBACK,
     MIN_EPOCHS,
     MODEL_DIR,
@@ -84,6 +85,7 @@ from train import (
     _DLinearAdapter,
     _GWNAdapter,
     _HOTAdapter,
+    _ITransformerAdapter,
     _PatchTSTAdapter,
     _TuckerAdapter,
     _epoch,
@@ -93,7 +95,7 @@ from train import (
 )
 
 
-TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn")
+TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn", "itransformer")
 
 # Grid-key buckets.
 TRAINER_KEYS    = {"epochs", "patience", "min_epochs", "batch_size"}
@@ -252,18 +254,22 @@ def build_model_for_tuning(name: str, model_kw: dict, pred_len: int,
         # `nhid` collapses the four GWN channel widths: residual = dilation
         # = skip = nhid, end = 2 * nhid. Other GWN init args are fixed to
         # mirror train.py's small starting point (in_dim=1, supports=None,
-        # gcn_bool=True, addaptadj=True).
+        # gcn_bool=True, addaptadj=False — static graph by default; the
+        # grid can still override addaptadj if you want to sweep it).
         mk   = dict(model_kw)
         nhid = int(mk.pop("nhid"))
         kw = dict(
             num_nodes=C, seq_len=L, pred_len=P,
             in_dim=1, supports=None,
-            gcn_bool=True, addaptadj=True, aptinit=None,
+            gcn_bool=True, addaptadj=False, aptinit=None,
             residual_channels=nhid, dilation_channels=nhid,
             skip_channels=nhid,     end_channels=2 * nhid,
             **mk,
         )
         return _GWNAdapter(GWN(**kw)), kw
+    if name == "itransformer":
+        kw = dict(seq_len=L, pred_len=P, W=n_money, H=n_tau, **model_kw)
+        return _ITransformerAdapter(ITransformer(**kw), n_tau, n_money), kw
     raise ValueError(f"Unsupported model: {name!r}")
 
 
@@ -306,7 +312,7 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
              {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
         )
         grad_clip = 1.0
-    elif name in ("hot", "patchtst"):
+    elif name in ("hot", "patchtst", "itransformer"):
         # Mirror train.py: AdamW + grad_clip=1.0. AdamW's decoupled weight
         # decay matters for transformers (Adam couples WD through the
         # second-moment normalisation in ways that destabilise attention),
@@ -373,7 +379,7 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
         "lookback":        LOOKBACK,
         "combo":           combo,
         "model_kwargs":    resolved,
-        "optimizer":       "AdamW" if name in ("tucker_dlinear", "hot", "patchtst") else "Adam",
+        "optimizer":       "AdamW" if name in ("tucker_dlinear", "hot", "patchtst", "itransformer") else "Adam",
         "lr":              lr,
         "weight_decay":    wd,
         "lr_g":            lr_g,

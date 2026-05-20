@@ -47,7 +47,8 @@ from train import (
 )
 
 
-DEEP_NAMES     = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn")
+DEEP_NAMES     = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
+                  "itransformer")
 VARIANT_MODELS = {
     "hot": ("kronecker_product", "kronecker_sum"),
 }

@@ -39,9 +39,12 @@ every combo's score, the ranking, and the winner.
 
 Notes
 -----
-* Supported models: dlinear, patchtst, hot, tucker_dlinear, gwn.
+* Supported models: dlinear, patchtst, hot, tucker_dlinear, gwn,
+  itransformer, pcaformer.
   GWN's grid uses `nhid` as a unified channel knob — the build branch
   expands it into residual/dilation/skip/end channels.
+  PCAFormer's frozen PCA basis is fit per-combo before the first epoch
+  (mirrors train.py); the basis ships inside the saved state_dict.
 * String knobs in grids are coerced: "on" → True, "off" → False.
 * Resume by default: combos whose params already match a saved
   `config.json` are reused (their existing combo_id is kept, no retrain).
@@ -79,6 +82,7 @@ from train import (
     MIN_EPOCHS,
     MODEL_DIR,
     PATIENCE,
+    PCAFormer,
     PatchTST,
     ROOT,
     TuckerDLinear,
@@ -86,6 +90,7 @@ from train import (
     _GWNAdapter,
     _HOTAdapter,
     _ITransformerAdapter,
+    _PCAFormerAdapter,
     _PatchTSTAdapter,
     _TuckerAdapter,
     _epoch,
@@ -95,7 +100,8 @@ from train import (
 )
 
 
-TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn", "itransformer")
+TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
+           "itransformer", "pcaformer")
 
 # Grid-key buckets.
 TRAINER_KEYS    = {"epochs", "patience", "min_epochs", "batch_size"}
@@ -276,6 +282,9 @@ def build_model_for_tuning(name: str, model_kw: dict, pred_len: int,
     if name == "itransformer":
         kw = dict(seq_len=L, pred_len=P, W=n_money, H=n_tau, **model_kw)
         return _ITransformerAdapter(ITransformer(**kw), n_tau, n_money), kw
+    if name == "pcaformer":
+        kw = dict(seq_len=L, pred_len=P, W=n_money, H=n_tau, **model_kw)
+        return _PCAFormerAdapter(PCAFormer(**kw), n_tau, n_money), kw
     raise ValueError(f"Unsupported model: {name!r}")
 
 
@@ -302,6 +311,23 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
     adapter.to(device)
     n_params = sum(p.numel() for p in adapter.parameters())
 
+    # PCAFormer needs its frozen PCA basis populated before any forward
+    # pass. Fit it on the same training windows the trainer is about to
+    # use, reshaped [N,L,C] → [N,L,W,H] to match the adapter's internal
+    # surface layout (mirrors train.train_deep_model). The basis is a
+    # register_buffer, so it ships inside best_state and is restored by
+    # load_state_dict in evaluate_winner_on_test — no refit there.
+    if name == "pcaformer":
+        inner = getattr(adapter, "model", adapter)
+        Xtr_t = torch.from_numpy(Xtr).to(device)
+        N_w, L_w, _ = Xtr_t.shape
+        surfaces = (Xtr_t
+                    .reshape(N_w, L_w, grid.n_tau, grid.n_money)
+                    .permute(0, 1, 3, 2)
+                    .contiguous())
+        inner.fit_pca(surfaces)
+        del Xtr_t, surfaces
+
     lr = float(opt_kw["lr"])
     wd = float(opt_kw.get("weight_decay", 0.0))
     if name == "tucker_dlinear":
@@ -318,7 +344,7 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
              {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
         )
         grad_clip = 1.0
-    elif name in ("hot", "patchtst", "itransformer"):
+    elif name in ("hot", "patchtst", "itransformer", "pcaformer"):
         # Mirror train.py: AdamW + grad_clip=1.0. AdamW's decoupled weight
         # decay matters for transformers (Adam couples WD through the
         # second-moment normalisation in ways that destabilise attention),
@@ -385,7 +411,7 @@ def run_one_combo(name: str, pred_len: int, combo: dict, data: dict,
         "lookback":        LOOKBACK,
         "combo":           combo,
         "model_kwargs":    resolved,
-        "optimizer":       "AdamW" if name in ("tucker_dlinear", "hot", "patchtst", "itransformer") else "Adam",
+        "optimizer":       "AdamW" if name in ("tucker_dlinear", "hot", "patchtst", "itransformer", "pcaformer") else "Adam",
         "lr":              lr,
         "weight_decay":    wd,
         "lr_g":            lr_g,

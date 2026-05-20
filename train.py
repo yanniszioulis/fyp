@@ -482,8 +482,8 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # before the first epoch.
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            n_factors=3, d_model=8, n_heads=4,
-            n_layers=1, d_ff=32, dropout=0.3,
+            n_factors=3, d_model=4, n_heads=4,
+            n_layers=1, d_ff=16, dropout=0.3,
             revin_affine=False,
         )
         m = PCAFormer(**kw)

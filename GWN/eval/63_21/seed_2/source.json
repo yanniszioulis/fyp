@@ -2,8 +2,8 @@
   "model": "gwn",
   "variant": null,
   "seed": 2,
-  "winner_combo": "combo_0034",
-  "winner_source": "GWN/tuning_results/63_21/combo_0034/config.json",
+  "winner_combo": "combo_0069",
+  "winner_source": "GWN/tuning_results/63_21/combo_0069/config.json",
   "pred_len": 21,
   "data_end": "2023-12-29"
 }

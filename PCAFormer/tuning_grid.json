@@ -12,10 +12,8 @@
 
   "_d_model_n_heads_d_ff_pairs": [
     {"d_model": 4,  "n_heads": 4, "d_ff": 16},
-    {"d_model": 8,  "n_heads": 4, "d_ff": 32},
-    {"d_model": 8,  "n_heads": 8, "d_ff": 32},
-    {"d_model": 16, "n_heads": 4, "d_ff": 64},
-    {"d_model": 16, "n_heads": 8, "d_ff": 64}
+    {"d_model": 4,  "n_heads": 8, "d_ff": 16},
+    {"d_model": 8,  "n_heads": 4, "d_ff": 32}
   ],
 
   "n_factors":    [3, 4, 6],

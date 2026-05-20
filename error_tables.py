@@ -59,6 +59,7 @@ SEEDED_MODELS = [
     ("tucker_dlinear", "Tucker",       None),
     ("gwn",            "GWN",          None),
     ("itransformer",   "iTransformer", None),
+    ("pcaformer",      "PCAFormer",    None),
     ("patchtst",       "PatchTST",     None),
     ("hot",            "HOT (k-prod)", "kronecker_product"),
     ("hot",            "HOT (k-sum)",  "kronecker_sum"),

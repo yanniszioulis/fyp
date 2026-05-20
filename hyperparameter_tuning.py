@@ -718,7 +718,8 @@ def main():
     ap.add_argument("--model", required=True,
                     help='Comma-separated names from '
                          f'{TUNABLE} or "all".')
-    ap.add_argument("--pred_len", required=True, type=int, choices=(5, 21, 63))
+    ap.add_argument("--pred_len", required=True, type=int,
+                    choices=(5, 21, 42, 63))
     ap.add_argument("--csv_path",   default=os.path.join(ROOT, "SPX_surfaces.csv"))
     ap.add_argument("--train_frac", type=float, default=0.7)
     ap.add_argument("--val_frac",   type=float, default=0.1)

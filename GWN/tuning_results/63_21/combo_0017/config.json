@@ -11,10 +11,11 @@
     "kernel_size": 2,
     "nhid": 8,
     "blocks": 2,
-    "layers": 2,
-    "dropout": 0.1,
-    "lr": 0.003,
-    "weight_decay": 0.001
+    "layers": 1,
+    "dropout": 0.3,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "addaptadj": true
   },
   "model_kwargs": {
     "num_nodes": 150,
@@ -31,12 +32,12 @@
     "end_channels": 16,
     "kernel_size": 2,
     "blocks": 2,
-    "layers": 2,
-    "dropout": 0.1
+    "layers": 1,
+    "dropout": 0.3
   },
   "optimizer": "Adam",
-  "lr": 0.003,
-  "weight_decay": 0.001,
+  "lr": 0.001,
+  "weight_decay": 0.0001,
   "lr_g": null,
   "wd_g": null,
   "grad_clip": null,
@@ -44,11 +45,11 @@
   "patience": 15,
   "min_epochs": 20,
   "batch_size": 32,
-  "n_params": 11113,
+  "n_params": 10361,
   "seed": 42,
   "device": "cuda",
-  "stop_epoch": 25,
-  "best_epoch": 10,
-  "best_val_loss": 0.15754686915139793,
-  "best_train_loss": 0.1089531529088353
+  "stop_epoch": 49,
+  "best_epoch": 34,
+  "best_val_loss": 0.16913990493471295,
+  "best_train_loss": 0.09995300610398138
 }

@@ -9,12 +9,13 @@
     "batch_size": 32,
     "loss": "mse",
     "kernel_size": 2,
-    "nhid": 32,
+    "nhid": 16,
     "blocks": 2,
-    "layers": 2,
-    "dropout": 0.1,
+    "layers": 1,
+    "dropout": 0.3,
     "lr": 0.0003,
-    "weight_decay": 0.0001
+    "weight_decay": 0.0001,
+    "addaptadj": false
   },
   "model_kwargs": {
     "num_nodes": 150,
@@ -23,16 +24,16 @@
     "in_dim": 1,
     "supports": null,
     "gcn_bool": true,
-    "addaptadj": true,
+    "addaptadj": false,
     "aptinit": null,
-    "residual_channels": 32,
-    "dilation_channels": 32,
-    "skip_channels": 32,
-    "end_channels": 64,
+    "residual_channels": 16,
+    "dilation_channels": 16,
+    "skip_channels": 16,
+    "end_channels": 32,
     "kernel_size": 2,
     "blocks": 2,
-    "layers": 2,
-    "dropout": 0.1
+    "layers": 1,
+    "dropout": 0.3
   },
   "optimizer": "Adam",
   "lr": 0.0003,
@@ -44,11 +45,11 @@
   "patience": 15,
   "min_epochs": 20,
   "batch_size": 32,
-  "n_params": 156889,
+  "n_params": 35797,
   "seed": 42,
   "device": "cuda",
-  "stop_epoch": 29,
-  "best_epoch": 14,
-  "best_val_loss": 0.16985043200477218,
-  "best_train_loss": 0.1007616724039233
+  "stop_epoch": 49,
+  "best_epoch": 34,
+  "best_val_loss": 0.17177839668293596,
+  "best_train_loss": 0.09911670941253041
 }

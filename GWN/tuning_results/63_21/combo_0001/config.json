@@ -14,7 +14,8 @@
     "layers": 1,
     "dropout": 0.1,
     "lr": 0.0003,
-    "weight_decay": 0.001
+    "weight_decay": 0.0001,
+    "addaptadj": true
   },
   "model_kwargs": {
     "num_nodes": 150,
@@ -36,7 +37,7 @@
   },
   "optimizer": "Adam",
   "lr": 0.0003,
-  "weight_decay": 0.001,
+  "weight_decay": 0.0001,
   "lr_g": null,
   "wd_g": null,
   "grad_clip": null,
@@ -49,6 +50,6 @@
   "device": "cuda",
   "stop_epoch": 62,
   "best_epoch": 47,
-  "best_val_loss": 0.17261004273522326,
-  "best_train_loss": 0.10458387756763503
+  "best_val_loss": 0.17639134887968808,
+  "best_train_loss": 0.10281169487293376
 }

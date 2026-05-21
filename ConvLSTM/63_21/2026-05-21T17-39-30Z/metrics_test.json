@@ -1,0 +1,13 @@
+{
+  "model": "convlstm",
+  "pred_len": 21,
+  "lookback": 63,
+  "n_test": 806,
+  "best_val_mse": 0.187237627027792,
+  "best_epoch": 1,
+  "stop_epoch": 16,
+  "test_mse": 0.16556096076965332,
+  "test_rmse": 0.40689182932279844,
+  "test_mae": 0.31071221828460693,
+  "space": "standardized_log_iv"
+}

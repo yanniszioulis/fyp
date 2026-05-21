@@ -1,0 +1,71 @@
+{
+  "model": "pcaformer",
+  "pred_len": 10,
+  "lookback": 63,
+  "combo": {
+    "epochs": 100,
+    "patience": 15,
+    "min_epochs": 30,
+    "batch_size": 32,
+    "loss": "mse",
+    "revin_affine": false,
+    "head_init_scale": 0.0001,
+    "n_factors": 3,
+    "n_layers": 1,
+    "dropout": 0.3,
+    "lr": 0.0003,
+    "weight_decay": 0.001,
+    "d_model": 8,
+    "n_heads": 4,
+    "d_ff": 32
+  },
+  "model_kwargs": {
+    "seq_len": 63,
+    "pred_len": 10,
+    "W": 15,
+    "H": 10,
+    "revin_affine": false,
+    "head_init_scale": 0.0001,
+    "n_factors": 3,
+    "n_layers": 1,
+    "dropout": 0.3,
+    "d_model": 8,
+    "n_heads": 4,
+    "d_ff": 32
+  },
+  "optimizer": "AdamW",
+  "lr": 0.0003,
+  "weight_decay": 0.001,
+  "lr_g": null,
+  "wd_g": null,
+  "grad_clip": 1.0,
+  "epochs": 100,
+  "patience": 15,
+  "min_epochs": 30,
+  "batch_size": 32,
+  "n_params": 16558,
+  "seed": 42,
+  "device": "cuda",
+  "stop_epoch": 42,
+  "best_epoch": 27,
+  "best_val_loss": 0.10653062052210092,
+  "best_train_loss": 0.06183445789038668,
+  "test_metrics": {
+    "overall": 0.12669110298156738,
+    "per_year": {
+      "2019": 0.01189438346773386,
+      "2020": 0.3096827566623688,
+      "2021": 0.05623707175254822,
+      "2022": 0.08301788568496704,
+      "2023": 0.05682838708162308
+    },
+    "n_per_year": {
+      "2019": 1,
+      "2020": 253,
+      "2021": 252,
+      "2022": 251,
+      "2023": 250
+    },
+    "n_test": 1007
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "model": "var",
+  "lag": 1,
+  "pred_len": 42,
+  "lookback": 63,
+  "n_test": 1007,
+  "test_mse": 0.41829240322113037,
+  "test_rmse": 0.6467552885142343,
+  "test_mae": 0.3817923665046692,
+  "space": "standardized_log_iv"
+}

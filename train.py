@@ -110,7 +110,7 @@ MIN_EPOCHS = 15
 BATCH_SIZE = 32
 
 LOOKBACK   = 63   # fixed across the project
-VALID_PRED_LEN = (1, 5, 10, 21, 63)
+VALID_PRED_LEN = (1, 5, 10, 21, 42, 63)
 DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
                   "pcaformer", "itransformer")
 

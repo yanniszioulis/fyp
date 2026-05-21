@@ -7,12 +7,12 @@
   "batch_size":   32,
   "loss":         "mse",
   "kernel_size":  2,
+  "lr":           3e-3,
 
-  "nhid":         [8, 16, 32],
+  "nhid":         [8, 16],
   "blocks":       [2, 4],
   "layers":       [1, 2],
   "dropout":      [0.1, 0.3],
-  "lr":           [3e-4, 1e-3, 3e-3],
   "weight_decay": [1e-4, 1e-3],
   "addaptadj":    [false, true]
 }

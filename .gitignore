@@ -66,3 +66,4 @@ report/*.synctex.gz
 !report/main.pdf
 
 _data_prep/data/*
+_data_prep/out_hm_8e-4

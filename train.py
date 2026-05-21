@@ -57,7 +57,7 @@ import torch.nn as nn
 # Make the per-model packages importable as top-level modules.
 ROOT = os.path.dirname(os.path.abspath(__file__))
 for sub in ("DLinear", "PatchTST", "HOT", "Tucker_DLinear", "GWN",
-            "PCAFormer", "iTransformer", "VAR"):
+            "PCAFormer", "iTransformer", "ConvLSTM", "VAR"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
 from dlinear import DLinear                # noqa: E402
@@ -67,6 +67,7 @@ from tucker_dlinear import TuckerDLinear   # noqa: E402
 from gwn import GWN                        # noqa: E402
 from pcaformer import PCAFormer            # noqa: E402
 from itransformer import ITransformer      # noqa: E402
+from convlstm import ConvLSTM              # noqa: E402
 from var import fit_var_p, make_step_window_fn  # noqa: E402
 
 
@@ -81,6 +82,7 @@ LR_TUCKER_DLINEAR = 1e-3
 LR_GWN            = 1e-3
 LR_PCAFORMER      = 1e-3
 LR_ITRANSFORMER   = 1e-3
+LR_CONVLSTM       = 1e-3
 
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
@@ -94,6 +96,9 @@ WD_PCAFORMER      = 1e-3
 # attention-on-cells design is structurally similar to PatchTST's
 # attention-on-patches; matching its WD is the natural default.
 WD_ITRANSFORMER   = 3e-1
+# ConvLSTM: Medvedev & Wang (2022) train with plain Adam and no weight
+# decay — WD stays 0 and convlstm is kept off the AdamW list below.
+WD_CONVLSTM       = 0.0
 
 # Tucker-only (with AdamW): the G core gets its own multipliers on top of
 # LR_TUCKER_DLINEAR / WD_TUCKER_DLINEAR. The factor matrices stay at the
@@ -112,7 +117,7 @@ BATCH_SIZE = 32
 LOOKBACK   = 63   # fixed across the project
 VALID_PRED_LEN = (1, 5, 10, 21, 42, 63)
 DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
-                  "pcaformer", "itransformer")
+                  "pcaformer", "itransformer", "convlstm")
 
 # Folder names per model (where outputs land relative to repo root).
 MODEL_DIR = {
@@ -123,6 +128,7 @@ MODEL_DIR = {
     "gwn":            "GWN",
     "pcaformer":      "PCAFormer",
     "itransformer":   "iTransformer",
+    "convlstm":       "ConvLSTM",
     "var":            "VAR",
 }
 
@@ -345,6 +351,21 @@ class _ITransformerAdapter(_Adapter):
         return z.permute(0, 1, 3, 2).reshape(B, -1, C)
 
 
+class _ConvLSTMAdapter(_Adapter):
+    def __init__(self, model, n_tau, n_money):
+        super().__init__(model)
+        # ConvLSTM takes [B, L, W, H]; same shape convention as
+        # iTransformer / PCAFormer / TuckerDLinear.
+        self.H, self.W = n_tau, n_money
+
+    def forward(self, x):
+        # x: [B, L, C=H*W] → [B, L, H, W] → permute to [B, L, W, H]
+        B, L, C = x.shape
+        z = x.reshape(B, L, self.H, self.W).permute(0, 1, 3, 2).contiguous()
+        z = self.model(z)        # [B, P, W, H]
+        return z.permute(0, 1, 3, 2).reshape(B, -1, C)
+
+
 def build_adapter_from_kwargs(name: str, model_kwargs: dict,
                               n_tau: int, n_money: int) -> nn.Module:
     """Construct an adapter-wrapped model from explicit model_kwargs
@@ -364,6 +385,8 @@ def build_adapter_from_kwargs(name: str, model_kwargs: dict,
         return _PCAFormerAdapter(PCAFormer(**model_kwargs), n_tau, n_money)
     if name == "itransformer":
         return _ITransformerAdapter(ITransformer(**model_kwargs), n_tau, n_money)
+    if name == "convlstm":
+        return _ConvLSTMAdapter(ConvLSTM(**model_kwargs), n_tau, n_money)
     raise ValueError(f"Unknown model: {name}")
 
 
@@ -501,6 +524,19 @@ def build_model(name: str, pred_len: int, n_channels: int,
         )
         m = ITransformer(**kw)
         return _ITransformerAdapter(m, n_tau, n_money), kw
+    if name == "convlstm":
+        # ConvLSTM of Medvedev & Wang (2022) at the paper's recipe:
+        # 2 stacked ConvLSTM layers (16 then 8 kernels, 4×4 then 3×3),
+        # average-pool 2×2 after each, 0.25 dropout, flatten+dense head.
+        # W=n_money, H=n_tau; with the 15×10 grid the two pools take it
+        # 15×10 → 7×5 → 3×2 before the dense head.
+        kw = dict(
+            seq_len=L, pred_len=P, W=n_money, H=n_tau,
+            hidden_channels=(16, 8), kernel_sizes=(4, 3),
+            pool=2, dropout=0.25,
+        )
+        m = ConvLSTM(**kw)
+        return _ConvLSTMAdapter(m, n_tau, n_money), kw
     raise ValueError(f"Unknown model: {name}")
 
 
@@ -512,6 +548,7 @@ LR_BY_MODEL = {
     "gwn":            LR_GWN,
     "pcaformer":      LR_PCAFORMER,
     "itransformer":   LR_ITRANSFORMER,
+    "convlstm":       LR_CONVLSTM,
 }
 
 WD_BY_MODEL = {
@@ -522,6 +559,7 @@ WD_BY_MODEL = {
     "gwn":            WD_GWN,
     "pcaformer":      WD_PCAFORMER,
     "itransformer":   WD_ITRANSFORMER,
+    "convlstm":       WD_CONVLSTM,
 }
 
 

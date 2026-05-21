@@ -104,23 +104,14 @@ class OptionMetricsPreprocess:
             "share_n":        np.zeros(shape, dtype=np.int64),
             "nobs_in_band":   np.zeros(shape, dtype=np.int64),
         }
+        # per-day fit error of the gridded surface vs the raw quotes
+        self.fit_rows = []
 
         os.makedirs(output_dir, exist_ok=True)
 
     def load_data(self):
-        print("Loading options data...")
-        usecols = ["date", "exdate", "cp_flag", "strike_price",
-                   "impl_volatility", "volume", "vega"]
-        dtypes  = {"cp_flag": "category", "strike_price": "float64",
-                   "impl_volatility": "float32", "volume": "int64",
-                   "vega": "float32"}
-        chunks = [c for c in pd.read_csv(
-            self.options_file, chunksize=1_000_000,
-            usecols=usecols, dtype=dtypes,
-        )]
-        self.options_df = pd.concat(chunks, ignore_index=True)
-        print(f"Loaded {len(self.options_df):,} option records")
-
+        # Forward file is small; load and dedup it up front so each options
+        # chunk can be merged against it in the streaming loop below.
         print("Loading forward prices...")
         fwd = pd.read_csv(self.forward_file)
         print(f"Loaded {len(fwd):,} forward records")
@@ -152,21 +143,59 @@ class OptionMetricsPreprocess:
                .drop(columns=["am_settlement"])
         )
 
-        self.options_df["date"]   = pd.to_datetime(self.options_df["date"])
-        self.options_df["exdate"] = pd.to_datetime(self.options_df["exdate"])
+        # Stream the (multi-GB) options file: each chunk is merged, range- and
+        # forward-filtered and column-pruned *before* it is retained, so peak
+        # memory tracks the filtered surface support, not the raw file. The
+        # ttm / moneyness windows are date-independent, so applying them here
+        # is equivalent to the per-day filtering done later.
+        print("Loading options data in chunks...")
+        usecols = ["date", "exdate", "cp_flag", "strike_price",
+                   "impl_volatility", "volume", "vega"]
+        dtypes  = {"cp_flag": "category", "strike_price": "float64",
+                   "impl_volatility": "float32", "volume": "int64",
+                   "vega": "float32"}
+        keep_cols = ["date", "cp_flag", "impl_volatility", "volume", "vega",
+                     "forward_price", "ttm", "moneyness"]
+        eps_t  = 1.0 / 365.0
+        ttm_lo = max(self.filter_ttm_min, eps_t)
 
-        n_before = len(self.options_df)
-        self.options_df = self.options_df.merge(fwd, on=["date", "exdate"], how="left")
-        assert len(self.options_df) == n_before, "merge changed row count"
+        kept = []
+        n_raw = n_no_fwd = 0
+        for chunk in pd.read_csv(
+            self.options_file, chunksize=1_000_000,
+            usecols=usecols, dtype=dtypes,
+        ):
+            n_raw += len(chunk)
+            chunk["date"]   = pd.to_datetime(chunk["date"])
+            chunk["exdate"] = pd.to_datetime(chunk["exdate"])
 
-        n_missing = self.options_df["forward_price"].isna().sum()
-        if n_missing > 0:
-            pct = 100.0 * n_missing / len(self.options_df)
-            print(f"Warning: {n_missing:,} of {len(self.options_df):,} rows "
-                  f"({pct:.2f}%) have no forward after merge; dropping.")
-            self.options_df = self.options_df.dropna(subset=["forward_price"])
+            n_before = len(chunk)
+            chunk = chunk.merge(fwd, on=["date", "exdate"], how="left")
+            assert len(chunk) == n_before, "merge changed row count"
 
-        self.options_df = self.options_df[self.options_df["forward_price"] > 0].copy()
+            n_no_fwd += int(chunk["forward_price"].isna().sum())
+            chunk = chunk[chunk["forward_price"] > 0]  # NaN > 0 is False too
+
+            chunk["ttm"] = (chunk["exdate"] - chunk["date"]).dt.days / 365.0
+            chunk = chunk[(chunk["ttm"] >= ttm_lo)
+                          & (chunk["ttm"] <= self.filter_ttm_max)]
+
+            strike = chunk["strike_price"] / 1000.0
+            chunk["moneyness"] = np.log(strike / chunk["forward_price"])
+            chunk = chunk[(chunk["moneyness"] >= self.filter_moneyness_min)
+                          & (chunk["moneyness"] <= self.filter_moneyness_max)]
+
+            if len(chunk):
+                kept.append(chunk[keep_cols].copy())
+
+        self.options_df = (pd.concat(kept, ignore_index=True) if kept
+                           else pd.DataFrame(columns=keep_cols))
+        print(f"Loaded {n_raw:,} option records; {len(self.options_df):,} "
+              f"retained after forward/ttm/moneyness filters")
+        if n_no_fwd > 0:
+            pct = 100.0 * n_no_fwd / max(n_raw, 1)
+            print(f"Note: {n_no_fwd:,} of {n_raw:,} rows ({pct:.2f}%) had no "
+                  f"forward after merge; dropped.")
 
     def _make_tau_grid(self, t_min, t_max, n):
         eps = 30.0 / 365.0
@@ -177,21 +206,8 @@ class OptionMetricsPreprocess:
         return np.linspace(t_min, t_max, n)
 
     def process_daily_surfaces(self):
-        self.options_df["ttm"] = (
-            self.options_df["exdate"] - self.options_df["date"]
-        ).dt.days / 365.0
-
-        eps_t = 1.0 / 365.0
-        self.options_df = self.options_df[
-            (self.options_df["ttm"] >= max(self.filter_ttm_min, eps_t))
-            & (self.options_df["ttm"] <= self.filter_ttm_max)
-        ].copy()
-
-        self.options_df["strike"] = self.options_df["strike_price"] / 1000.0
-        self.options_df["moneyness"] = np.log(
-            self.options_df["strike"] / self.options_df["forward_price"]
-        )
-
+        # ttm / moneyness and their range filters are applied per-chunk in
+        # load_data; here we only group the retained quotes into surfaces.
         n_dates = self.options_df["date"].nunique()
         print(f"Processing {n_dates} unique dates...")
 
@@ -247,6 +263,7 @@ class OptionMetricsPreprocess:
                     "forward_ref": round(fwd_ref, 4),
                     "surface": surface,
                 })
+                self._accumulate_fit(date, combined, surface)
 
         if total_cells > 0:
             pct_nan = 100.0 * total_nan_cells / total_cells
@@ -255,6 +272,7 @@ class OptionMetricsPreprocess:
 
         self.save_combined_surface(combined_data)
         self.save_diagnostics()
+        self.save_fit_diagnostics()
         print(f"\nCompleted! Saved {len(combined_data)} surfaces.")
 
     def create_surface(self, options, date):
@@ -382,6 +400,62 @@ class OptionMetricsPreprocess:
         out = join(self.output_dir, "support_diagnostics.csv")
         pd.DataFrame(rows).to_csv(out, index=False)
         print(f"Saved per-cell support diagnostics to {out}")
+
+    def _accumulate_fit(self, date, options, surface):
+        """Per-day fit error: bilinearly interpolate the gridded surface (in the
+        kernel's own log-T / m coordinates) to each raw quote and compare to the
+        quoted IV. Restricted to quotes inside the grid box, since the surface
+        only spans the target window."""
+        m_t  = np.linspace(self.moneyness_min, self.moneyness_max, self.n_moneyness)
+        t_t  = self._make_tau_grid(self.ttm_min, self.ttm_max, self.n_tau)
+        lt_t = np.log(t_t)
+
+        m  = options["moneyness"].values.astype(float)
+        t  = options["ttm"].values.astype(float)
+        iv = options["impl_volatility"].values.astype(float)
+        vg = options["vega"].values.astype(float)
+        lt = np.log(np.where(t > 0, t, np.nan))
+
+        inbox = (np.isfinite(m) & np.isfinite(lt) & np.isfinite(iv)
+                 & (m >= m_t[0]) & (m <= m_t[-1])
+                 & (lt >= lt_t[0]) & (lt <= lt_t[-1]))
+        n_in = int(inbox.sum())
+        if n_in == 0:
+            return
+        m, lt, iv, vg = m[inbox], lt[inbox], iv[inbox], vg[inbox]
+
+        jm = np.clip(np.searchsorted(m_t, m) - 1, 0, self.n_moneyness - 2)
+        jt = np.clip(np.searchsorted(lt_t, lt) - 1, 0, self.n_tau - 2)
+        wm = (m - m_t[jm])  / (m_t[jm + 1]  - m_t[jm])
+        wt = (lt - lt_t[jt]) / (lt_t[jt + 1] - lt_t[jt])
+        z = (surface[jt,     jm    ] * (1 - wt) * (1 - wm)
+             + surface[jt,     jm + 1] * (1 - wt) * wm
+             + surface[jt + 1, jm    ] * wt       * (1 - wm)
+             + surface[jt + 1, jm + 1] * wt       * wm)
+        r = z - iv
+
+        atm    = np.abs(m) < 0.03
+        vg_sum = float(vg.sum())
+        self.fit_rows.append({
+            "date":      date.strftime("%Y-%m-%d"),
+            "n_quotes":  n_in,
+            "rmse":      float(np.sqrt(np.mean(r ** 2))),
+            "mae":       float(np.mean(np.abs(r))),
+            "bias":      float(np.mean(r)),
+            "rmse_vw":   float(np.sqrt(np.sum(vg * r ** 2) / vg_sum)) if vg_sum > 0 else float("nan"),
+            "rmse_atm":  float(np.sqrt(np.mean(r[atm] ** 2)))   if atm.any()    else float("nan"),
+            "rmse_wing": float(np.sqrt(np.mean(r[~atm] ** 2)))  if (~atm).any() else float("nan"),
+        })
+
+    def save_fit_diagnostics(self):
+        if not self.fit_rows:
+            return
+        out = join(self.output_dir, "fit_diagnostics.csv")
+        df = pd.DataFrame(self.fit_rows)
+        df.to_csv(out, index=False)
+        print(f"Saved per-day fit diagnostics to {out}")
+        print(f"  mean daily RMSE vs quotes: {df['rmse'].mean():.5f}  "
+              f"(ATM {df['rmse_atm'].mean():.5f}, wing {df['rmse_wing'].mean():.5f})")
 
 
 def main():

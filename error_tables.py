@@ -127,21 +127,32 @@ def collect_seeded(pred_len: int, y_shape: tuple) -> list[dict]:
 
 
 def load_var(pred_len: int, y_shape: tuple, n_channels: int):
-    base  = os.path.join(ROOT, MODEL_DIR["var"], "eval",
-                         f"{LOOKBACK}_{pred_len}")
-    ppath = os.path.join(base, "preds.npy")
-    if not os.path.isfile(ppath):
+    # Preferred path is the canonical eval slot; fall back to the most
+    # recent train_var() result (same convention as train.py).
+    candidates = [
+        (os.path.join(ROOT, MODEL_DIR["var"], "eval",
+                      f"{LOOKBACK}_{pred_len}"), "source.json"),
+        (os.path.join(ROOT, MODEL_DIR["var"], "results",
+                      f"{LOOKBACK}_{pred_len}"), "hyperparams.json"),
+    ]
+    base = meta_file = None
+    for d, mf in candidates:
+        if os.path.isfile(os.path.join(d, "preds.npy")):
+            base, meta_file = d, mf
+            break
+    if base is None:
         return None
-    preds = np.load(ppath).astype(np.float32)
+    preds = np.load(os.path.join(base, "preds.npy")).astype(np.float32)
     if preds.shape != y_shape:
         raise SystemExit(f"VAR: preds shape {preds.shape} != Y_test {y_shape}")
     lag   = 1
-    spath = os.path.join(base, "source.json")
-    if os.path.isfile(spath):
-        with open(spath) as f:
+    mpath = os.path.join(base, meta_file)
+    if os.path.isfile(mpath):
+        with open(mpath) as f:
             lag = int(json.load(f).get("lag", 1))
     n_params = lag * n_channels * n_channels + n_channels
-    print(f"  {'VAR':14s}  lag={lag}  n_params={n_params}")
+    print(f"  {'VAR':14s}  lag={lag}  n_params={n_params}  "
+          f"({os.path.relpath(base, ROOT)})")
     return {"preds": preds, "n_params": n_params, "lag": lag}
 
 
@@ -417,7 +428,7 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pred_len", type=int, default=21, choices=(5, 21, 63))
+    ap.add_argument("--pred_len", type=int, default=21, choices=(5, 21, 42, 63))
     ap.add_argument("--csv_path", default=os.path.join(ROOT, "SPX_surfaces.csv"))
     ap.add_argument("--data_end", default="2023-12-29")
     args = ap.parse_args()

@@ -1,0 +1,9 @@
+{
+  "model": "pcaformer",
+  "variant": null,
+  "seed": 1,
+  "winner_combo": "combo_0042",
+  "winner_source": "PCAFormer/tuning_results/63_10/combo_0042/config.json",
+  "pred_len": 10,
+  "data_end": "2023-12-29"
+}

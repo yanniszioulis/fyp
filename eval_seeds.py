@@ -165,7 +165,7 @@ def main():
     ap.add_argument("--model",    default=None)
     ap.add_argument("--variant",  default=None)
     ap.add_argument("--seed",     type=int, default=None)
-    ap.add_argument("--pred_len", type=int, default=21, choices=(5, 21, 42, 63))
+    ap.add_argument("--pred_len", type=int, default=21, choices=(5, 10, 21, 42, 63))
     ap.add_argument("--seeds",    type=int, nargs="+", default=list(DEFAULT_SEEDS),
                     help="(for --list) seed values to enumerate. "
                          f"Default {list(DEFAULT_SEEDS)}.")

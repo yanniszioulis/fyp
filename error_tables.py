@@ -68,7 +68,7 @@ SEEDED_MODELS = [
 YEARS = (2020, 2021, 2022, 2023)
 
 # Forecast horizons (days ahead) shown in the per-horizon breakdown.
-HORIZONS = (1, 5, 10, 21)
+HORIZONS = (1, 5, 10, 21, 30, 42, 63)
 
 
 # ─── Discovery ────────────────────────────────────────────────────────────
@@ -428,7 +428,7 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pred_len", type=int, default=21, choices=(5, 21, 42, 63))
+    ap.add_argument("--pred_len", type=int, default=21, choices=(5, 10, 21, 42, 63))
     ap.add_argument("--csv_path", default=os.path.join(ROOT, "SPX_surfaces.csv"))
     ap.add_argument("--data_end", default="2023-12-29")
     args = ap.parse_args()

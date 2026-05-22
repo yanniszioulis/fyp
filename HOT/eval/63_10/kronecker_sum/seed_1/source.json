@@ -1,0 +1,9 @@
+{
+  "model": "hot",
+  "variant": "kronecker_sum",
+  "seed": 1,
+  "winner_combo": "combo_0089",
+  "winner_source": "HOT/tuning_results/63_10/kronecker_sum/combo_0089/config.json",
+  "pred_len": 10,
+  "data_end": "2023-12-29"
+}

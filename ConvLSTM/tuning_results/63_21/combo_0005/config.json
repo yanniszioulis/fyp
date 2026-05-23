@@ -1,0 +1,59 @@
+{
+  "model": "convlstm",
+  "pred_len": 21,
+  "lookback": 63,
+  "combo": {
+    "epochs": 100,
+    "patience": 15,
+    "min_epochs": 30,
+    "batch_size": 32,
+    "loss": "mse",
+    "revin": true,
+    "pool": 2,
+    "dropout": 0.1,
+    "lr": 0.0003,
+    "weight_decay": 0.0001,
+    "hidden_channels": [
+      24,
+      8
+    ],
+    "kernel_sizes": [
+      4,
+      3
+    ]
+  },
+  "model_kwargs": {
+    "seq_len": 63,
+    "pred_len": 21,
+    "W": 15,
+    "H": 10,
+    "revin": true,
+    "pool": 2,
+    "dropout": 0.1,
+    "hidden_channels": [
+      24,
+      8
+    ],
+    "kernel_sizes": [
+      4,
+      3
+    ]
+  },
+  "optimizer": "Adam",
+  "lr": 0.0003,
+  "weight_decay": 0.0001,
+  "lr_g": null,
+  "wd_g": null,
+  "grad_clip": null,
+  "epochs": 100,
+  "patience": 15,
+  "min_epochs": 30,
+  "batch_size": 32,
+  "n_params": 202094,
+  "seed": 42,
+  "device": "cuda",
+  "stop_epoch": 30,
+  "best_epoch": 3,
+  "best_val_loss": 0.18896385435585236,
+  "best_train_loss": 0.12240854484397312
+}

@@ -73,6 +73,7 @@ import torch
 
 from train import (
     BATCH_SIZE,
+    ConvLSTM,
     DLinear,
     EPOCHS,
     GWN,
@@ -86,6 +87,7 @@ from train import (
     PatchTST,
     ROOT,
     TuckerDLinear,
+    _ConvLSTMAdapter,
     _DLinearAdapter,
     _GWNAdapter,
     _HOTAdapter,
@@ -101,7 +103,7 @@ from train import (
 
 
 TUNABLE = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
-           "itransformer", "pcaformer")
+           "itransformer", "pcaformer", "convlstm")
 
 # Grid-key buckets.
 TRAINER_KEYS    = {"epochs", "patience", "min_epochs", "batch_size"}
@@ -285,6 +287,13 @@ def build_model_for_tuning(name: str, model_kw: dict, pred_len: int,
     if name == "pcaformer":
         kw = dict(seq_len=L, pred_len=P, W=n_money, H=n_tau, **model_kw)
         return _PCAFormerAdapter(PCAFormer(**kw), n_tau, n_money), kw
+    if name == "convlstm":
+        # ConvLSTM takes [B, L, W, H] (same shape convention as
+        # iTransformer / PCAFormer / TuckerDLinear). The grid drives
+        # `hidden_channels`/`kernel_sizes` (their length = stack depth),
+        # `pool`, `dropout`, `revin`.
+        kw = dict(seq_len=L, pred_len=P, W=n_money, H=n_tau, **model_kw)
+        return _ConvLSTMAdapter(ConvLSTM(**kw), n_tau, n_money), kw
     raise ValueError(f"Unsupported model: {name!r}")
 
 

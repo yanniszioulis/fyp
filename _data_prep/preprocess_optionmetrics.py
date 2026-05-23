@@ -7,6 +7,8 @@ T in [30/365, 1] year (geometric, matching the kernel's log-T metric).
 
 Surface is a vega-weighted Nadaraya-Watson smooth of OTM + narrow-ATM-band
 quotes. Bandwidths h_tau, h_m are kernel *variances* (OM manual convention).
+h_m optionally ramps linearly in log(tau) from h_m at tau_min to h_m_long at
+tau_max (widens the smile-direction smoothing where quote density is sparse).
 
 The options file's am_set_flag column ships empty from WRDS, so the forward
 join collapses to one row per (date, exdate) preferring PM over AM. Exact
@@ -42,6 +44,7 @@ class OptionMetricsPreprocess:
         atm_threshold=0.02,
         h_tau=0.16,
         h_m=2.0e-4,
+        h_m_long=6.0e-4,
         min_vega=0.5,
         iv_min=0.01,
         iv_max=3.0,
@@ -80,6 +83,7 @@ class OptionMetricsPreprocess:
 
         self.h_tau = h_tau
         self.h_m = h_m
+        self.h_m_long = h_m_long
 
         self.min_vega = min_vega
         self.iv_min = iv_min
@@ -106,6 +110,24 @@ class OptionMetricsPreprocess:
         }
         # per-day fit error of the gridded surface vs the raw quotes
         self.fit_rows = []
+
+        # Per-tau moneyness bandwidth. If h_m_long is set, ramp linearly in
+        # log(tau) from h_m at tau_min to h_m_long at tau_max; this widens
+        # the smile-direction smoothing in deep maturities where the quote
+        # density is sparse. Flat order matches the (n_tau, n_moneyness)
+        # grid in tau-major C-order (cell k = i_t * n_moneyness + i_m).
+        tau_grid = self._make_tau_grid(self.ttm_min, self.ttm_max, self.n_tau)
+        if self.h_m_long is None:
+            self._h_m_per_tau = np.full(self.n_tau, self.h_m, dtype=np.float64)
+        else:
+            lt   = np.log(tau_grid)
+            frac = (lt - lt.min()) / (lt.max() - lt.min())
+            self._h_m_per_tau = (
+                self.h_m + frac * (self.h_m_long - self.h_m)
+            ).astype(np.float64)
+        self._h_m_flat = np.repeat(self._h_m_per_tau, self.n_moneyness)
+        sched = ", ".join(f"{h:.2e}" for h in self._h_m_per_tau)
+        print(f"h_m schedule (per tau): [{sched}]")
 
         os.makedirs(output_dir, exist_ok=True)
 
@@ -304,7 +326,9 @@ class OptionMetricsPreprocess:
         x = np.log(Tg.ravel())[:, None] - np.log(t)[None, :]
         y = Mg.ravel()[:, None] - m[None, :]
 
-        log_k = -0.5 * (x ** 2 / self.h_tau + y ** 2 / self.h_m)
+        # h_m varies per tau row; broadcast against the flat grid axis.
+        h_m_col = self._h_m_flat[:, None]
+        log_k = -0.5 * (x ** 2 / self.h_tau + y ** 2 / h_m_col)
         # softmax-stabilise; ratios (and Kish neff) are unaffected.
         log_k -= log_k.max(axis=1, keepdims=True)
         w = np.exp(log_k) * vega[None, :]
@@ -337,7 +361,7 @@ class OptionMetricsPreprocess:
             self.diag["share_n"]   += good.reshape(shape).astype(np.int64)
         # observations falling inside ~2 sigma of each cell (raw support count)
         sig_logT = np.sqrt(self.h_tau)
-        sig_m    = np.sqrt(self.h_m)
+        sig_m    = np.sqrt(self._h_m_flat)[:, None]
         in_band  = (np.abs(x) <= 2.0 * sig_logT) & (np.abs(y) <= 2.0 * sig_m)
         self.diag["nobs_in_band"] += in_band.sum(axis=1).reshape(shape)
 
@@ -482,7 +506,11 @@ def main():
     p.add_argument("--atm_threshold", type=float, default=0.02)
 
     p.add_argument("--h_tau", type=float, default=0.16)
-    p.add_argument("--h_m",   type=float, default=2.0e-4)
+    p.add_argument("--h_m",   type=float, default=2.0e-4,
+                   help="Moneyness bandwidth at the short maturity (tau_min).")
+    p.add_argument("--h_m_long", type=float, default=6.0e-4,
+                   help="h_m at tau_max; ramped linearly in log(tau) from "
+                        "--h_m. Pass --h_m_long <same as --h_m> for constant.")
 
     p.add_argument("--min_vega", type=float, default=0.5)
     p.add_argument("--iv_min",   type=float, default=0.01)
@@ -513,6 +541,7 @@ def main():
         atm_threshold=args.atm_threshold,
         h_tau=args.h_tau,
         h_m=args.h_m,
+        h_m_long=args.h_m_long,
         min_vega=args.min_vega,
         iv_min=args.iv_min,
         iv_max=args.iv_max,

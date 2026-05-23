@@ -77,7 +77,7 @@ from var import fit_var_p, make_step_window_fn  # noqa: E402
 # shared, see below.
 LR_DLINEAR        = 4e-3
 LR_PATCHTST       = 1e-3
-LR_HOT            = 5e-3
+LR_HOT            = 5e-4
 LR_TUCKER_DLINEAR = 1e-3
 LR_GWN            = 1e-3
 LR_PCAFORMER      = 1e-3
@@ -440,7 +440,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
             patch_len=7, stride=7, d_model=32, n_heads=8,
             n_layers=2, d_ff=64, attn_dropout=0.0, dropout=0.2,
             head_dropout=0.05, revin=True, padding_patch="end",
-            decomposition=True, kernel_size=31,
+            decomposition=False, kernel_size=31,
         )
         m = PatchTST(**kw)
         return _PatchTSTAdapter(m), kw
@@ -454,7 +454,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
             d_hidden=64, n_blocks=1, n_head=8, patch_size=7,
             attention_type="kronecker_sum",
             dropout=0.2, attn_dropout=0.0, head_dropout=0.0,
-            pe="rope", norm=True, head_type="mean",
+            pe="rope", norm=True, head_type="flatten",
         )
         m = HOT(**kw)
         return _HOTAdapter(m, n_tau, n_money), kw
@@ -530,10 +530,15 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # average-pool 2×2 after each, 0.25 dropout, flatten+dense head.
         # W=n_money, H=n_tau; with the 15×10 grid the two pools take it
         # 15×10 → 7×5 → 3×2 before the dense head.
+        # revin: optional per-cell RevIN (off by default to match the
+        # paper's outside-the-model min-max scaling). Flip to True for
+        # the RevIN-on ablation; matches the per-cell norm used by HOT /
+        # PatchTST / iTransformer in this project.
         kw = dict(
             seq_len=L, pred_len=P, W=n_money, H=n_tau,
             hidden_channels=(16, 8), kernel_sizes=(4, 3),
             pool=2, dropout=0.25,
+            revin=True,
         )
         m = ConvLSTM(**kw)
         return _ConvLSTMAdapter(m, n_tau, n_money), kw

@@ -60,14 +60,23 @@ Hyperparameters (passed to ConvLSTM.__init__)
     W                int   — moneyness axis size.
     H                int   — tau axis size.
     hidden_channels  tuple — kernels (filters) per ConvLSTM layer.
-                              Default (16, 8) — Medvedev & Wang.
-    kernel_sizes     tuple — conv kernel size per ConvLSTM layer.
+                              The number of stacked ConvLSTM layers is
+                              `len(hidden_channels)`. Default (16, 8) —
+                              the 2-layer Medvedev & Wang stack.
+    kernel_sizes     tuple — conv kernel size per ConvLSTM layer. Must
+                              match the length of `hidden_channels`.
                               Default (4, 3) — Medvedev & Wang.
     pool             int   — average-pool kernel/stride after each
                               ConvLSTM layer. Default 2 (paper). Set
                               to 1 to disable pooling.
     dropout          float — dropout rate between layers. Default
                               0.25 (paper).
+    revin            bool  — per-cell reversible instance normalisation
+                              (Kim et al. 2022): strip each (W, H) cell's
+                              mean/std over the lookback before the model
+                              and re-add them on the forecast. Default
+                              False (the paper does min-max scaling as a
+                              data-pipeline step outside the model).
 
 Input:  [B, seq_len,  W, H]
 Output: [B, pred_len, W, H]
@@ -162,80 +171,111 @@ class ConvLSTM(nn.Module):
 
     def __init__(self, seq_len: int, pred_len: int, W: int, H: int,
                  hidden_channels=(16, 8), kernel_sizes=(4, 3),
-                 pool: int = 2, dropout: float = 0.25):
+                 pool: int = 2, dropout: float = 0.25,
+                 revin: bool = False):
         super().__init__()
-        if len(hidden_channels) != 2 or len(kernel_sizes) != 2:
+        # Accept JSON lists from the tuning grid; the rest of the model
+        # treats these as tuples (length = number of stacked layers).
+        hidden_channels = tuple(hidden_channels)
+        kernel_sizes    = tuple(kernel_sizes)
+        if len(hidden_channels) < 1:
+            raise ValueError("hidden_channels must have at least one entry")
+        if len(hidden_channels) != len(kernel_sizes):
             raise ValueError(
-                "hidden_channels and kernel_sizes must each have 2 "
-                "entries (the model is a 2-layer ConvLSTM stack)"
+                "hidden_channels and kernel_sizes must have the same length "
+                "(one entry per stacked ConvLSTM layer); got "
+                f"{len(hidden_channels)} vs {len(kernel_sizes)}"
             )
-        self.seq_len = seq_len
+        n_layers = len(hidden_channels)
+        self.n_layers = n_layers
+        self.seq_len  = seq_len
         self.pred_len = pred_len
         self.W = W
         self.H = H
-        self.pool = pool
+        self.pool  = pool
+        self.revin = revin
 
-        # ConvLSTM layer 1 returns the full sequence of hidden states
-        # so layer 2 can run over it; layer 2 returns the last hidden
-        # state, which encodes the lookback window.
-        self.layer1 = _ConvLSTMLayer(
-            1, hidden_channels[0], kernel_sizes[0], return_sequences=True,
-        )
-        self.drop1 = nn.Dropout(dropout)
-        self.pool1 = nn.AvgPool2d(pool) if pool > 1 else nn.Identity()
-
-        self.layer2 = _ConvLSTMLayer(
-            hidden_channels[0], hidden_channels[1], kernel_sizes[1],
-            return_sequences=False,
-        )
-        self.pool2 = nn.AvgPool2d(pool) if pool > 1 else nn.Identity()
-        self.drop2 = nn.Dropout(dropout)
+        # Stack N ConvLSTM stages. Intermediate layers return_sequences=True
+        # so the next layer sees the full time-axis stack of hidden states;
+        # the final layer returns just its last hidden state (the encoded
+        # lookback window). Each stage is followed by dropout + an optional
+        # average-pool over the spatial dims — the order mirrors the paper
+        # (intermediate: drop then pool; final: pool then drop).
+        self.layers = nn.ModuleList()
+        self.drops  = nn.ModuleList()
+        self.pools  = nn.ModuleList()
+        in_c = 1
+        for i in range(n_layers):
+            is_last = (i == n_layers - 1)
+            self.layers.append(_ConvLSTMLayer(
+                in_c, hidden_channels[i], kernel_sizes[i],
+                return_sequences=not is_last,
+            ))
+            self.drops.append(nn.Dropout(dropout))
+            self.pools.append(nn.AvgPool2d(pool) if pool > 1 else nn.Identity())
+            in_c = hidden_channels[i]
 
         # Grid size after each average-pool (kernel = stride = pool,
-        # no padding -> floor division).
-        def _pooled(n: int) -> int:
-            return n // pool if pool > 1 else n
-        W1, H1 = _pooled(W), _pooled(H)
-        W2, H2 = _pooled(W1), _pooled(H1)
-        if min(W1, H1, W2, H2) < 1:
-            raise ValueError(
-                f"pool={pool} shrinks the {W}x{H} grid below 1x1 over "
-                f"two layers (layer1 -> {W1}x{H1}, layer2 -> {W2}x{H2}); "
-                f"use a smaller pool"
-            )
+        # no padding -> floor division). Validated layer-by-layer so the
+        # error names the stage that first squashes a dim below 1.
+        Wc, Hc = W, H
+        for i in range(n_layers):
+            if pool > 1:
+                Wc, Hc = Wc // pool, Hc // pool
+            if min(Wc, Hc) < 1:
+                raise ValueError(
+                    f"pool={pool} shrinks the {W}x{H} grid below 1x1 after "
+                    f"{i + 1} of {n_layers} stages; use a smaller pool or "
+                    f"fewer layers"
+                )
 
         # Flatten the final encoded state and map it to the whole
         # multi-step forecast in one dense layer (the paper's
         # flatten -> dense head).
-        self.head = nn.Linear(hidden_channels[1] * W2 * H2,
-                               pred_len * W * H)
+        self.head = nn.Linear(hidden_channels[-1] * Wc * Hc,
+                              pred_len * W * H)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B, L, W, H]
         B = x.shape[0]
 
+        if self.revin:
+            # Per-cell RevIN: reduce over L only, keep per-(W, H) stats.
+            mu  = x.mean(dim=1, keepdim=True)
+            std = torch.sqrt(x.var(dim=1, keepdim=True, unbiased=False) + 1e-5)
+            x_n = (x - mu) / std
+        else:
+            x_n = x
+
         # Add the single (implied-volatility) channel: [B, L, 1, W, H].
-        seq = x.unsqueeze(2)
-
-        # ConvLSTM layer 1 -> full sequence of hidden states.
-        seq = self.layer1(seq)                       # [B, L, C1, W, H]
-        seq = self.drop1(seq)
-
-        # Average-pool each timestep's feature map. AvgPool2d wants a
-        # 4-D tensor, so fold time into the batch axis and unfold after.
-        if self.pool > 1:
-            B_, L_, C1, Wg, Hg = seq.shape
-            seq = self.pool1(seq.reshape(B_ * L_, C1, Wg, Hg))
-            seq = seq.reshape(B_, L_, C1, seq.shape[-2], seq.shape[-1])
-
-        # ConvLSTM layer 2 -> last hidden state, then pool + dropout.
-        enc = self.layer2(seq)                       # [B, C2, W1, H1]
-        enc = self.pool2(enc)                        # [B, C2, W2, H2]
-        enc = self.drop2(enc)
+        seq = x_n.unsqueeze(2)
+        n = self.n_layers
+        for i in range(n):
+            if i < n - 1:
+                # Intermediate stage: run the layer, drop, then per-timestep
+                # avg-pool. AvgPool2d wants a 4-D tensor, so fold time into
+                # the batch axis and unfold it again afterwards.
+                seq = self.layers[i](seq)                # [B, L, C, Wg, Hg]
+                seq = self.drops[i](seq)
+                if self.pool > 1:
+                    B_, L_, C_, Wg, Hg = seq.shape
+                    seq = self.pools[i](seq.reshape(B_ * L_, C_, Wg, Hg))
+                    seq = seq.reshape(B_, L_, C_, seq.shape[-2], seq.shape[-1])
+            else:
+                # Final stage: returns the last hidden state only, then pool
+                # + dropout before the dense head.
+                enc = self.layers[i](seq)                # [B, C, Wg, Hg]
+                if self.pool > 1:
+                    enc = self.pools[i](enc)             # [B, C, Wc, Hc]
+                enc = self.drops[i](enc)
 
         # Flatten + dense -> reshape to the forecast grid.
-        out = self.head(enc.flatten(1))              # [B, P*W*H]
-        return out.reshape(B, self.pred_len, self.W, self.H)
+        out = self.head(enc.flatten(1))                  # [B, P*W*H]
+        out = out.reshape(B, self.pred_len, self.W, self.H)
+        if self.revin:
+            # Restore each cell's lookback mean/std (broadcast over the P axis).
+            out = out * std + mu
+        return out
 
 
 if __name__ == "__main__":
@@ -263,8 +303,8 @@ if __name__ == "__main__":
             print(f"  gradient issue: {name}: {why}")
         raise AssertionError("gradient-flow check failed")
 
-    # Forget-gate bias must start open (=1) on both ConvLSTM layers.
-    for idx, layer in enumerate((model.layer1, model.layer2), start=1):
+    # Forget-gate bias must start open (=1) on every ConvLSTM layer.
+    for idx, layer in enumerate(model.layers, start=1):
         c = layer.cell.hidden_channels
         f_bias = layer.cell.conv_x.bias[c:2 * c]
         assert torch.allclose(f_bias, torch.ones_like(f_bias)), (
@@ -274,5 +314,29 @@ if __name__ == "__main__":
     # Pooling can be disabled and an odd grid still round-trips.
     nopool = ConvLSTM(seq_len=L, pred_len=P, W=Wm, H=Ht, pool=1)
     assert nopool(x).shape == (4, P, Wm, Ht), "pool=1 path broken"
+
+    # Configurable layer count: 1- and 3-stage stacks must round-trip too.
+    shallow = ConvLSTM(seq_len=L, pred_len=P, W=Wm, H=Ht,
+                       hidden_channels=(16,), kernel_sizes=(4,))
+    assert shallow(x).shape == (4, P, Wm, Ht), "1-layer stack path broken"
+    assert shallow.n_layers == 1
+    deep = ConvLSTM(seq_len=L, pred_len=P, W=Wm, H=Ht,
+                    hidden_channels=(16, 8, 4), kernel_sizes=(4, 3, 3))
+    assert deep(x).shape == (4, P, Wm, Ht), "3-layer stack path broken"
+    assert deep.n_layers == 3
+
+    # Lists from JSON are coerced to tuples (the tuning grid passes lists).
+    listy = ConvLSTM(seq_len=L, pred_len=P, W=Wm, H=Ht,
+                     hidden_channels=[8, 8], kernel_sizes=[3, 3])
+    assert listy(x).shape == (4, P, Wm, Ht), "list-typed kwargs broken"
+
+    # Length-mismatch is caught.
+    try:
+        ConvLSTM(seq_len=L, pred_len=P, W=Wm, H=Ht,
+                 hidden_channels=(16, 8), kernel_sizes=(4, 3, 3))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError on length mismatch")
 
     print("ConvLSTM sanity checks passed")

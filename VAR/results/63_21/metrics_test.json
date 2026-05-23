@@ -4,8 +4,8 @@
   "pred_len": 21,
   "lookback": 63,
   "n_test": 1007,
-  "test_mse": 0.254679799079895,
-  "test_rmse": 0.5046581011733539,
-  "test_mae": 0.3021107614040375,
+  "test_mse": 0.2586948573589325,
+  "test_rmse": 0.5086205435871938,
+  "test_mae": 0.3015483617782593,
   "space": "standardized_log_iv"
 }

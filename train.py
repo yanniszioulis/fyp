@@ -641,12 +641,15 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # maturity axis (10) — matching the (B, L, M, T) layout the
         # adapter feeds in. horizons is set to (1, …, P) so the head
         # emits one prediction per trainer-side target step. Hyperparams
-        # below (d=32, n_heads=4, n_layers=2, d_ff_mult=1,
-        # d_head_hidden=24, dropout=0.1) put the model at ~44k params at
-        # L=63 — n_layers=2 is fixed across SANTA / SANTAFlat /
-        # SANTATemporal so the budget is spent on depth, with `d` the
-        # only knob that varies between variants to compensate for
-        # 3/2/1 SubBlocks per layer (so all three land within ~44–51k).
+        # below (d=32, n_heads=4, n_layers=1, d_ff_mult=1,
+        # d_head_hidden=24, dropout=0.1) put the model at ~25k params at
+        # L=63 — IDENTICAL per-block specs across SANTA / SANTAFlat /
+        # SANTATemporal so the only thing that varies between variants
+        # is the count and kind of attention SubBlocks (3 / 2 / 1 per
+        # layer respectively). Param counts fall where they fall
+        # (~25k / ~18k / ~12k) — the param delta IS the cost of the
+        # added spatial mechanism, so this is the architectural-fairness
+        # comparison: "does spatial attention earn its own params?".
         # The santa.py file's own Config defaults are different
         # (d=48, n_layers=2, ~120k params).
         if tau_vals is None or money_vals is None:
@@ -655,7 +658,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
         cfg = SANTAConfig(
             M=n_money, T=n_tau, L=L,
             horizons=tuple(range(1, P + 1)),
-            d=32, n_heads=4, n_layers=2, d_ff_mult=1,
+            d=32, n_heads=4, n_layers=1, d_ff_mult=1,
             d_head_hidden=24, dropout=0.1,
             k_grid=tuple(float(v) for v in money_vals),
             tau_grid_years=tuple(float(v) for v in tau_vals),
@@ -676,20 +679,22 @@ def build_model(name: str, pred_len: int, n_channels: int,
         }
         return _SANTAAdapter(m, n_tau, n_money), kw
     if name == "santa_flat":
-        # SANTA-Flat ablation: same Config shape as the santa branch
-        # above (n_heads=4, n_layers=2, d_ff_mult=1, d_head_hidden=24,
-        # dropout=0.1) — only `d` differs to compensate for having 2
-        # SubBlocks per layer (vs SANTA's 3) so the parameter budget
-        # stays near 50k. The inner backbone is the only architectural
-        # diff (joint M·T spatial block vs SANTA's factored A+B).
-        # d=40 lands at ~47k params; divisible by 4 for the heads.
+        # SANTA-Flat ablation: IDENTICAL per-block hyperparams to the
+        # santa branch (d=32, n_heads=4, n_layers=1, d_ff_mult=1,
+        # d_head_hidden=24, dropout=0.1). The inner backbone is the
+        # only architectural diff (joint M·T spatial block vs SANTA's
+        # factored A+B) — and because each layer has 2 SubBlocks vs
+        # SANTA's 3, the param count is naturally ~18k vs ~25k. We
+        # deliberately do NOT compensate by widening `d`: the param
+        # delta IS the cost of the architectural choice, and matching
+        # it would obscure what we're trying to measure.
         if tau_vals is None or money_vals is None:
             raise ValueError("santa_flat needs tau_vals and money_vals "
                              "from the parsed grid.")
         cfg = SANTAConfig(
             M=n_money, T=n_tau, L=L,
             horizons=tuple(range(1, P + 1)),
-            d=40, n_heads=4, n_layers=2, d_ff_mult=1,
+            d=32, n_heads=4, n_layers=1, d_ff_mult=1,
             d_head_hidden=24, dropout=0.1,
             k_grid=tuple(float(v) for v in money_vals),
             tau_grid_years=tuple(float(v) for v in tau_vals),
@@ -708,21 +713,21 @@ def build_model(name: str, pred_len: int, n_channels: int,
         }
         return _SANTAAdapter(m, n_tau, n_money), kw
     if name == "santa_temporal":
-        # SANTA-Temporal ablation: same Config shape as santa /
-        # santa_flat above (n_heads=4, n_layers=2, d_ff_mult=1,
-        # d_head_hidden=24, dropout=0.1) — only `d` differs to
-        # compensate for having 1 SubBlock per layer (vs SANTA's 3,
-        # SANTA-Flat's 2) so the parameter budget stays near 50k. The
-        # inner backbone is the only architectural diff (temporal-only,
-        # no spatial blocks).
-        # d=56 lands at ~50.6k params; divisible by 4 for the heads.
+        # SANTA-Temporal ablation: IDENTICAL per-block hyperparams to
+        # the santa / santa_flat branches (d=32, n_heads=4, n_layers=1,
+        # d_ff_mult=1, d_head_hidden=24, dropout=0.1). Only 1 SubBlock
+        # per layer (the temporal block) so param count is naturally
+        # ~12k — about half of SANTA's ~25k. As with santa_flat we do
+        # NOT widen `d` to match: the missing spatial blocks are exactly
+        # what we want the comparison to measure, and giving the
+        # temporal-only model extra width would hide that.
         if tau_vals is None or money_vals is None:
             raise ValueError("santa_temporal needs tau_vals and money_vals "
                              "from the parsed grid.")
         cfg = SANTAConfig(
             M=n_money, T=n_tau, L=L,
             horizons=tuple(range(1, P + 1)),
-            d=56, n_heads=4, n_layers=2, d_ff_mult=1,
+            d=32, n_heads=4, n_layers=1, d_ff_mult=1,
             d_head_hidden=24, dropout=0.1,
             k_grid=tuple(float(v) for v in money_vals),
             tau_grid_years=tuple(float(v) for v in tau_vals),

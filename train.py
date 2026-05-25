@@ -1302,16 +1302,12 @@ def main():
     ap.add_argument("--pred_len", required=True, type=int,
                     choices=VALID_PRED_LEN)
     ap.add_argument("--csv_path",
-                    default=os.path.join(
-                        ROOT, "_data_prep", "data",
-                        "optionmetrics_processed", "SPX_surfaces.csv"),
+                    default=os.path.join(ROOT, "SPX_surfaces.csv"),
                     help="Path to the SPX surfaces CSV (iv_{m}_{tau} columns). "
-                         "Default is the freshly preprocessed 11-moneyness x "
-                         "10-day-count grid under _data_prep/data/"
-                         "optionmetrics_processed/. Pass the repo-root "
-                         "SPX_surfaces.csv to train against the legacy 15x10 "
-                         "grid (note: saved best_model.pt files under each "
-                         "ModelDir were trained on the 15x10 grid).")
+                         "Default is the repo-root SPX_surfaces.csv (15x10 "
+                         "grid) — same file eval_seeds.py uses, and the only "
+                         "copy that survives a fresh clone since "
+                         "_data_prep/data/* is gitignored.")
     ap.add_argument("--train_frac", type=float, default=0.7)
     ap.add_argument("--val_frac",   type=float, default=0.1)
     ap.add_argument("--data_end",   type=str,   default="2023-12-29",

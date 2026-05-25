@@ -650,21 +650,23 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # SANTA — Surface-Aware Neural Tensor Attention (SANTA/santa.py).
         # The model is grid-aware: it embeds the CONTINUOUS moneyness
         # coordinate (k) and √τ via an MLP, so the actual CSV grid values
-        # must be passed in. M is the moneyness axis (15) and T the
+        # must be passed in. M is the moneyness axis (11) and T the
         # maturity axis (10) — matching the (B, L, M, T) layout the
         # adapter feeds in. horizons is set to (1, …, P) so the head
-        # emits one prediction per trainer-side target step. Hyperparams
-        # below (d=32, n_heads=4, n_layers=2, d_ff_mult=1,
-        # d_head_hidden=24, dropout=0.1) put the model at ~44k params at
-        # L=63 — IDENTICAL per-block specs across SANTA / SANTAFlat /
-        # SANTATemporal so the only thing that varies between variants
-        # is the count and kind of attention SubBlocks (3 / 2 / 1 per
-        # layer respectively). Param counts fall where they fall
-        # (~44k / ~31k / ~18k) — the param delta IS the cost of the
-        # added spatial mechanism, so this is the architectural-fairness
-        # comparison at depth: "does spatial attention earn its own
-        # params when the trunk is two layers deep?".
-        # The santa.py file's own Config defaults are different
+        # emits one prediction per trainer-side target step.
+        #
+        # This is the matched-budget (50k) configuration:
+        #   d=32, n_heads=4, n_layers=2, d_ff_mult=1,
+        #   d_head_hidden=24, dropout=0.1   →  43,765 params
+        #
+        # The SANTA family at this budget is parameterised so all three
+        # variants land at ~44-51k by varying `d`:
+        #   SANTA          (3 SubBlocks/layer)  d=32 → 43.8k
+        #   SANTA-Flat     (2 SubBlocks/layer)  d=40 → 47.0k
+        #   SANTA-Temporal (1 SubBlock/layer)   d=56 → 50.6k
+        # The matched-PER-BLOCK-spec siblings (all at d=32 → 44k/31k/18k)
+        # are archived under each variant's eval/63_21/med/ slot.
+        # The santa.py file's own Config defaults are larger
         # (d=48, n_layers=2, ~120k params).
         if tau_vals is None or money_vals is None:
             raise ValueError("santa needs tau_vals and money_vals "
@@ -693,22 +695,23 @@ def build_model(name: str, pred_len: int, n_channels: int,
         }
         return _SANTAAdapter(m, n_tau, n_money), kw
     if name == "santa_flat":
-        # SANTA-Flat ablation: IDENTICAL per-block hyperparams to the
-        # santa branch (d=32, n_heads=4, n_layers=2, d_ff_mult=1,
-        # d_head_hidden=24, dropout=0.1). The inner backbone is the
-        # only architectural diff (joint M·T spatial block vs SANTA's
-        # factored A+B) — and because each layer has 2 SubBlocks vs
-        # SANTA's 3, the param count is naturally ~31k vs ~44k. We
-        # deliberately do NOT compensate by widening `d`: the param
-        # delta IS the cost of the architectural choice, and matching
-        # it would obscure what we're trying to measure.
+        # SANTA-Flat at the matched-budget (50k) configuration.
+        # n_heads=4, n_layers=2, d_ff_mult=1, d_head_hidden=24, dropout=0.1
+        # are identical to the SANTA branch above; only `d` differs —
+        # widened from SANTA's 32 to 40 so SANTA-Flat's two-SubBlock-per-
+        # layer trunk lands at ~47k parameters, matching SANTA's ~44k
+        # budget. This is the "matched parameter count" comparison: each
+        # architecture is allowed to spend the same total budget; SANTA-
+        # Flat gets a wider d to compensate for having fewer SubBlocks.
+        # (The matched-per-block-spec sibling — d=32 like SANTA, naturally
+        # ~31k — is now archived under SANTA_flat/eval/63_21/med/.)
         if tau_vals is None or money_vals is None:
             raise ValueError("santa_flat needs tau_vals and money_vals "
                              "from the parsed grid.")
         cfg = SANTAConfig(
             M=n_money, T=n_tau, L=L,
             horizons=tuple(range(1, P + 1)),
-            d=32, n_heads=4, n_layers=2, d_ff_mult=1,
+            d=40, n_heads=4, n_layers=2, d_ff_mult=1,
             d_head_hidden=24, dropout=0.1,
             k_grid=tuple(float(v) for v in money_vals),
             tau_grid_years=tuple(float(v) for v in tau_vals),
@@ -762,21 +765,23 @@ def build_model(name: str, pred_len: int, n_channels: int,
         }
         return _SANTAAdapter(m, n_tau, n_money), kw
     if name == "santa_temporal":
-        # SANTA-Temporal ablation: IDENTICAL per-block hyperparams to
-        # the santa / santa_flat branches (d=32, n_heads=4, n_layers=2,
-        # d_ff_mult=1, d_head_hidden=24, dropout=0.1). Only 1 SubBlock
-        # per layer (the temporal block) so param count is naturally
-        # ~18k — about 40% of SANTA's ~44k. As with santa_flat we do
-        # NOT widen `d` to match: the missing spatial blocks are exactly
-        # what we want the comparison to measure, and giving the
-        # temporal-only model extra width would hide that.
+        # SANTA-Temporal at the matched-budget (50k) configuration.
+        # n_heads=4, n_layers=2, d_ff_mult=1, d_head_hidden=24, dropout=0.1
+        # are identical to the SANTA / SANTA-Flat branches; only `d`
+        # differs — widened from SANTA's 32 to 56 so SANTA-Temporal's
+        # one-SubBlock-per-layer trunk lands at ~50.6k parameters,
+        # matching the family budget. SANTA-Temporal carries the
+        # widest d because it has the fewest SubBlocks; the extra width
+        # substitutes for missing spatial mixing.
+        # (The matched-per-block-spec sibling — d=32 like SANTA, naturally
+        # ~18k — is now archived under SANTA_temporal/eval/63_21/med/.)
         if tau_vals is None or money_vals is None:
             raise ValueError("santa_temporal needs tau_vals and money_vals "
                              "from the parsed grid.")
         cfg = SANTAConfig(
             M=n_money, T=n_tau, L=L,
             horizons=tuple(range(1, P + 1)),
-            d=32, n_heads=4, n_layers=2, d_ff_mult=1,
+            d=56, n_heads=4, n_layers=2, d_ff_mult=1,
             d_head_hidden=24, dropout=0.1,
             k_grid=tuple(float(v) for v in money_vals),
             tau_grid_years=tuple(float(v) for v in tau_vals),

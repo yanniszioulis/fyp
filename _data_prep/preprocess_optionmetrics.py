@@ -1,22 +1,16 @@
 """
 Preprocess OptionMetrics SPX quotes into a daily implied-volatility surface.
 
-Coordinates: (log T, log(K/F)). Default grid 10 tau x 15 moneyness covering
-log(K/F) in [-0.10, +0.10] (odd count -> centre cell at ATM-forward) and
-T in [30/365, 1] year (geometric, matching the kernel's log-T metric).
+Coordinates: (log T, log(K/F)). Default grid is 11 moneyness points in
+[-0.10, +0.10] at 0.02 steps (odd -> centre cell at ATM-forward) and an
+explicit intuitive tau list of round day-counts from 30d to 365d.
 
 Surface is a vega-weighted Nadaraya-Watson smooth of OTM + narrow-ATM-band
-quotes. Bandwidths h_tau, h_m are kernel *variances* (OM manual convention).
-h_m optionally ramps linearly in log(tau) from h_m at tau_min to h_m_long at
-tau_max (widens the smile-direction smoothing where quote density is sparse).
+quotes. h_tau, h_m are kernel variances; h_m ramps in log(tau) from h_m at
+tau_min to h_m_long at tau_max.
 
-The options file's am_set_flag column ships empty from WRDS, so the forward
-join collapses to one row per (date, exdate) preferring PM over AM. Exact
-for PM-settled options; sub-day carry bias on AM monthlies on PM-missing days.
-
-Output: SPX_surfaces.csv with `iv_{m}_{tau}` columns ordered tau-major
-(k = i_t * n_moneyness + i_m); downstream consumers reshape C-order to
-(n_tau, n_moneyness).
+Output: SPX_surfaces.csv, `iv_{m}_{tau}` columns ordered tau-major
+(k = i_t * n_moneyness + i_m); reshape C-order to (n_tau, n_moneyness).
 """
 import os
 from os.path import join
@@ -35,13 +29,14 @@ class OptionMetricsPreprocess:
         moneyness_max=0.10,
         ttm_min=0.0,
         ttm_max=1.0,
-        n_moneyness=15,
-        n_tau=10,
+        n_moneyness=11,
+        n_tau=None,
+        tau_days=(30, 45, 60, 90, 120, 150, 180, 240, 300, 365),
         filter_moneyness_min=-0.25,
         filter_moneyness_max=0.25,
         filter_ttm_min=0.0,
         filter_ttm_max=1.75,
-        atm_threshold=0.02,
+        atm_threshold=0.01,
         h_tau=0.16,
         h_m=2.0e-4,
         h_m_long=6.0e-4,
@@ -59,10 +54,12 @@ class OptionMetricsPreprocess:
 
         self.moneyness_min = moneyness_min
         self.moneyness_max = moneyness_max
-        self.ttm_min = ttm_min
-        self.ttm_max = ttm_max
+        # explicit intuitive tau grid (years), sorted; ttm bounds follow it
+        self.tau_grid_years = np.sort(np.asarray(tau_days, dtype=np.float64) / 365.0)
+        self.ttm_min = float(self.tau_grid_years[0])
+        self.ttm_max = float(self.tau_grid_years[-1])
         self.n_moneyness = n_moneyness
-        self.n_tau = n_tau
+        self.n_tau = len(self.tau_grid_years)
 
         if self.n_moneyness % 2 == 0:
             raise ValueError(
@@ -111,11 +108,8 @@ class OptionMetricsPreprocess:
         # per-day fit error of the gridded surface vs the raw quotes
         self.fit_rows = []
 
-        # Per-tau moneyness bandwidth. If h_m_long is set, ramp linearly in
-        # log(tau) from h_m at tau_min to h_m_long at tau_max; this widens
-        # the smile-direction smoothing in deep maturities where the quote
-        # density is sparse. Flat order matches the (n_tau, n_moneyness)
-        # grid in tau-major C-order (cell k = i_t * n_moneyness + i_m).
+        # Per-tau moneyness bandwidth: ramp linearly in log(tau) from h_m at
+        # tau_min to h_m_long at tau_max. Flat order is tau-major C-order.
         tau_grid = self._make_tau_grid(self.ttm_min, self.ttm_max, self.n_tau)
         if self.h_m_long is None:
             self._h_m_per_tau = np.full(self.n_tau, self.h_m, dtype=np.float64)
@@ -220,12 +214,8 @@ class OptionMetricsPreprocess:
                   f"forward after merge; dropped.")
 
     def _make_tau_grid(self, t_min, t_max, n):
-        eps = 30.0 / 365.0
-        t_min = max(float(t_min), eps)
-        t_max = float(t_max)
-        if self.log_tau:
-            return np.exp(np.linspace(np.log(t_min), np.log(t_max), n))
-        return np.linspace(t_min, t_max, n)
+        # Maturities are the explicit intuitive list set in __init__.
+        return self.tau_grid_years.copy()
 
     def process_daily_surfaces(self):
         # ttm / moneyness and their range filters are applied per-chunk in
@@ -265,7 +255,8 @@ class OptionMetricsPreprocess:
 
             day = day_options[base_ok & in_window & vega_ok & vol_ok]
 
-            # OTM only, plus a narrow ATM band on each side
+            # OTM only, plus a +/-0.01 ATM band on each side (admits near-ATM
+            # quotes of both types; deepest ITM kept is only ~1% in the money).
             calls = day[day["cp_flag"] == "C"]
             puts  = day[day["cp_flag"] == "P"]
             calls_keep = calls[(calls["moneyness"] > 0.0)
@@ -492,18 +483,18 @@ def main():
 
     p.add_argument("--m_low",   type=float, default=-0.10)
     p.add_argument("--m_high",  type=float, default=0.10)
-    p.add_argument("--ttm_low", type=float, default=0.0)
-    p.add_argument("--ttm_high", type=float, default=1.0)
-    p.add_argument("--n_moneyness", type=int, default=15,
+    p.add_argument("--n_moneyness", type=int, default=11,
                    help="Must be odd so the centre cell sits at ATM-forward.")
-    p.add_argument("--n_tau",       type=int, default=10)
+    p.add_argument("--tau_days", type=int, nargs="+",
+                   default=[30, 45, 60, 90, 120, 150, 180, 240, 300, 365],
+                   help="Explicit intuitive maturities in calendar days.")
 
     p.add_argument("--filter_m_low",    type=float, default=-0.25)
     p.add_argument("--filter_m_high",   type=float, default=0.25)
     p.add_argument("--filter_ttm_low",  type=float, default=0.0)
     p.add_argument("--filter_ttm_high", type=float, default=1.75)
 
-    p.add_argument("--atm_threshold", type=float, default=0.02)
+    p.add_argument("--atm_threshold", type=float, default=0.01)
 
     p.add_argument("--h_tau", type=float, default=0.16)
     p.add_argument("--h_m",   type=float, default=2.0e-4,
@@ -530,10 +521,8 @@ def main():
         output_dir=args.output_dir,
         moneyness_min=args.m_low,
         moneyness_max=args.m_high,
-        ttm_min=args.ttm_low,
-        ttm_max=args.ttm_high,
         n_moneyness=args.n_moneyness,
-        n_tau=args.n_tau,
+        tau_days=args.tau_days,
         filter_moneyness_min=args.filter_m_low,
         filter_moneyness_max=args.filter_m_high,
         filter_ttm_min=args.filter_ttm_low,

@@ -8,7 +8,10 @@ Deep:  dlinear, patchtst, hot, tucker_dlinear, gwn
        Each uses its own __init__ defaults; lr is read from the LR_*
        constants below. Shared trainer: Adam, MSE on standardized log-IV,
        max EPOCHS, early stop with PATIENCE (suppressed until MIN_EPOCHS).
-Stat:  var (lag=1, OLS, no training loop).
+Stat:  var (Gonçalves–Guidolin two-stage: daily 5-param cross-sectional
+       OLS on the surface basis [1, M, M², τ, Mτ] with M = k/√τ, then a
+       BIC-selected VAR on the 5-dim β series — train-only fit, frozen
+       on val/test. No training loop.
 
 `--model all` runs the deep models sequentially. VAR must be invoked
 explicitly with `--model var`.
@@ -16,10 +19,11 @@ explicitly with `--model var`.
 Data
 ----
 Columns of SPX_surfaces.csv shaped iv_{moneyness}_{tau} are parsed into a
-[H=tau × W=moneyness] grid (here 10 × 15 = 150 cells). All IV values are
-taken in log space. A per-channel StandardScaler is fit on the training
-rows; the same transform is applied to val/test. Train/val/test split is
-chronological by window-end position (default 80/10/10).
+[H=tau × W=moneyness] grid (current default: 10 × 11 = 110 cells, from
+the preprocessed file under _data_prep/data/optionmetrics_processed/). All
+IV values are taken in log space. A per-channel StandardScaler is fit on
+the training rows; the same transform is applied to val/test. Train/val/
+test split is chronological by window-end position (default 80/10/10).
 
 Output
 ------
@@ -57,7 +61,8 @@ import torch.nn as nn
 # Make the per-model packages importable as top-level modules.
 ROOT = os.path.dirname(os.path.abspath(__file__))
 for sub in ("DLinear", "PatchTST", "HOT", "Tucker_DLinear", "GWN",
-            "PCAFormer", "iTransformer", "ConvLSTM", "VAR"):
+            "PCAFormer", "iTransformer", "ConvLSTM", "SANTA", "SANTA_flat",
+            "SANTA_temporal", "VAR"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
 from dlinear import DLinear                # noqa: E402
@@ -68,7 +73,12 @@ from gwn import GWN                        # noqa: E402
 from pcaformer import PCAFormer            # noqa: E402
 from itransformer import ITransformer      # noqa: E402
 from convlstm import ConvLSTM              # noqa: E402
-from var import fit_var_p, make_step_window_fn  # noqa: E402
+from santa import (                        # noqa: E402
+    SANTA, Config as SANTAConfig,
+)
+from santa_flat import SANTAFlat           # noqa: E402
+from santa_temporal import SANTATemporal   # noqa: E402
+from var import run_var_baseline           # noqa: E402
 
 
 # ─── User-editable per-model optimiser settings ───────────────────────────
@@ -83,6 +93,18 @@ LR_GWN            = 1e-3
 LR_PCAFORMER      = 1e-3
 LR_ITRANSFORMER   = 1e-3
 LR_CONVLSTM       = 1e-3
+# SANTA (Surface-Aware Neural Tensor Attention): transformer of comparable
+# complexity to HOT/PatchTST. Same starting point — small lr, light
+# decoupled WD with AdamW + grad_clip below.
+LR_SANTA          = 5e-4
+# SANTA-Flat: joint-spatial ablation of SANTA. Same per-block hyperparams
+# as SANTA so the comparison isolates the factoring choice — start at the
+# same lr / wd / optimiser.
+LR_SANTA_FLAT     = 5e-4
+# SANTA-Temporal: temporal-only ablation. Same per-block hyperparams as
+# SANTA so the comparison isolates the spatial-block question — start at
+# the same lr / wd / optimiser.
+LR_SANTA_TEMPORAL = 5e-4
 
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
@@ -99,6 +121,9 @@ WD_ITRANSFORMER   = 3e-1
 # ConvLSTM: Medvedev & Wang (2022) train with plain Adam and no weight
 # decay — WD stays 0 and convlstm is kept off the AdamW list below.
 WD_CONVLSTM       = 0.0
+WD_SANTA          = 1e-3
+WD_SANTA_FLAT     = 1e-3
+WD_SANTA_TEMPORAL = 1e-3
 
 # Tucker-only (with AdamW): the G core gets its own multipliers on top of
 # LR_TUCKER_DLINEAR / WD_TUCKER_DLINEAR. The factor matrices stay at the
@@ -117,7 +142,8 @@ BATCH_SIZE = 32
 LOOKBACK   = 63   # fixed across the project
 VALID_PRED_LEN = (1, 5, 10, 21, 42, 63)
 DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
-                  "pcaformer", "itransformer", "convlstm")
+                  "pcaformer", "itransformer", "convlstm", "santa",
+                  "santa_flat", "santa_temporal")
 
 # Folder names per model (where outputs land relative to repo root).
 MODEL_DIR = {
@@ -129,6 +155,9 @@ MODEL_DIR = {
     "pcaformer":      "PCAFormer",
     "itransformer":   "iTransformer",
     "convlstm":       "ConvLSTM",
+    "santa":          "SANTA",
+    "santa_flat":     "SANTA_flat",
+    "santa_temporal": "SANTA_temporal",
     "var":            "VAR",
 }
 
@@ -366,6 +395,43 @@ class _ConvLSTMAdapter(_Adapter):
         return z.permute(0, 1, 3, 2).reshape(B, -1, C)
 
 
+class _SANTAAdapter(_Adapter):
+    """Adapter for SANTA-family models (SANTA, SANTA-Flat ablation, …).
+
+    Wraps any model whose forward signature is the SANTA contract:
+    `(B, L, M, T)` standardised log-IV in, `netDelta (B, Hh, M, T)` out.
+
+    The native model takes `(B, L, M, T)` standardised log-IV with
+    M=moneyness, T=maturity, and emits `netDelta (B, Hh, M, T)` — the
+    residual added to today's surface. The trainer here works in
+    `(B, L, C=H*W)` with C laid out tau-outer / moneyness-inner
+    (parse_grid convention). Forward path:
+        x [B,L,C] -> [B,L,H=n_tau,W=n_money] -> permute -> [B,L,M=W,T=H]
+        model -> netDelta [B, Hh, M, T]
+        zhat = z_today + netDelta            (level in standardised log-IV)
+        zhat [B,Hh,M,T] -> permute -> [B,Hh,T,M] -> reshape -> [B,Hh,C]
+    Hh equals pred_len because SANTA is configured with
+    horizons=(1, …, pred_len) in build_model, so the output time axis
+    matches the trainer's Y axis exactly and MSE on (zhat, y) reduces
+    to surface_loss(netDelta, z_today, z_future) with uniform gamma.
+    """
+    def __init__(self, model, n_tau, n_money):
+        super().__init__(model)
+        self.H, self.W = n_tau, n_money
+
+    def forward(self, x):
+        B, L, C = x.shape
+        z = (x.reshape(B, L, self.H, self.W)
+              .permute(0, 1, 3, 2)
+              .contiguous())                            # [B, L, M, T]
+        netDelta = self.model(z)                        # [B, Hh=P, M, T]
+        z_today  = z[:, -1, :, :]                       # [B, M, T]
+        zhat     = z_today.unsqueeze(1) + netDelta      # [B, P, M, T]
+        return (zhat.permute(0, 1, 3, 2)
+                    .contiguous()
+                    .reshape(B, -1, C))                 # [B, P, C]
+
+
 def build_adapter_from_kwargs(name: str, model_kwargs: dict,
                               n_tau: int, n_money: int) -> nn.Module:
     """Construct an adapter-wrapped model from explicit model_kwargs
@@ -387,6 +453,22 @@ def build_adapter_from_kwargs(name: str, model_kwargs: dict,
         return _ITransformerAdapter(ITransformer(**model_kwargs), n_tau, n_money)
     if name == "convlstm":
         return _ConvLSTMAdapter(ConvLSTM(**model_kwargs), n_tau, n_money)
+    if name == "santa":
+        # model_kwargs holds the saved SANTAConfig as a plain dict
+        # (tuples become lists in JSON; Config is fine with either).
+        cfg = SANTAConfig(**model_kwargs)
+        return _SANTAAdapter(SANTA(cfg), n_tau, n_money)
+    if name == "santa_flat":
+        # SANTA-Flat shares Config + adapter with SANTA — only the inner
+        # backbone differs (joint M·T spatial block vs SANTA's factored
+        # A+B). Same I/O shape so _SANTAAdapter wraps it unchanged.
+        cfg = SANTAConfig(**model_kwargs)
+        return _SANTAAdapter(SANTAFlat(cfg), n_tau, n_money)
+    if name == "santa_temporal":
+        # SANTA-Temporal: same Config + adapter as SANTA, only the inner
+        # backbone differs (no spatial blocks — temporal-only per-cell).
+        cfg = SANTAConfig(**model_kwargs)
+        return _SANTAAdapter(SANTATemporal(cfg), n_tau, n_money)
     raise ValueError(f"Unknown model: {name}")
 
 
@@ -418,9 +500,18 @@ def load_winner_config(name: str, pred_len: int) -> dict:
 
 
 def build_model(name: str, pred_len: int, n_channels: int,
-                n_tau: int, n_money: int) -> tuple[nn.Module, dict]:
+                n_tau: int, n_money: int,
+                tau_vals: list | None = None,
+                money_vals: list | None = None) -> tuple[nn.Module, dict]:
     """Construct a model using its own __init__ defaults. Returns
-    (adapter, resolved_kwargs)."""
+    (adapter, resolved_kwargs).
+
+    `tau_vals` / `money_vals` are the actual grid coordinates (length
+    n_tau / n_money respectively) read from the CSV by parse_grid. They
+    are only needed by models whose embeddings/positional encodings live
+    in coordinate space (currently only santa, which feeds them to
+    its CoordinateEmbedding for moneyness and sqrt(tau)). All other
+    models work off axis sizes alone and ignore these args."""
     L, P, C = LOOKBACK, pred_len, n_channels
     if name == "dlinear":
         # Matches the prior tuning winner (combo_0044): kernel_size=31.
@@ -542,6 +633,113 @@ def build_model(name: str, pred_len: int, n_channels: int,
         )
         m = ConvLSTM(**kw)
         return _ConvLSTMAdapter(m, n_tau, n_money), kw
+    if name == "santa":
+        # SANTA — Surface-Aware Neural Tensor Attention (SANTA/santa.py).
+        # The model is grid-aware: it embeds the CONTINUOUS moneyness
+        # coordinate (k) and √τ via an MLP, so the actual CSV grid values
+        # must be passed in. M is the moneyness axis (15) and T the
+        # maturity axis (10) — matching the (B, L, M, T) layout the
+        # adapter feeds in. horizons is set to (1, …, P) so the head
+        # emits one prediction per trainer-side target step. Hyperparams
+        # below (d=32, n_heads=4, n_layers=2, d_ff_mult=1,
+        # d_head_hidden=24, dropout=0.1) put the model at ~44k params at
+        # L=63 — n_layers=2 is fixed across SANTA / SANTAFlat /
+        # SANTATemporal so the budget is spent on depth, with `d` the
+        # only knob that varies between variants to compensate for
+        # 3/2/1 SubBlocks per layer (so all three land within ~44–51k).
+        # The santa.py file's own Config defaults are different
+        # (d=48, n_layers=2, ~120k params).
+        if tau_vals is None or money_vals is None:
+            raise ValueError("santa needs tau_vals and money_vals "
+                             "from the parsed grid.")
+        cfg = SANTAConfig(
+            M=n_money, T=n_tau, L=L,
+            horizons=tuple(range(1, P + 1)),
+            d=32, n_heads=4, n_layers=2, d_ff_mult=1,
+            d_head_hidden=24, dropout=0.1,
+            k_grid=tuple(float(v) for v in money_vals),
+            tau_grid_years=tuple(float(v) for v in tau_vals),
+            centre_on="last",
+        )
+        m = SANTA(cfg)
+        # Persist the resolved config as a plain dict so
+        # build_adapter_from_kwargs can rebuild this exact model.
+        kw = {
+            "M": cfg.M, "T": cfg.T, "L": cfg.L,
+            "horizons": list(cfg.horizons),
+            "d": cfg.d, "n_heads": cfg.n_heads,
+            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
+            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
+            "k_grid": list(cfg.k_grid),
+            "tau_grid_years": list(cfg.tau_grid_years),
+            "centre_on": cfg.centre_on,
+        }
+        return _SANTAAdapter(m, n_tau, n_money), kw
+    if name == "santa_flat":
+        # SANTA-Flat ablation: same Config shape as the santa branch
+        # above (n_heads=4, n_layers=2, d_ff_mult=1, d_head_hidden=24,
+        # dropout=0.1) — only `d` differs to compensate for having 2
+        # SubBlocks per layer (vs SANTA's 3) so the parameter budget
+        # stays near 50k. The inner backbone is the only architectural
+        # diff (joint M·T spatial block vs SANTA's factored A+B).
+        # d=40 lands at ~47k params; divisible by 4 for the heads.
+        if tau_vals is None or money_vals is None:
+            raise ValueError("santa_flat needs tau_vals and money_vals "
+                             "from the parsed grid.")
+        cfg = SANTAConfig(
+            M=n_money, T=n_tau, L=L,
+            horizons=tuple(range(1, P + 1)),
+            d=40, n_heads=4, n_layers=2, d_ff_mult=1,
+            d_head_hidden=24, dropout=0.1,
+            k_grid=tuple(float(v) for v in money_vals),
+            tau_grid_years=tuple(float(v) for v in tau_vals),
+            centre_on="last",
+        )
+        m = SANTAFlat(cfg)
+        kw = {
+            "M": cfg.M, "T": cfg.T, "L": cfg.L,
+            "horizons": list(cfg.horizons),
+            "d": cfg.d, "n_heads": cfg.n_heads,
+            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
+            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
+            "k_grid": list(cfg.k_grid),
+            "tau_grid_years": list(cfg.tau_grid_years),
+            "centre_on": cfg.centre_on,
+        }
+        return _SANTAAdapter(m, n_tau, n_money), kw
+    if name == "santa_temporal":
+        # SANTA-Temporal ablation: same Config shape as santa /
+        # santa_flat above (n_heads=4, n_layers=2, d_ff_mult=1,
+        # d_head_hidden=24, dropout=0.1) — only `d` differs to
+        # compensate for having 1 SubBlock per layer (vs SANTA's 3,
+        # SANTA-Flat's 2) so the parameter budget stays near 50k. The
+        # inner backbone is the only architectural diff (temporal-only,
+        # no spatial blocks).
+        # d=56 lands at ~50.6k params; divisible by 4 for the heads.
+        if tau_vals is None or money_vals is None:
+            raise ValueError("santa_temporal needs tau_vals and money_vals "
+                             "from the parsed grid.")
+        cfg = SANTAConfig(
+            M=n_money, T=n_tau, L=L,
+            horizons=tuple(range(1, P + 1)),
+            d=56, n_heads=4, n_layers=2, d_ff_mult=1,
+            d_head_hidden=24, dropout=0.1,
+            k_grid=tuple(float(v) for v in money_vals),
+            tau_grid_years=tuple(float(v) for v in tau_vals),
+            centre_on="last",
+        )
+        m = SANTATemporal(cfg)
+        kw = {
+            "M": cfg.M, "T": cfg.T, "L": cfg.L,
+            "horizons": list(cfg.horizons),
+            "d": cfg.d, "n_heads": cfg.n_heads,
+            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
+            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
+            "k_grid": list(cfg.k_grid),
+            "tau_grid_years": list(cfg.tau_grid_years),
+            "centre_on": cfg.centre_on,
+        }
+        return _SANTAAdapter(m, n_tau, n_money), kw
     raise ValueError(f"Unknown model: {name}")
 
 
@@ -554,6 +752,9 @@ LR_BY_MODEL = {
     "pcaformer":      LR_PCAFORMER,
     "itransformer":   LR_ITRANSFORMER,
     "convlstm":       LR_CONVLSTM,
+    "santa":          LR_SANTA,
+    "santa_flat":     LR_SANTA_FLAT,
+    "santa_temporal": LR_SANTA_TEMPORAL,
 }
 
 WD_BY_MODEL = {
@@ -565,6 +766,9 @@ WD_BY_MODEL = {
     "pcaformer":      WD_PCAFORMER,
     "itransformer":   WD_ITRANSFORMER,
     "convlstm":       WD_CONVLSTM,
+    "santa":          WD_SANTA,
+    "santa_flat":     WD_SANTA_FLAT,
+    "santa_temporal": WD_SANTA_TEMPORAL,
 }
 
 
@@ -777,6 +981,7 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     if winner_cfg is None:
         adapter, resolved = build_model(
             name, pred_len, C, grid.n_tau, grid.n_money,
+            tau_vals=grid.tau_vals, money_vals=grid.money_vals,
         )
         lr = LR_BY_MODEL[name]
         wd = WD_BY_MODEL[name]
@@ -786,9 +991,11 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         # GWN's gated dilated convs; for DLinear/Tucker it's a no-op
         # while WD is small but lets us add decoupled WD without re-
         # tuning. grad_clip stabilises GWN's noisy-val updates and HOT/
-        # PatchTST's attention init.
+        # PatchTST's attention init. santa is another transformer
+        # so it also lands on AdamW.
         use_adamw = name in ("tucker_dlinear", "hot", "patchtst", "dlinear",
-                             "pcaformer", "itransformer")
+                             "pcaformer", "itransformer", "santa",
+                             "santa_flat", "santa_temporal")
         grad_clip = 1.0 if use_adamw else None
         if name == "tucker_dlinear":
             # G core gets its own multipliers; factor matrices stay at
@@ -1059,94 +1266,26 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     print(f"  saved → {os.path.relpath(out_dir, ROOT)}\n")
 
 
-# ─── VAR (lag=1) ──────────────────────────────────────────────────────────
+# ─── VAR (Gonçalves–Guidolin two-stage on the 5-coefficient basis) ──────
 
 def train_var(data: dict, pred_len: int, seed: int):
-    """Fit VAR(1) on standardized log-IV train series; forecast pred_len
-    steps from each test window's last input row, save preds + stats."""
-    np.random.seed(seed)
+    """Thin wrapper around var.run_var_baseline.
 
-    grid = data["grid"]
-    Xte, Yte = data["test"]   # Xte: [N, L, C], Yte: [N, P, C]
-
-    # Fit on train rows only — same rows used to fit the scaler.
-    train_end = data["rows"]["train_end"]
-    full      = data["scaled_log_iv"]
-    X_fit     = full[:train_end].astype(np.float64)
-
-    c, A_list, _ = fit_var_p(X_fit, p=1)
-    step = make_step_window_fn(c, A_list)
-
-    # For each test window, use the last input row as the seed for an
-    # iterative lag-1 rollout of length pred_len. With lag=1 the rest of
-    # the lookback is unused but window alignment matches the deep models.
-    N = Xte.shape[0]
-    P = pred_len
-    C = data["rows"]["n_channels"]
-    preds = np.empty((N, P, C), dtype=np.float32)
-    seed_rows = Xte[:, -1, :].astype(np.float64)     # [N, C]
-    for i in range(N):
-        cur = seed_rows[i].reshape(1, C)
-        out = np.empty((P, C), dtype=np.float64)
-        for h in range(P):
-            nxt = step(cur)                          # [C]
-            out[h] = nxt
-            cur = nxt.reshape(1, C)
-        preds[i] = out
-
+    Stage 1 fits ℓ = β₀ + β₁M + β₂M² + β₃τ + β₄Mτ across the 150 cells
+    daily (M = k/√τ, intra-day OLS, no temporal leakage). Stage 2 fits a
+    VAR(p) on the 5-dim β series over the TRAIN slice with p chosen by
+    BIC; parameters are frozen and used unchanged on val/test. The frozen
+    VAR is iterated forward at each test base date, β̂_{t+h} is plugged
+    back into the Stage-1 formula to reconstruct ℓ̂ on every cell, and
+    the result is restandardised so it can be scored against the same Yte
+    the neural models use. Run the per-regime breakdown afterwards on the
+    standardised preds for parity with the deep-model rows."""
+    Xte, Yte = data["test"]
     out_dir = os.path.join(ROOT, MODEL_DIR["var"], "results",
                            f"{LOOKBACK}_{pred_len}")
-    os.makedirs(out_dir, exist_ok=True)
-    np.save(os.path.join(out_dir, "preds.npy"), preds)
-
-    mse  = float(np.mean((preds - Yte) ** 2))
-    mae  = float(np.mean(np.abs(preds - Yte)))
-    rmse = float(np.sqrt(mse))
-    stats = {
-        "model":     "var",
-        "lag":       1,
-        "pred_len":  pred_len,
-        "lookback":  LOOKBACK,
-        "n_test":    int(N),
-        "test_mse":  mse,
-        "test_rmse": rmse,
-        "test_mae":  mae,
-        "space":     "standardized_log_iv",
-    }
-    with open(os.path.join(out_dir, "metrics_test.json"), "w") as f:
-        json.dump(stats, f, indent=2)
-
-    hyper = {
-        "model":     "var",
-        "lag":       1,
-        "fit_space": "standardized_log_iv",
-        "lookback":  LOOKBACK,
-        "pred_len":  pred_len,
-        "seed":      seed,
-        "n_train_rows": int(train_end),
-        "data_end":     data.get("data_end"),
-        "first_date":   data.get("first_date"),
-        "last_date":    data.get("last_date"),
-        "test_first_target_date": data.get("test_first_target_date"),
-        "grid": {
-            "n_tau":      grid.n_tau,
-            "n_money":    grid.n_money,
-            "tau_vals":   grid.tau_vals,
-            "money_vals": grid.money_vals,
-        },
-        "scaler": {
-            "space":         "log_iv",
-            "mean":          data["scaler"]["mean"].tolist(),
-            "std":           data["scaler"]["std"].tolist(),
-            "channel_order": grid.iv_cols,
-        },
-    }
-    with open(os.path.join(out_dir, "hyperparams.json"), "w") as f:
-        json.dump(hyper, f, indent=2)
-
-    print(f"[var  pred_len={pred_len}]")
-    print(f"  fit on {train_end} train rows, K={C}")
-    print(f"  test: mse={mse:.6f}  rmse={rmse:.6f}  mae={mae:.6f}")
+    run_var_baseline(data, pred_len, seed=seed,
+                     out_dir=out_dir, verbose=True)
+    preds = np.load(os.path.join(out_dir, "preds.npy"))
     _per_regime_breakdown(preds, Yte, Xte, data, pred_len)
     print(f"  saved → {os.path.relpath(out_dir, ROOT)}\n")
 
@@ -1162,7 +1301,17 @@ def main():
                     choices=(*DEEP_MODELS, "var", "all"))
     ap.add_argument("--pred_len", required=True, type=int,
                     choices=VALID_PRED_LEN)
-    ap.add_argument("--csv_path", default=os.path.join(ROOT, "SPX_surfaces.csv"))
+    ap.add_argument("--csv_path",
+                    default=os.path.join(
+                        ROOT, "_data_prep", "data",
+                        "optionmetrics_processed", "SPX_surfaces.csv"),
+                    help="Path to the SPX surfaces CSV (iv_{m}_{tau} columns). "
+                         "Default is the freshly preprocessed 11-moneyness x "
+                         "10-day-count grid under _data_prep/data/"
+                         "optionmetrics_processed/. Pass the repo-root "
+                         "SPX_surfaces.csv to train against the legacy 15x10 "
+                         "grid (note: saved best_model.pt files under each "
+                         "ModelDir were trained on the 15x10 grid).")
     ap.add_argument("--train_frac", type=float, default=0.7)
     ap.add_argument("--val_frac",   type=float, default=0.1)
     ap.add_argument("--data_end",   type=str,   default="2023-12-29",

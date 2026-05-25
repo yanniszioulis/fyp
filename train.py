@@ -62,7 +62,7 @@ import torch.nn as nn
 ROOT = os.path.dirname(os.path.abspath(__file__))
 for sub in ("DLinear", "PatchTST", "HOT", "Tucker_DLinear", "GWN",
             "PCAFormer", "iTransformer", "ConvLSTM", "SANTA", "SANTA_flat",
-            "SANTA_temporal", "VAR"):
+            "SANTA_temporal", "transformer", "VAR"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
 from dlinear import DLinear                # noqa: E402
@@ -78,6 +78,7 @@ from santa import (                        # noqa: E402
 )
 from santa_flat import SANTAFlat           # noqa: E402
 from santa_temporal import SANTATemporal   # noqa: E402
+from transformer import VanillaTransformer # noqa: E402
 from var import run_var_baseline           # noqa: E402
 
 
@@ -105,6 +106,9 @@ LR_SANTA_FLAT     = 5e-4
 # SANTA so the comparison isolates the spatial-block question — start at
 # the same lr / wd / optimiser.
 LR_SANTA_TEMPORAL = 5e-4
+# VanillaTransformer: the architectural floor for the SANTA family — same
+# trainer recipe as SANTA-* (small lr, light decoupled WD with AdamW + grad_clip).
+LR_TRANSFORMER    = 5e-4
 
 WD_DLINEAR        = 0.0
 WD_PATCHTST       = 1e-4
@@ -124,6 +128,7 @@ WD_CONVLSTM       = 0.0
 WD_SANTA          = 1e-3
 WD_SANTA_FLAT     = 1e-3
 WD_SANTA_TEMPORAL = 1e-3
+WD_TRANSFORMER    = 1e-3
 
 # Tucker-only (with AdamW): the G core gets its own multipliers on top of
 # LR_TUCKER_DLINEAR / WD_TUCKER_DLINEAR. The factor matrices stay at the
@@ -143,7 +148,7 @@ LOOKBACK   = 63   # fixed across the project
 VALID_PRED_LEN = (1, 5, 10, 21, 42, 63)
 DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
                   "pcaformer", "itransformer", "convlstm", "santa",
-                  "santa_flat", "santa_temporal")
+                  "santa_flat", "santa_temporal", "transformer")
 
 # Folder names per model (where outputs land relative to repo root).
 MODEL_DIR = {
@@ -158,6 +163,7 @@ MODEL_DIR = {
     "santa":          "SANTA",
     "santa_flat":     "SANTA_flat",
     "santa_temporal": "SANTA_temporal",
+    "transformer":    "transformer",
     "var":            "VAR",
 }
 
@@ -469,6 +475,13 @@ def build_adapter_from_kwargs(name: str, model_kwargs: dict,
         # backbone differs (no spatial blocks — temporal-only per-cell).
         cfg = SANTAConfig(**model_kwargs)
         return _SANTAAdapter(SANTATemporal(cfg), n_tau, n_money)
+    if name == "transformer":
+        # VanillaTransformer: shares the SANTA I/O contract (z: (B,L,M,T)
+        # in, netDelta: (B,Hh,M,T) out) so the _SANTAAdapter wraps it
+        # unchanged. Config fields it doesn't use (d_head_hidden, k_grid,
+        # tau_grid_years) are accepted and ignored.
+        cfg = SANTAConfig(**model_kwargs)
+        return _SANTAAdapter(VanillaTransformer(cfg), n_tau, n_money)
     raise ValueError(f"Unknown model: {name}")
 
 
@@ -713,6 +726,41 @@ def build_model(name: str, pred_len: int, n_channels: int,
             "centre_on": cfg.centre_on,
         }
         return _SANTAAdapter(m, n_tau, n_money), kw
+    if name == "transformer":
+        # VanillaTransformer — architectural floor for the SANTA family.
+        # Day-token transformer: surface flattened to a 110-vector per day,
+        # projected to d, attention over L days, surface-wide head out.
+        # No coordinate embeddings, no spatial attention — see
+        # transformer/transformer.py for the diff vs SANTA-Temporal.
+        # d=16 lands at ~48.9k params at n_layers=2 (the surface-wide head
+        # alone is ~39k of those — that's the structural cost of the
+        # reduce-then-forecast bottleneck the vanilla design implies).
+        # k_grid / tau_grid_years are passed for Config completeness but
+        # the model deliberately does NOT consume them (no CoordinateEmbedding).
+        if tau_vals is None or money_vals is None:
+            raise ValueError("transformer needs tau_vals and money_vals "
+                             "from the parsed grid (Config completeness only).")
+        cfg = SANTAConfig(
+            M=n_money, T=n_tau, L=L,
+            horizons=tuple(range(1, P + 1)),
+            d=16, n_heads=4, n_layers=2, d_ff_mult=1,
+            d_head_hidden=24, dropout=0.1,
+            k_grid=tuple(float(v) for v in money_vals),
+            tau_grid_years=tuple(float(v) for v in tau_vals),
+            centre_on="last",
+        )
+        m = VanillaTransformer(cfg)
+        kw = {
+            "M": cfg.M, "T": cfg.T, "L": cfg.L,
+            "horizons": list(cfg.horizons),
+            "d": cfg.d, "n_heads": cfg.n_heads,
+            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
+            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
+            "k_grid": list(cfg.k_grid),
+            "tau_grid_years": list(cfg.tau_grid_years),
+            "centre_on": cfg.centre_on,
+        }
+        return _SANTAAdapter(m, n_tau, n_money), kw
     if name == "santa_temporal":
         # SANTA-Temporal ablation: IDENTICAL per-block hyperparams to
         # the santa / santa_flat branches (d=32, n_heads=4, n_layers=2,
@@ -761,6 +809,7 @@ LR_BY_MODEL = {
     "santa":          LR_SANTA,
     "santa_flat":     LR_SANTA_FLAT,
     "santa_temporal": LR_SANTA_TEMPORAL,
+    "transformer":    LR_TRANSFORMER,
 }
 
 WD_BY_MODEL = {
@@ -775,6 +824,7 @@ WD_BY_MODEL = {
     "santa":          WD_SANTA,
     "santa_flat":     WD_SANTA_FLAT,
     "santa_temporal": WD_SANTA_TEMPORAL,
+    "transformer":    WD_TRANSFORMER,
 }
 
 
@@ -1001,7 +1051,7 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         # so it also lands on AdamW.
         use_adamw = name in ("tucker_dlinear", "hot", "patchtst", "dlinear",
                              "pcaformer", "itransformer", "santa",
-                             "santa_flat", "santa_temporal")
+                             "santa_flat", "santa_temporal", "transformer")
         grad_clip = 1.0 if use_adamw else None
         if name == "tucker_dlinear":
             # G core gets its own multipliers; factor matrices stay at

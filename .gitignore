@@ -30,6 +30,12 @@ true.npy
 checkpoint.pt
 *.ckpt
 
+# Exception: VAR is deterministic (frozen two-stage Gonçalves-Guidolin), the
+# preds file is small (~9MB), and train.py's per-regime breakdown wants it
+# present on every machine. Track it so it survives a fresh clone on Colab.
+!VAR/results/*/preds.npy
+!VAR/eval/*/preds.npy
+
 _trading/
 
 # Legacy DynGWN data / artifacts

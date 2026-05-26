@@ -735,18 +735,34 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # projected to d, attention over L days, surface-wide head out.
         # No coordinate embeddings, no spatial attention — see
         # transformer/transformer.py for the diff vs SANTA-Temporal.
-        # d=16 lands at ~48.9k params at n_layers=2 (the surface-wide head
-        # alone is ~39k of those — that's the structural cost of the
-        # reduce-then-forecast bottleneck the vanilla design implies).
+        #
+        # `d` is selected per pred_len to keep total params in the SANTA
+        # family's budget envelope (43-50k). The vanilla transformer's
+        # head scales linearly with n_horizons, so a single `d` doesn't
+        # work across horizons:
+        #
+        #     pred_len   d   total params   notes
+        #         21    16     48,902       between SANTA & S-Temporal
+        #         10    24     44,252       matches SANTA (43,490)
+        #
         # k_grid / tau_grid_years are passed for Config completeness but
         # the model deliberately does NOT consume them (no CoordinateEmbedding).
         if tau_vals is None or money_vals is None:
             raise ValueError("transformer needs tau_vals and money_vals "
                              "from the parsed grid (Config completeness only).")
+        _TRANSFORMER_D_BY_PRED_LEN = {21: 16, 10: 24}
+        d_t = _TRANSFORMER_D_BY_PRED_LEN.get(P)
+        if d_t is None:
+            # Closed-form solve of 12d² + (410+110·P)·d + 110·P ≈ 50000;
+            # snap to nearest multiple of 4 (n_heads=4 constraint).
+            import math
+            disc = (410 + 110 * P) ** 2 + 48 * (50_000 - 110 * P)
+            d_raw = max(8.0, (-(410 + 110 * P) + math.sqrt(max(disc, 0))) / 24.0)
+            d_t = int(round(d_raw / 4.0) * 4)
         cfg = SANTAConfig(
             M=n_money, T=n_tau, L=L,
             horizons=tuple(range(1, P + 1)),
-            d=16, n_heads=4, n_layers=2, d_ff_mult=1,
+            d=d_t, n_heads=4, n_layers=2, d_ff_mult=1,
             d_head_hidden=24, dropout=0.1,
             k_grid=tuple(float(v) for v in money_vals),
             tau_grid_years=tuple(float(v) for v in tau_vals),

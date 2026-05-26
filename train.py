@@ -756,13 +756,14 @@ def build_model(name: str, pred_len: int, n_channels: int,
         #     pred_len   d   total params   notes
         #         21    16     48,902       between SANTA & S-Temporal
         #         10    24     44,252       matches SANTA (43,490)
+        #         42     8     45,628       matches SANTA (44,290) — head_dim=2
         #
         # k_grid / tau_grid_years are passed for Config completeness but
         # the model deliberately does NOT consume them (no CoordinateEmbedding).
         if tau_vals is None or money_vals is None:
             raise ValueError("transformer needs tau_vals and money_vals "
                              "from the parsed grid (Config completeness only).")
-        _TRANSFORMER_D_BY_PRED_LEN = {21: 16, 10: 24}
+        _TRANSFORMER_D_BY_PRED_LEN = {21: 16, 10: 24, 42: 8}
         d_t = _TRANSFORMER_D_BY_PRED_LEN.get(P)
         if d_t is None:
             # Closed-form solve of 12d² + (410+110·P)·d + 110·P ≈ 50000;

@@ -753,17 +753,24 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # head scales linearly with n_horizons, so a single `d` doesn't
         # work across horizons:
         #
-        #     pred_len   d   total params   notes
-        #         21    16     48,902       between SANTA & S-Temporal
-        #         10    24     44,252       matches SANTA (43,490)
-        #         42     8     45,628       matches SANTA (44,290) — head_dim=2
+        #     pred_len   d    total params   head_dim   notes
+        #         10    24     44,252         6         matches SANTA (43,490)
+        #         21    16     48,902         4         in SANTA envelope
+        #         42     8     45,628         2         matches SANTA (44,290)
+        #         63     8     66,418         2         OVER budget by ~30% (SANTA
+        #                                                   family is 44-52k at h=63);
+        #                                                   kept n_heads=4 / head_dim=2
+        #                                                   matching h=42. Smaller d
+        #                                                   would be either degenerate
+        #                                                   (head_dim=1 at d=4) or
+        #                                                   require n_heads=2 (d=6).
         #
         # k_grid / tau_grid_years are passed for Config completeness but
         # the model deliberately does NOT consume them (no CoordinateEmbedding).
         if tau_vals is None or money_vals is None:
             raise ValueError("transformer needs tau_vals and money_vals "
                              "from the parsed grid (Config completeness only).")
-        _TRANSFORMER_D_BY_PRED_LEN = {21: 16, 10: 24, 42: 8}
+        _TRANSFORMER_D_BY_PRED_LEN = {21: 16, 10: 24, 42: 8, 63: 8}
         d_t = _TRANSFORMER_D_BY_PRED_LEN.get(P)
         if d_t is None:
             # Closed-form solve of 12d² + (410+110·P)·d + 110·P ≈ 50000;

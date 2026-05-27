@@ -1,0 +1,36 @@
+PROBE 4: Per-cell head usage by regime
+========================================
+
+For each test window, isolate each cell's contribution after
+head_norm:  cell_pred[b, n, p] = tokens[b, n, :] @ head_weight[n]
+                                  + head_bias[n].  Magnitude per
+(window, cell) is Σ_p cell_pred[b, n, p]².  Averaged within each
+regime to give a [4, 15, 10] grid map.
+
+Test windows: 1007.  Cells: 150.
+
+Top-5 cells (w_index, h_index) by mean contribution magnitude:
+  COVID             : [(0, 2), (1, 2), (0, 1), (1, 1), (1, 3)]
+  Reflation calm    : [(0, 7), (0, 8), (1, 7), (1, 8), (0, 6)]
+  Bear 2022         : [(13, 1), (12, 1), (14, 1), (13, 2), (13, 0)]
+  Normalisation     : [(11, 7), (12, 7), (11, 8), (10, 7), (12, 8)]
+
+Cross-regime spatial correlation (cos of flattened contribution maps):
+  COVID          ↔ Reflation calm: +0.984
+  COVID          ↔ Bear 2022     : +0.992
+  COVID          ↔ Normalisation : +0.968
+  Reflation calm ↔ Bear 2022     : +0.974
+  Reflation calm ↔ Normalisation : +0.934
+  Bear 2022      ↔ Normalisation : +0.976
+
+Mean cross-regime cosine (off-diagonal): +0.971
+
+Plots: probe4_cell_usage_by_regime.png
+
+Interpretation hint:
+  - mean cross-regime cos > 0.9 ⇒ per-cell head usage is regime-
+    invariant. Per-cell capacity has fit one average-case pattern.
+  - mean cross-regime cos < 0.5 ⇒ different cells matter in
+    different regimes — regime-conditional usage; per-cell capacity
+    doing genuinely useful work.
+  - intermediate ⇒ partial regime-conditionality.

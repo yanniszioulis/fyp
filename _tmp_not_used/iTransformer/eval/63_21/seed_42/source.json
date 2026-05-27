@@ -1,0 +1,9 @@
+{
+  "model": "itransformer",
+  "variant": null,
+  "seed": 42,
+  "winner_combo": "combo_0036",
+  "winner_source": "iTransformer/tuning_results/63_21/combo_0036/config.json",
+  "pred_len": 21,
+  "data_end": "2023-12-29"
+}

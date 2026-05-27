@@ -1,0 +1,24 @@
+PROBE 2: Spatial structure of per-cell head magnitudes
+=======================================================
+
+Per-cell head Frobenius norms:
+  mean:    3.1096
+  std:     0.1222
+  min:     2.8184
+  max:     3.3507
+  max/min: 1.19
+  std/mean (dispersion): 0.039
+
+For reference, v1 shared head Frobenius norm: 2.7258
+(broadcast to every cell in v1's forward; per-cell norm there is the same scalar for all 150 cells. Note v1 has d_model=16 vs v2's d_model=8, so absolute norms are not directly comparable.)
+
+Spatial smoothness (total variation of per-cell norms):
+  along W (moneyness): 0.0628
+  along H (τ):         0.0885
+
+Plots: probe2_head_norm_heatmap.png
+
+Interpretation hint:
+  - std/mean < 0.2  ⇒ uniform per-cell capacity; uniform WD addresses it.
+  - std/mean > 0.5 + structured spatial pattern ⇒ per-cell capacity concentrated where it matters.
+  - std/mean > 0.5 + no structure (random hot/cold cells) ⇒ overfitting noise per cell.

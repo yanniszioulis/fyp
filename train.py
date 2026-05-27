@@ -754,6 +754,12 @@ def build_model(name: str, pred_len: int, n_channels: int,
         # work across horizons:
         #
         #     pred_len   d    total params   head_dim   notes
+        #          1    48     52,718        12         slight over (~5% above
+        #                                                   S-Temporal anchor at 50,105);
+        #                                                   head is tiny at h=1 so the
+        #                                                   encoder gets the most
+        #                                                   generous attention setup
+        #                                                   of any horizon.
         #         10    24     44,252         6         matches SANTA (43,490)
         #         21    16     48,902         4         in SANTA envelope
         #         42     8     45,628         2         matches SANTA (44,290)
@@ -770,7 +776,7 @@ def build_model(name: str, pred_len: int, n_channels: int,
         if tau_vals is None or money_vals is None:
             raise ValueError("transformer needs tau_vals and money_vals "
                              "from the parsed grid (Config completeness only).")
-        _TRANSFORMER_D_BY_PRED_LEN = {21: 16, 10: 24, 42: 8, 63: 8}
+        _TRANSFORMER_D_BY_PRED_LEN = {1: 48, 10: 24, 21: 16, 42: 8, 63: 8}
         d_t = _TRANSFORMER_D_BY_PRED_LEN.get(P)
         if d_t is None:
             # Closed-form solve of 12d² + (410+110·P)·d + 110·P ≈ 50000;

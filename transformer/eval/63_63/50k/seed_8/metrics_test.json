@@ -1,0 +1,13 @@
+{
+  "model": "transformer",
+  "pred_len": 63,
+  "lookback": 63,
+  "n_test": 1007,
+  "best_val_mse": 0.3344843231334127,
+  "best_epoch": 12,
+  "stop_epoch": 27,
+  "test_mse": 0.4915255606174469,
+  "test_rmse": 0.7010888393188461,
+  "test_mae": 0.41814255714416504,
+  "space": "standardized_log_iv"
+}

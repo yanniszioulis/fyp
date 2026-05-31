@@ -1,0 +1,101 @@
+\begin{table}[h]
+\centering
+\caption{Test-set mean-squared error in standardised log-IV space across forecast horizons. Seeded variants reported as $\mathrm{mean} \pm \mathrm{sd}$ across $10$ seeds at the $50\mathrm{k}$-parameter matched budget. Lower is better. Best per horizon in bold.}
+\label{tab:headline_mse}
+\begin{tabular}{lcccc}
+\toprule
+Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
+\midrule
+Persistence            & $0.10797$ & $0.22028$ & $0.39657$ & $0.52121$ \\
+VAR                    & $0.11849$ & $0.22951$ & $0.39580$ & $0.50563$ \\
+\midrule
+SANTA                  & $0.10572 \pm 0.0007$ & $\mathbf{0.20614 \pm 0.0010}$ & $\mathbf{0.35403 \pm 0.0025}$ & $\mathbf{0.45880 \pm 0.0084}$ \\
+SANTA-Flat             & $0.10579 \pm 0.0007$ & $0.20771 \pm 0.0014$ & $0.36197 \pm 0.0124$ & $0.46956 \pm 0.0379$ \\
+SANTA-Temporal         & $\mathbf{0.10534 \pm 0.0011}$ & $0.20762 \pm 0.0019$ & $0.35628 \pm 0.0044$ & $0.46710 \pm 0.0253$ \\
+\midrule
+VanillaTransformer     & $0.10783 \pm 0.0013$ & $0.21232 \pm 0.0016$ & $0.37347 \pm 0.0054$ & $0.48675 \pm 0.0044$ \\
+PerCellTransformer     & $0.10715 \pm 0.0008$ & $0.20836 \pm 0.0018$ & $0.35926 \pm 0.0024$ & $0.47158 \pm 0.0207$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Test-set mean absolute error in standardised log-IV space across forecast horizons. Seeded as above. Lower is better.}
+\label{tab:headline_mae}
+\begin{tabular}{lcccc}
+\toprule
+Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
+\midrule
+Persistence            & $0.21054$ & $0.29168$ & $0.38687$ & $0.44617$ \\
+VAR                    & $0.22227$ & $0.29206$ & $0.37510$ & $0.42481$ \\
+\midrule
+SANTA                  & $0.20601 \pm 0.0010$ & $0.27846 \pm 0.0016$ & $0.35898 \pm 0.0021$ & $\mathbf{0.41436 \pm 0.0058}$ \\
+SANTA-Flat             & $0.20590 \pm 0.0007$ & $0.27943 \pm 0.0018$ & $\mathbf{0.35824 \pm 0.0046}$ & $0.41560 \pm 0.0181$ \\
+SANTA-Temporal         & $0.20629 \pm 0.0021$ & $0.27871 \pm 0.0022$ & $0.35962 \pm 0.0045$ & $0.41821 \pm 0.0159$ \\
+\midrule
+VanillaTransformer     & $\mathbf{0.20573 \pm 0.0010}$ & $\mathbf{0.27765 \pm 0.0021}$ & $0.36235 \pm 0.0028$ & $0.41966 \pm 0.0030$ \\
+PerCellTransformer     & $0.20686 \pm 0.0012$ & $0.27961 \pm 0.0022$ & $0.36077 \pm 0.0025$ & $0.42341 \pm 0.0148$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Out-of-sample $R^2$ against the persistence baseline, $R^2_P = 1 - \mathrm{MSE}_\text{model}/\mathrm{MSE}_\text{persistence}$. Higher is better; positive values mean the model beats persistence. Persistence row omitted (zero by definition).}
+\label{tab:headline_r2_pers}
+\begin{tabular}{lcccc}
+\toprule
+Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
+\midrule
+VAR                    & $-0.0974$ & $-0.0419$ & $0.0020$ & $0.0299$ \\
+\midrule
+SANTA                  & $0.0209 \pm 0.006$ & $\mathbf{0.0642 \pm 0.005}$ & $\mathbf{0.1073 \pm 0.006}$ & $\mathbf{0.1197 \pm 0.016}$ \\
+SANTA-Flat             & $0.0202 \pm 0.006$ & $0.0571 \pm 0.006$ & $0.0872 \pm 0.031$ & $0.0991 \pm 0.073$ \\
+SANTA-Temporal         & $\mathbf{0.0244 \pm 0.010}$ & $0.0575 \pm 0.009$ & $0.1016 \pm 0.011$ & $0.1038 \pm 0.048$ \\
+\midrule
+VanillaTransformer     & $0.0014 \pm 0.012$ & $0.0361 \pm 0.007$ & $0.0583 \pm 0.014$ & $0.0661 \pm 0.008$ \\
+PerCellTransformer     & $0.0076 \pm 0.008$ & $0.0541 \pm 0.008$ & $0.0941 \pm 0.006$ & $0.0952 \pm 0.040$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Out-of-sample $R^2$ against the VAR baseline, $R^2_V = 1 - \mathrm{MSE}_\text{model}/\mathrm{MSE}_\text{VAR}$. Higher is better. VAR row omitted (zero by definition).}
+\label{tab:headline_r2_var}
+\begin{tabular}{lcccc}
+\toprule
+Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
+\midrule
+Persistence            & $0.0887$ & $0.0402$ & $-0.0020$ & $-0.0308$ \\
+SANTA                  & $0.1078 \pm 0.006$ & $\mathbf{0.1018 \pm 0.005}$ & $\mathbf{0.1055 \pm 0.006}$ & $\mathbf{0.0926 \pm 0.017}$ \\
+SANTA-Flat             & $0.1071 \pm 0.006$ & $0.0950 \pm 0.006$ & $0.0855 \pm 0.031$ & $0.0713 \pm 0.075$ \\
+SANTA-Temporal         & $\mathbf{0.1109 \pm 0.009}$ & $0.0954 \pm 0.008$ & $0.0998 \pm 0.011$ & $0.0762 \pm 0.050$ \\
+\midrule
+VanillaTransformer     & $0.0900 \pm 0.011$ & $0.0749 \pm 0.007$ & $0.0564 \pm 0.014$ & $0.0373 \pm 0.009$ \\
+PerCellTransformer     & $0.0957 \pm 0.007$ & $0.0921 \pm 0.008$ & $0.0923 \pm 0.006$ & $0.0673 \pm 0.041$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Cross-sectional information coefficient: Pearson correlation between predicted and realised cell-level changes from today's surface, computed per (window, horizon) across the $110$ grid cells and averaged. Persistence row omitted (predicts zero change, IC undefined).}
+\label{tab:headline_ic}
+\begin{tabular}{lcccc}
+\toprule
+Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
+\midrule
+VAR                    & $0.1341$ & $0.1765$ & $0.2317$ & $0.2673$ \\
+\midrule
+SANTA                  & $0.1618 \pm 0.015$ & $\mathbf{0.2372 \pm 0.007}$ & $\mathbf{0.3147 \pm 0.014}$ & $0.3353 \pm 0.015$ \\
+SANTA-Flat             & $0.1718 \pm 0.019$ & $0.2340 \pm 0.017$ & $0.3121 \pm 0.004$ & $\mathbf{0.3468 \pm 0.015}$ \\
+SANTA-Temporal         & $\mathbf{0.1748 \pm 0.019}$ & $0.2371 \pm 0.016$ & $0.3069 \pm 0.019$ & $0.3163 \pm 0.026$ \\
+\midrule
+VanillaTransformer     & $0.1041 \pm 0.023$ & $0.1287 \pm 0.029$ & $0.1325 \pm 0.024$ & $0.1179 \pm 0.033$ \\
+PerCellTransformer     & $0.1387 \pm 0.018$ & $0.1881 \pm 0.008$ & $0.2625 \pm 0.017$ & $0.2593 \pm 0.047$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+

@@ -4,42 +4,39 @@ train.py — train one (or all) IV-surface forecasters on SPX_surfaces.csv.
 
 Models
 ------
-Deep:  dlinear, patchtst, hot, tucker_dlinear, gwn
-       Each uses its own __init__ defaults; lr is read from the LR_*
-       constants below. Shared trainer: Adam, MSE on standardized log-IV,
-       max EPOCHS, early stop with PATIENCE (suppressed until MIN_EPOCHS).
-Stat:  var (Gonçalves–Guidolin two-stage: daily 5-param cross-sectional
-       OLS on the surface basis [1, M, M², τ, Mτ] with M = k/√τ, then a
-       BIC-selected VAR on the 5-dim β series — train-only fit, frozen
-       on val/test. No training loop.
+Deep:  santa, santa_flat, santa_temporal, transformer, per_cell_transformer,
+       dlinear. All share the surface contract — (B,L,M,T) standardised log-IV
+       in, netDelta out (the per-cell change from today) — and the same trainer:
+       AdamW, grad-clip 1.0, MSE on standardised log-IV, max EPOCHS, early stop
+       with PATIENCE (suppressed until MIN_EPOCHS). Per-model lr / weight_decay
+       are the LR_* / WD_* constants below; the architecture and embedding width
+       are set in build_model.
+Stat:  var (Gonçalves–Guidolin two-stage: daily 5-param cross-sectional OLS on
+       the surface basis [1, M, M², τ, Mτ] with M = k/√τ, then a BIC-selected
+       VAR on the 5-dim β series — fit on TRAIN only, frozen on val/test). No
+       training loop.
 
-`--model all` runs the deep models sequentially. VAR must be invoked
-explicitly with `--model var`.
+`--model all` runs the deep models sequentially. VAR must be invoked explicitly
+with `--model var`.
 
 Data
 ----
 Columns of SPX_surfaces.csv shaped iv_{moneyness}_{tau} are parsed into a
-[H=tau × W=moneyness] grid (current default: 10 × 11 = 110 cells, from
-the preprocessed file under _data_prep/data/optionmetrics_processed/). All
-IV values are taken in log space. A per-channel StandardScaler is fit on
-the training rows; the same transform is applied to val/test. Train/val/
-test split is chronological by window-end position (default 80/10/10).
+[H=tau × W=moneyness] grid (current file: 10 × 11 = 110 cells). IV is taken in
+log space; a per-channel StandardScaler is fit on the training rows and applied
+to val/test. The train/val/test split is chronological by window-end position
+(default 80/10/10).
 
 Output
 ------
 Deep models:  <ModelDir>/63_<pred_len>/<UTC-timestamp>/
-                  hyperparams.json
-                  metrics_test.json
-                  train_log.csv
-                  preds.npy            (N_test, pred_len, n_channels)
+                  hyperparams.json, metrics_test.json, train_log.csv,
+                  preds.npy  (N_test, pred_len, n_channels)
 VAR:          VAR/results/63_<pred_len>/
-                  hyperparams.json
-                  metrics_test.json
-                  preds.npy
+                  hyperparams.json, metrics_test.json, preds.npy
 
-Preds and stats are in standardized log-IV space (the training space).
-hyperparams.json stores the scaler mean/scale so preds can be inverted
-back to IV later.
+Preds and stats are in standardised log-IV space (the training space);
+hyperparams.json stores the scaler mean/scale so preds can be inverted to IV.
 """
 
 from __future__ import annotations
@@ -47,6 +44,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 import time
@@ -58,120 +56,78 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-# Make the per-model packages importable as top-level modules.
+# Repo root holds the shared framework (surface_core, embeddings); each model
+# lives in its own folder. Put the root and the model folders on sys.path so the
+# flat `from <model> import ...` imports resolve.
 ROOT = os.path.dirname(os.path.abspath(__file__))
-for sub in ("DLinear", "PatchTST", "HOT", "Tucker_DLinear", "GWN",
-            "PCAFormer", "iTransformer", "ConvLSTM", "SANTA", "SANTA_flat",
-            "SANTA_temporal", "transformer", "per_cell_transformer", "VAR"):
+for sub in (".", "SANTA", "SANTA_flat", "SANTA_temporal", "transformer",
+            "per_cell_transformer", "DLinear", "Linear", "VAR"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
-from dlinear import DLinear                # noqa: E402
-from patchtst import PatchTST              # noqa: E402
-from hot import HOT                        # noqa: E402
-from tucker_dlinear import TuckerDLinear   # noqa: E402
-from gwn import GWN                        # noqa: E402
-from pcaformer import PCAFormer            # noqa: E402
-from itransformer import ITransformer      # noqa: E402
-from convlstm import ConvLSTM              # noqa: E402
-from santa import (                        # noqa: E402
-    SANTA, Config as SANTAConfig,
-)
+from surface_core import Config            # noqa: E402
+from santa import SANTA                    # noqa: E402
 from santa_flat import SANTAFlat           # noqa: E402
 from santa_temporal import SANTATemporal   # noqa: E402
 from transformer import VanillaTransformer # noqa: E402
 from per_cell_transformer import PerCellTransformer  # noqa: E402
+from dlinear import DLinear                # noqa: E402
+from linear import LinearForecaster        # noqa: E402
 from var import run_var_baseline           # noqa: E402
 
 
 # ─── User-editable per-model optimiser settings ───────────────────────────
-# Edit these to set the lr / weight_decay used at training time. Adam
-# optimiser; all other training knobs (epochs, patience, min_epochs) are
-# shared, see below.
-LR_DLINEAR        = 4e-3
-LR_PATCHTST       = 1e-3
-LR_HOT            = 5e-4
-LR_TUCKER_DLINEAR = 1e-3
-LR_GWN            = 1e-3
-LR_PCAFORMER      = 1e-3
-LR_ITRANSFORMER   = 1e-3
-LR_CONVLSTM       = 1e-3
-# SANTA (Surface-Aware Neural Tensor Attention): transformer of comparable
-# complexity to HOT/PatchTST. Same starting point — small lr, light
-# decoupled WD with AdamW + grad_clip below.
-LR_SANTA          = 5e-4
-# SANTA-Flat: joint-spatial ablation of SANTA. Same per-block hyperparams
-# as SANTA so the comparison isolates the factoring choice — start at the
-# same lr / wd / optimiser.
-LR_SANTA_FLAT     = 5e-4
-# SANTA-Temporal: temporal-only ablation. Same per-block hyperparams as
-# SANTA so the comparison isolates the spatial-block question — start at
-# the same lr / wd / optimiser.
-LR_SANTA_TEMPORAL = 5e-4
-# VanillaTransformer: the architectural floor for the SANTA family — same
-# trainer recipe as SANTA-* (small lr, light decoupled WD with AdamW + grad_clip).
-LR_TRANSFORMER    = 5e-4
-# PerCellTransformer: SANTA-Temporal with coords removed; same recipe as
-# the SANTA family.
+# lr / weight_decay used at training time. Every model trains with AdamW +
+# grad_clip=1.0 (decoupled WD; clip stabilises the attention init); all other
+# knobs (epochs, patience, min_epochs, batch) are shared, see below.
+#
+# The SANTA family (SANTA, its two spatial ablations, and the two transformer
+# floors) share one recipe — small lr, light decoupled WD — so cross-model
+# comparisons isolate architecture, not tuning. DLinear keeps its own faster lr
+# and zero WD (a pure linear map needs neither warm-up nor decoupled decay).
+LR_DLINEAR              = 4e-3
+LR_LINEAR               = 4e-3
+LR_SANTA                = 5e-4
+LR_SANTA_FLAT           = 5e-4
+LR_SANTA_TEMPORAL       = 5e-4
+LR_TRANSFORMER          = 5e-4
 LR_PER_CELL_TRANSFORMER = 5e-4
 
-WD_DLINEAR        = 0.0
-WD_PATCHTST       = 1e-4
-WD_HOT            = 0.3
-WD_TUCKER_DLINEAR = 1e-2
-WD_GWN            = 1e-3
-# PCAFormer: frozen PCA basis is the main regulariser; the transformer
-# itself is unconstrained. PatchTST-style defaults (light WD, AdamW).
-WD_PCAFORMER      = 1e-3
-# iTransformer: same shape of starting point — light WD, AdamW. The
-# attention-on-cells design is structurally similar to PatchTST's
-# attention-on-patches; matching its WD is the natural default.
-WD_ITRANSFORMER   = 3e-1
-# ConvLSTM: Medvedev & Wang (2022) train with plain Adam and no weight
-# decay — WD stays 0 and convlstm is kept off the AdamW list below.
-WD_CONVLSTM       = 0.0
-WD_SANTA          = 1e-3
-WD_SANTA_FLAT     = 1e-3
-WD_SANTA_TEMPORAL = 1e-3
-WD_TRANSFORMER    = 1e-3
-WD_PER_CELL_TRANSFORMER = 1e-3
+WD_DLINEAR              = 0.0
+WD_LINEAR               = 0.0
 
-# Tucker-only (with AdamW): the G core gets its own multipliers on top of
-# LR_TUCKER_DLINEAR / WD_TUCKER_DLINEAR. The factor matrices stay at the
-# base values. Lower G LR dampens gauge-direction noise; higher G WD
-# regularises the dominant (overfit-prone) parameter group.
-# Set both to 1.0 to apply the base values uniformly.
-LR_TUCKER_DLINEAR_G_MULT = 0.25
-WD_TUCKER_DLINEAR_G_MULT = 30
+# DLinear moving-average kernel for the trend/seasonal split (odd, ≤ L). Larger =
+# smoother trend / higher-frequency seasonal residual. Linear (no decomposition)
+# ignores it.
+DLINEAR_KERNEL_SIZE = 31
+WD_SANTA                = 1e-3
+WD_SANTA_FLAT           = 1e-3
+WD_SANTA_TEMPORAL       = 1e-3
+WD_TRANSFORMER          = 1e-3
+WD_PER_CELL_TRANSFORMER = 1e-3
 
 # Shared trainer settings (same for every deep model).
 EPOCHS     = 100
 PATIENCE   = 15
 MIN_EPOCHS = 15
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 
 LOOKBACK   = 63   # fixed across the project
 VALID_PRED_LEN = (1, 5, 10, 21, 42, 63)
-DEEP_MODELS    = ("dlinear", "patchtst", "hot", "tucker_dlinear", "gwn",
-                  "pcaformer", "itransformer", "convlstm", "santa",
-                  "santa_flat", "santa_temporal", "transformer",
-                  "per_cell_transformer")
+# Every deep model shares the SANTA forecasting contract (netDelta on the centred
+# surface) and the _SANTAAdapter.
+DEEP_MODELS    = ("santa", "santa_flat", "santa_temporal",
+                  "transformer", "per_cell_transformer", "dlinear", "linear")
 
 # Folder names per model (where outputs land relative to repo root).
 MODEL_DIR = {
-    "dlinear":        "DLinear",
-    "patchtst":       "PatchTST",
-    "hot":            "HOT",
-    "tucker_dlinear": "Tucker_DLinear",
-    "gwn":            "GWN",
-    "pcaformer":      "PCAFormer",
-    "itransformer":   "iTransformer",
-    "convlstm":       "ConvLSTM",
-    "santa":          "SANTA",
-    "santa_flat":     "SANTA_flat",
-    "santa_temporal": "SANTA_temporal",
-    "transformer":    "transformer",
+    "santa":                "SANTA",
+    "santa_flat":           "SANTA_flat",
+    "santa_temporal":       "SANTA_temporal",
+    "transformer":          "transformer",
     "per_cell_transformer": "per_cell_transformer",
-    "var":            "VAR",
+    "dlinear":              "DLinear",
+    "linear":               "Linear",
+    "var":                  "VAR",
 }
 
 
@@ -220,6 +176,36 @@ def parse_grid(columns: list[str]) -> GridSpec:
     )
 
 
+def split_starts(N: int, L: int, P: int, train_end: int, val_end: int):
+    """Window start indices per split under the whole-horizon-within-split rule.
+
+    A window occupies lookback rows [s, s+L) and forecasts target rows
+    [s+L, s+L+P). It is assigned to the split whose row range fully contains its
+    *target horizon*, so no window ever forecasts a day belonging to another
+    split; windows whose horizon straddles a boundary are dropped (a natural
+    P-day embargo at each edge). Concretely:
+
+        train: target horizon entirely in [0, train_end)      -> target_end <= train_end
+        val:   target horizon entirely in [train_end, val_end) -> first_target >= train_end
+                                                                 and target_end <= val_end
+        test:  target horizon entirely in [val_end, N)         -> first_target >= val_end
+
+    Train is identical to the old target-end rule (its whole horizon is already
+    < train_end, so the model never trains on future). Val/test additionally
+    require the FIRST forecast day to be on/after their boundary, which removes
+    any backward reach-back into the prior split's days. Lookback (the model
+    input) may still span a boundary — that is observed history, not a label,
+    and is the standard, leakage-free way to condition a forecast.
+    """
+    starts = np.arange(N - L - P + 1)
+    first_target = starts + L          # first forecast row (today + 1)
+    target_end   = starts + L + P      # one past the last forecast row
+    train = starts[target_end <= train_end]
+    val   = starts[(first_target >= train_end) & (target_end <= val_end)]
+    test  = starts[first_target >= val_end]
+    return train, val, test
+
+
 def load_dataset(csv_path: str, train_frac: float, val_frac: float,
                  lookback: int, pred_len: int, data_end: str | None = None):
     """Return windowed train/val/test tensors and the per-channel scaler.
@@ -230,10 +216,10 @@ def load_dataset(csv_path: str, train_frac: float, val_frac: float,
        parse the (tau × moneyness) grid, take log of IV values.
     2. Row-level split: first train_frac rows define the scaler-fit domain.
     3. StandardScaler per channel, fit on train rows, applied globally.
-    4. Build sliding windows (input=L, target=P) and split each window
-       into train/val/test by the position of its *target end*. Train
-       windows therefore have every value within the scaler's fit domain
-       (no leakage).
+    4. Build sliding windows (input=L, target=P) and assign each to a split via
+       `split_starts` (whole forecast horizon within the split; straddling
+       windows dropped). No window forecasts a day from another split, and no
+       training target lies in the scaler's held-out region — no leakage.
     """
     df = pd.read_csv(csv_path)
     if data_end is not None:
@@ -262,24 +248,19 @@ def load_dataset(csv_path: str, train_frac: float, val_frac: float,
     n_win = N - L - P + 1
     if n_win <= 0:
         raise ValueError(f"Not enough rows ({N}) for L={L}, P={P}.")
-    starts = np.arange(n_win)
-    target_end = starts + L + P    # exclusive
-
-    train_mask = target_end <= train_end
-    val_mask   = (target_end > train_end) & (target_end <= val_end)
-    test_mask  = target_end > val_end
+    train_s, val_s, test_s = split_starts(N, L, P, train_end, val_end)
 
     def stack(idx):
         X = np.stack([scaled[s : s + L]         for s in idx], axis=0)
         Y = np.stack([scaled[s + L : s + L + P] for s in idx], axis=0)
         return X, Y
 
-    Xtr, Ytr = stack(starts[train_mask])
-    Xva, Yva = stack(starts[val_mask])
-    Xte, Yte = stack(starts[test_mask])
+    Xtr, Ytr = stack(train_s)
+    Xva, Yva = stack(val_s)
+    Xte, Yte = stack(test_s)
 
     dates = df["date"].tolist()
-    test_starts = starts[test_mask]
+    test_starts = test_s
     test_first_target_date = (dates[int(test_starts[0]) + L]
                               if test_starts.size else None)
 
@@ -296,6 +277,10 @@ def load_dataset(csv_path: str, train_frac: float, val_frac: float,
         "train":  (Xtr, Ytr),
         "val":    (Xva, Yva),
         "test":   (Xte, Yte),
+        # Window start indices of the test split (single source of truth for the
+        # split, so the regime breakdown and VAR align with the trained models
+        # instead of recomputing the masks and risking drift).
+        "test_starts": test_starts,
         # Per-row dates (after data_end filtering), length N. Used by
         # the post-training per-regime breakdown so we don't need to
         # re-read the CSV; also lets eval scripts share the same source.
@@ -318,100 +303,9 @@ class _Adapter(nn.Module):
         raise NotImplementedError
 
 
-class _DLinearAdapter(_Adapter):
-    def forward(self, x):           # [B, L, C] → [B, P, C]
-        return self.model(x)
-
-
-class _PatchTSTAdapter(_Adapter):
-    def forward(self, x):           # [B, L, C] → [B, P, C]
-        return self.model(x)
-
-
-class _HOTAdapter(_Adapter):
-    def __init__(self, model, n_tau, n_money):
-        super().__init__(model)
-        self.H, self.W = n_tau, n_money
-
-    def forward(self, x):
-        # x: [B, L, C=H*W] → [B, H, W, L] → model → [B, H, W, P] → [B, P, C]
-        B, L, C = x.shape
-        z = x.reshape(B, L, self.H, self.W).permute(0, 2, 3, 1).contiguous()
-        z = self.model(z)
-        return z.permute(0, 3, 1, 2).reshape(B, -1, C)
-
-
-class _TuckerAdapter(_Adapter):
-    def __init__(self, model, n_tau, n_money):
-        super().__init__(model)
-        # Tucker takes [B, L, W, H]; we have [B, L, H, W] from the reshape.
-        self.H, self.W = n_tau, n_money
-
-    def forward(self, x):
-        # x: [B, L, C=H*W] → [B, L, H, W] → permute to [B, L, W, H]
-        B, L, C = x.shape
-        z = x.reshape(B, L, self.H, self.W).permute(0, 1, 3, 2).contiguous()
-        z = self.model(z)        # [B, P, W, H]
-        return z.permute(0, 1, 3, 2).reshape(B, -1, C)
-
-
-class _GWNAdapter(_Adapter):
-    def forward(self, x):
-        # x: [B, L, C] → [B, 1, C, L] → model → [B, P, C, 1] → [B, P, C]
-        B, L, C = x.shape
-        z = x.permute(0, 2, 1).unsqueeze(1)
-        z = self.model(z)
-        return z.squeeze(-1)
-
-
-class _PCAFormerAdapter(_Adapter):
-    def __init__(self, model, n_tau, n_money):
-        super().__init__(model)
-        # PCAFormer takes [B, L, W, H]; same convention as TuckerDLinear.
-        self.H, self.W = n_tau, n_money
-
-    def forward(self, x):
-        # x: [B, L, C=H*W] → [B, L, H, W] → permute to [B, L, W, H]
-        B, L, C = x.shape
-        z = x.reshape(B, L, self.H, self.W).permute(0, 1, 3, 2).contiguous()
-        z = self.model(z)        # [B, P, W, H]
-        return z.permute(0, 1, 3, 2).reshape(B, -1, C)
-
-
-class _ITransformerAdapter(_Adapter):
-    def __init__(self, model, n_tau, n_money):
-        super().__init__(model)
-        # ITransformer takes [B, L, W, H]; same shape convention as
-        # PCAFormer / TuckerDLinear, so the reshape is identical.
-        self.H, self.W = n_tau, n_money
-
-    def forward(self, x):
-        # x: [B, L, C=H*W] → [B, L, H, W] → permute to [B, L, W, H]
-        B, L, C = x.shape
-        z = x.reshape(B, L, self.H, self.W).permute(0, 1, 3, 2).contiguous()
-        z = self.model(z)        # [B, P, W, H]
-        return z.permute(0, 1, 3, 2).reshape(B, -1, C)
-
-
-class _ConvLSTMAdapter(_Adapter):
-    def __init__(self, model, n_tau, n_money):
-        super().__init__(model)
-        # ConvLSTM takes [B, L, W, H]; same shape convention as
-        # iTransformer / PCAFormer / TuckerDLinear.
-        self.H, self.W = n_tau, n_money
-
-    def forward(self, x):
-        # x: [B, L, C=H*W] → [B, L, H, W] → permute to [B, L, W, H]
-        B, L, C = x.shape
-        z = x.reshape(B, L, self.H, self.W).permute(0, 1, 3, 2).contiguous()
-        z = self.model(z)        # [B, P, W, H]
-        return z.permute(0, 1, 3, 2).reshape(B, -1, C)
-
-
 class _SANTAAdapter(_Adapter):
-    """Adapter for SANTA-family models (SANTA, SANTA-Flat ablation, …).
-
-    Wraps any model whose forward signature is the SANTA contract:
+    """Adapter for every model in the family (SANTA, its ablations, the two
+    transformer floors, and DLinear) — they all share the same contract:
     `(B, L, M, T)` standardised log-IV in, `netDelta (B, Hh, M, T)` out.
 
     The native model takes `(B, L, M, T)` standardised log-IV with
@@ -445,478 +339,125 @@ class _SANTAAdapter(_Adapter):
                     .reshape(B, -1, C))                 # [B, P, C]
 
 
-def build_adapter_from_kwargs(name: str, model_kwargs: dict,
-                              n_tau: int, n_money: int) -> nn.Module:
-    """Construct an adapter-wrapped model from explicit model_kwargs
-    (no defaults applied). Used by --from_winner to reproduce a tuning
-    combo exactly. Mirrors evaluate.rebuild_adapter."""
-    if name == "dlinear":
-        return _DLinearAdapter(DLinear(**model_kwargs))
-    if name == "patchtst":
-        return _PatchTSTAdapter(PatchTST(**model_kwargs))
-    if name == "hot":
-        return _HOTAdapter(HOT(**model_kwargs), n_tau, n_money)
-    if name == "tucker_dlinear":
-        return _TuckerAdapter(TuckerDLinear(**model_kwargs), n_tau, n_money)
-    if name == "gwn":
-        return _GWNAdapter(GWN(**model_kwargs))
-    if name == "pcaformer":
-        return _PCAFormerAdapter(PCAFormer(**model_kwargs), n_tau, n_money)
-    if name == "itransformer":
-        return _ITransformerAdapter(ITransformer(**model_kwargs), n_tau, n_money)
-    if name == "convlstm":
-        return _ConvLSTMAdapter(ConvLSTM(**model_kwargs), n_tau, n_money)
-    if name == "santa":
-        # model_kwargs holds the saved SANTAConfig as a plain dict
-        # (tuples become lists in JSON; Config is fine with either).
-        cfg = SANTAConfig(**model_kwargs)
-        return _SANTAAdapter(SANTA(cfg), n_tau, n_money)
-    if name == "santa_flat":
-        # SANTA-Flat shares Config + adapter with SANTA — only the inner
-        # backbone differs (joint M·T spatial block vs SANTA's factored
-        # A+B). Same I/O shape so _SANTAAdapter wraps it unchanged.
-        cfg = SANTAConfig(**model_kwargs)
-        return _SANTAAdapter(SANTAFlat(cfg), n_tau, n_money)
-    if name == "santa_temporal":
-        # SANTA-Temporal: same Config + adapter as SANTA, only the inner
-        # backbone differs (no spatial blocks — temporal-only per-cell).
-        cfg = SANTAConfig(**model_kwargs)
-        return _SANTAAdapter(SANTATemporal(cfg), n_tau, n_money)
-    if name == "transformer":
-        # VanillaTransformer: shares the SANTA I/O contract (z: (B,L,M,T)
-        # in, netDelta: (B,Hh,M,T) out) so the _SANTAAdapter wraps it
-        # unchanged. Config fields it doesn't use (d_head_hidden, k_grid,
-        # tau_grid_years) are accepted and ignored.
-        cfg = SANTAConfig(**model_kwargs)
-        return _SANTAAdapter(VanillaTransformer(cfg), n_tau, n_money)
-    if name == "per_cell_transformer":
-        # PerCellTransformer: SANTA-Temporal with coordinate embeddings
-        # removed. Same _SANTAAdapter applies — I/O contract is identical.
-        cfg = SANTAConfig(**model_kwargs)
-        return _SANTAAdapter(PerCellTransformer(cfg), n_tau, n_money)
-    raise ValueError(f"Unknown model: {name}")
-
-
-def load_winner_config(name: str, pred_len: int) -> dict:
-    """Read <ModelDir>/tuning_results/<lookback>_<pred_len>/summary.json,
-    locate the winner combo, and return its config.json dict augmented
-    with `_winner_combo` and `_winner_source` (path relative to ROOT)."""
-    summary_path = os.path.join(
-        ROOT, MODEL_DIR[name], "tuning_results",
-        f"{LOOKBACK}_{pred_len}", "summary.json",
-    )
-    if not os.path.isfile(summary_path):
-        raise SystemExit(
-            f"--from_winner: no tuning summary at "
-            f"{os.path.relpath(summary_path, ROOT)} "
-            f"(run hyperparameter_tuning.py first).")
-    with open(summary_path) as f:
-        summary = json.load(f)
-    winner = summary.get("winner")
-    if not winner:
-        raise SystemExit(
-            f"--from_winner: no winner in {os.path.relpath(summary_path, ROOT)}")
-    cfg_path = os.path.join(ROOT, winner["config_path"])
-    with open(cfg_path) as f:
-        cfg = json.load(f)
-    cfg["_winner_combo"]  = winner["combo_id"]
-    cfg["_winner_source"] = os.path.relpath(cfg_path, ROOT)
-    return cfg
-
-
-def build_model(name: str, pred_len: int, n_channels: int,
+def build_model(name: str, pred_len: int,
                 n_tau: int, n_money: int,
                 tau_vals: list | None = None,
                 money_vals: list | None = None) -> tuple[nn.Module, dict]:
-    """Construct a model using its own __init__ defaults. Returns
-    (adapter, resolved_kwargs).
+    """Construct an adapter-wrapped model; return (adapter, resolved_kwargs).
 
-    `tau_vals` / `money_vals` are the actual grid coordinates (length
-    n_tau / n_money respectively) read from the CSV by parse_grid. They
-    are only needed by models whose embeddings/positional encodings live
-    in coordinate space (currently only santa, which feeds them to
-    its CoordinateEmbedding for moneyness and sqrt(tau)). All other
-    models work off axis sizes alone and ignore these args."""
-    L, P, C = LOOKBACK, pred_len, n_channels
-    if name == "dlinear":
-        # Matches the prior tuning winner (combo_0044): kernel_size=31.
-        kw = dict(seq_len=L, pred_len=P, n_channels=C, kernel_size=31)
-        m = DLinear(**kw)
-        return _DLinearAdapter(m), {**kw, "revin": True,
-                                    "revin_affine": True, "revin_eps": 1e-5}
-    if name == "patchtst":
-        # Matches the prior tuning winner (combo_0001): patch_len=stride=7,
-        # n_heads=2, d_ff=64, dropout=0.1, head_dropout=0.01, revin=False.
-        # `decomposition` enables the DLinear-style trend/residual split
-        # (two independent backbones + heads, summed); `kernel_size` is
-        # the moving-average kernel used only when decomposition=True
-        # (must be odd).
-        kw = dict(
-            c_in=C, seq_len=L, pred_len=P,
-            patch_len=7, stride=7, d_model=32, n_heads=8,
-            n_layers=2, d_ff=64, attn_dropout=0.0, dropout=0.2,
-            head_dropout=0.05, revin=True, padding_patch="end",
-            decomposition=False, kernel_size=31,
+    Every model shares the surface contract — (B,L,M,T) in, netDelta out — so all
+    are wrapped by _SANTAAdapter and built from one shared Config. The per-model
+    differences are the backbone class and the embedding width d, chosen so each
+    attention model lands in the same ~44-51k parameter envelope; DLinear is the
+    exception (a channel-independent linear map, naturally ~296k, with a
+    moving-average kernel_size as its only extra knob). horizons is set to (1,…,P)
+    so the output time axis matches the trainer's targets.
+
+    tau_vals / money_vals are the live grid coordinates; only the
+    coordinate-embedding models (SANTA and its spatial ablations) consume them, but
+    every model records them in its saved Config. The returned kwargs are that
+    resolved Config, written to hyperparams.json for the record only.
+    """
+    L, P = LOOKBACK, pred_len
+    if tau_vals is None or money_vals is None:
+        raise ValueError("build_model needs tau_vals and money_vals from the "
+                         "parsed grid.")
+
+    def make_cfg(d: int) -> Config:
+        return Config(
+            M=n_money, T=n_tau, L=L,
+            horizons=tuple(range(1, P + 1)),
+            d=d, n_heads=4, n_layers=2, d_ff_mult=1,
+            d_head_hidden=24, dropout=0.1,
+            k_grid=tuple(float(v) for v in money_vals),
+            tau_grid_years=tuple(float(v) for v in tau_vals),
         )
-        m = PatchTST(**kw)
-        return _PatchTSTAdapter(m), kw
-    if name == "hot":
-        # Typical small HOT that lives in the current tuning grid (one
-        # representative point per axis: middle-of-grid). Lets us smoke-
-        # test HOT locally on MPS at a fast size before kicking off the
-        # full sweep.
-        kw = dict(
-            context_length=L, prediction_length=P,
-            d_hidden=64, n_blocks=1, n_head=8, patch_size=7,
-            attention_type="kronecker_sum",
-            dropout=0.2, attn_dropout=0.0, head_dropout=0.0,
-            pe="rope", norm=True, head_type="flatten",
-        )
-        m = HOT(**kw)
-        return _HOTAdapter(m, n_tau, n_money), kw
-    if name == "tucker_dlinear":
-        # Two-branch (trend + seasonal) DLinear with Tucker-decomposed
-        # weights. Trend uses full spatial rank (W × H, default in
-        # TuckerDLinear) so the spatial pathway is identity at init.
-        # Seasonal uses a low-rank spatial bias (rank_W=6, rank_H=4)
-        # since the high-frequency residual lives mostly in the dominant
-        # surface modes (level/slope/skew/butterfly).
-        # Mean init: at step 0 each branch outputs the per-cell lookback
-        # mean of its band, broadcast across the horizon — same starting
-        # point as DLinear's trend init.
-        kw = dict(
-            seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            rank_L_trend=1,    rank_P_trend=min(2, P),
-            rank_W_trend=10, rank_H_trend=7,
-            rank_L_seasonal=4, rank_P_seasonal=min(1, P),
-            rank_W_seasonal=3, rank_H_seasonal=3,
-            kernel_trend=41,
-            g_init_noise=1e-3,
-        )
-        m = TuckerDLinear(**kw)
-        return _TuckerAdapter(m, n_tau, n_money), kw
-    if name == "gwn":
-        # Tuning winner at h=21 (GWN/tuning_results/63_21, combo_0034):
-        # 8/8/8/16 channels, blocks=4, layers=1 → 11,369 params,
-        # val_loss ≈ 0.155. This is the config the published baseline
-        # in headline.csv was trained with. Was previously 16/16/16/32
-        # with blocks=2 (~37k params) — tuning preferred a deeper,
-        # narrower model.
-        kw = dict(
-            num_nodes=C, seq_len=L, pred_len=P,
-            in_dim=1, supports=None,
-            gcn_bool=True, addaptadj=False, aptinit=None,
-            residual_channels=8, dilation_channels=8,
-            skip_channels=8, end_channels=16,
-            kernel_size=2, blocks=4, layers=1,
-            dropout=0.3,
-        )
-        m = GWN(**kw)
-        return _GWNAdapter(m), kw
-    if name == "pcaformer":
-        # PCAFormer hand-tuned to a small footprint: 3 PCs (top-3
-        # explain >95% of IV-surface variance), d_model=8, 1 encoder
-        # layer, 4 heads, FFN=32, dropout=0.3, RevIN no-affine. Frozen
-        # PCA basis is fit by train_deep_model via inner.fit_pca(Xtr)
-        # before the first epoch.
-        kw = dict(
-            seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            n_factors=3, d_model=4, n_heads=4,
-            n_layers=1, d_ff=16, dropout=0.3,
-            revin_affine=False,
-        )
-        m = PCAFormer(**kw)
-        return _PCAFormerAdapter(m, n_tau, n_money), kw
-    if name == "itransformer":
-        # iTransformer at the conservative defaults from the model file:
-        # d_model=64, n_blocks=2, n_heads=4, ffn_ratio=2, dropout=0.1,
-        # head_init_scale=0.001. No normalisation layer, no factor
-        # bottleneck — full cross-cell self-attention with per-cell
-        # time handling. Sized for ~1.2k training windows.
-        kw = dict(
-            seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            d_model=64, n_blocks=1, n_heads=8,
-            ffn_ratio=4, dropout=0.3, head_init_scale=0.001,
-        )
-        m = ITransformer(**kw)
-        return _ITransformerAdapter(m, n_tau, n_money), kw
-    if name == "convlstm":
-        # ConvLSTM of Medvedev & Wang (2022) at the paper's recipe:
-        # 2 stacked ConvLSTM layers (16 then 8 kernels, 4×4 then 3×3),
-        # average-pool 2×2 after each, 0.25 dropout, flatten+dense head.
-        # W=n_money, H=n_tau; with the 15×10 grid the two pools take it
-        # 15×10 → 7×5 → 3×2 before the dense head.
-        # revin: optional per-cell RevIN (off by default to match the
-        # paper's outside-the-model min-max scaling). Flip to True for
-        # the RevIN-on ablation; matches the per-cell norm used by HOT /
-        # PatchTST / iTransformer in this project.
-        kw = dict(
-            seq_len=L, pred_len=P, W=n_money, H=n_tau,
-            hidden_channels=(16, 8), kernel_sizes=(4, 3),
-            pool=2, dropout=0.25,
-            revin=True,
-        )
-        m = ConvLSTM(**kw)
-        return _ConvLSTMAdapter(m, n_tau, n_money), kw
+
+    def resolved_kw(cfg: Config, **extra) -> dict:
+        kw = {
+            "M": cfg.M, "T": cfg.T, "L": cfg.L,
+            "horizons": list(cfg.horizons),
+            "d": cfg.d, "n_heads": cfg.n_heads,
+            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
+            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
+            "k_grid": list(cfg.k_grid),
+            "tau_grid_years": list(cfg.tau_grid_years),
+        }
+        kw.update(extra)
+        return kw
+
+    # Embedding width d per model, picked so each lands in the ~44-51k envelope by
+    # compensating for the number of SubBlocks per layer:
+    #   SANTA              (3 SubBlocks/layer)  d=32 → 43.8k
+    #   SANTA-Flat         (2 SubBlocks/layer)  d=40 → 47.0k
+    #   SANTA-Temporal     (1 SubBlock /layer)  d=56 → 50.6k
+    #   PerCellTransformer (S-Temporal backbone, no coords) d=56 → 44.0k
     if name == "santa":
-        # SANTA — Surface-Aware Neural Tensor Attention (SANTA/santa.py).
-        # The model is grid-aware: it embeds the CONTINUOUS moneyness
-        # coordinate (k) and √τ via an MLP, so the actual CSV grid values
-        # must be passed in. M is the moneyness axis (11) and T the
-        # maturity axis (10) — matching the (B, L, M, T) layout the
-        # adapter feeds in. horizons is set to (1, …, P) so the head
-        # emits one prediction per trainer-side target step.
-        #
-        # This is the matched-budget (50k) configuration:
-        #   d=32, n_heads=4, n_layers=2, d_ff_mult=1,
-        #   d_head_hidden=24, dropout=0.1   →  43,765 params
-        #
-        # The SANTA family at this budget is parameterised so all three
-        # variants land at ~44-51k by varying `d`:
-        #   SANTA          (3 SubBlocks/layer)  d=32 → 43.8k
-        #   SANTA-Flat     (2 SubBlocks/layer)  d=40 → 47.0k
-        #   SANTA-Temporal (1 SubBlock/layer)   d=56 → 50.6k
-        # The matched-PER-BLOCK-spec siblings (all at d=32 → 44k/31k/18k)
-        # are archived under each variant's eval/63_21/med/ slot.
-        # The santa.py file's own Config defaults are larger
-        # (d=48, n_layers=2, ~120k params).
-        if tau_vals is None or money_vals is None:
-            raise ValueError("santa needs tau_vals and money_vals "
-                             "from the parsed grid.")
-        cfg = SANTAConfig(
-            M=n_money, T=n_tau, L=L,
-            horizons=tuple(range(1, P + 1)),
-            d=32, n_heads=4, n_layers=2, d_ff_mult=1,
-            d_head_hidden=24, dropout=0.1,
-            k_grid=tuple(float(v) for v in money_vals),
-            tau_grid_years=tuple(float(v) for v in tau_vals),
-            centre_on="last",
-        )
-        m = SANTA(cfg)
-        # Persist the resolved config as a plain dict so
-        # build_adapter_from_kwargs can rebuild this exact model.
-        kw = {
-            "M": cfg.M, "T": cfg.T, "L": cfg.L,
-            "horizons": list(cfg.horizons),
-            "d": cfg.d, "n_heads": cfg.n_heads,
-            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
-            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
-            "k_grid": list(cfg.k_grid),
-            "tau_grid_years": list(cfg.tau_grid_years),
-            "centre_on": cfg.centre_on,
-        }
-        return _SANTAAdapter(m, n_tau, n_money), kw
+        # Factored spatial (A: moneyness, B: maturity) + temporal (C).
+        cfg = make_cfg(d=32)
+        return _SANTAAdapter(SANTA(cfg), n_tau, n_money), resolved_kw(cfg)
     if name == "santa_flat":
-        # SANTA-Flat at the matched-budget (50k) configuration.
-        # n_heads=4, n_layers=2, d_ff_mult=1, d_head_hidden=24, dropout=0.1
-        # are identical to the SANTA branch above; only `d` differs —
-        # widened from SANTA's 32 to 40 so SANTA-Flat's two-SubBlock-per-
-        # layer trunk lands at ~47k parameters, matching SANTA's ~44k
-        # budget. This is the "matched parameter count" comparison: each
-        # architecture is allowed to spend the same total budget; SANTA-
-        # Flat gets a wider d to compensate for having fewer SubBlocks.
-        # (The matched-per-block-spec sibling — d=32 like SANTA, naturally
-        # ~31k — is now archived under SANTA_flat/eval/63_21/med/.)
-        if tau_vals is None or money_vals is None:
-            raise ValueError("santa_flat needs tau_vals and money_vals "
-                             "from the parsed grid.")
-        cfg = SANTAConfig(
-            M=n_money, T=n_tau, L=L,
-            horizons=tuple(range(1, P + 1)),
-            d=40, n_heads=4, n_layers=2, d_ff_mult=1,
-            d_head_hidden=24, dropout=0.1,
-            k_grid=tuple(float(v) for v in money_vals),
-            tau_grid_years=tuple(float(v) for v in tau_vals),
-            centre_on="last",
-        )
-        m = SANTAFlat(cfg)
-        kw = {
-            "M": cfg.M, "T": cfg.T, "L": cfg.L,
-            "horizons": list(cfg.horizons),
-            "d": cfg.d, "n_heads": cfg.n_heads,
-            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
-            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
-            "k_grid": list(cfg.k_grid),
-            "tau_grid_years": list(cfg.tau_grid_years),
-            "centre_on": cfg.centre_on,
-        }
-        return _SANTAAdapter(m, n_tau, n_money), kw
+        # Joint-spatial ablation: A+B replaced by one block over all M·T cells.
+        cfg = make_cfg(d=40)
+        return _SANTAAdapter(SANTAFlat(cfg), n_tau, n_money), resolved_kw(cfg)
+    if name == "santa_temporal":
+        # Temporal-only ablation: both spatial blocks removed (widest d to
+        # compensate for the missing spatial mixing).
+        cfg = make_cfg(d=56)
+        return _SANTAAdapter(SANTATemporal(cfg), n_tau, n_money), resolved_kw(cfg)
+    if name == "per_cell_transformer":
+        # SANTA-Temporal's backbone with the coordinate embeddings removed; matched
+        # d=56 so the param delta vs SANTA-Temporal is exactly the coord-embed cost.
+        cfg = make_cfg(d=56)
+        return _SANTAAdapter(PerCellTransformer(cfg), n_tau, n_money), resolved_kw(cfg)
     if name == "transformer":
-        # VanillaTransformer — architectural floor for the SANTA family.
-        # Day-token transformer: surface flattened to a 110-vector per day,
-        # projected to d, attention over L days, surface-wide head out.
-        # No coordinate embeddings, no spatial attention — see
-        # transformer/transformer.py for the diff vs SANTA-Temporal.
-        #
-        # `d` is selected per pred_len to keep total params in the SANTA
-        # family's budget envelope (43-50k). The vanilla transformer's
-        # head scales linearly with n_horizons, so a single `d` doesn't
-        # work across horizons:
-        #
-        #     pred_len   d    total params   head_dim   notes
-        #          1    48     52,718        12         slight over (~5% above
-        #                                                   S-Temporal anchor at 50,105);
-        #                                                   head is tiny at h=1 so the
-        #                                                   encoder gets the most
-        #                                                   generous attention setup
-        #                                                   of any horizon.
-        #         10    24     44,252         6         matches SANTA (43,490)
-        #         21    16     48,902         4         in SANTA envelope
-        #         42     8     45,628         2         matches SANTA (44,290)
-        #         63     8     66,418         2         OVER budget by ~30% (SANTA
-        #                                                   family is 44-52k at h=63);
-        #                                                   kept n_heads=4 / head_dim=2
-        #                                                   matching h=42. Smaller d
-        #                                                   would be either degenerate
-        #                                                   (head_dim=1 at d=4) or
-        #                                                   require n_heads=2 (d=6).
-        #
-        # k_grid / tau_grid_years are passed for Config completeness but
-        # the model deliberately does NOT consume them (no CoordinateEmbedding).
-        if tau_vals is None or money_vals is None:
-            raise ValueError("transformer needs tau_vals and money_vals "
-                             "from the parsed grid (Config completeness only).")
-        _TRANSFORMER_D_BY_PRED_LEN = {1: 48, 10: 24, 21: 16, 42: 8, 63: 8}
-        d_t = _TRANSFORMER_D_BY_PRED_LEN.get(P)
+        # Day-token floor. The surface-wide head scales linearly with n_horizons,
+        # so d is chosen per pred_len to keep total params in the family envelope;
+        # the closed-form fallback solves the ~50k budget for unlisted horizons.
+        d_by_P = {1: 48, 10: 24, 21: 16, 42: 8, 63: 8}
+        d_t = d_by_P.get(P)
         if d_t is None:
-            # Closed-form solve of 12d² + (410+110·P)·d + 110·P ≈ 50000;
-            # snap to nearest multiple of 4 (n_heads=4 constraint).
-            import math
             disc = (410 + 110 * P) ** 2 + 48 * (50_000 - 110 * P)
             d_raw = max(8.0, (-(410 + 110 * P) + math.sqrt(max(disc, 0))) / 24.0)
             d_t = int(round(d_raw / 4.0) * 4)
-        cfg = SANTAConfig(
-            M=n_money, T=n_tau, L=L,
-            horizons=tuple(range(1, P + 1)),
-            d=d_t, n_heads=4, n_layers=2, d_ff_mult=1,
-            d_head_hidden=24, dropout=0.1,
-            k_grid=tuple(float(v) for v in money_vals),
-            tau_grid_years=tuple(float(v) for v in tau_vals),
-            centre_on="last",
-        )
-        m = VanillaTransformer(cfg)
-        kw = {
-            "M": cfg.M, "T": cfg.T, "L": cfg.L,
-            "horizons": list(cfg.horizons),
-            "d": cfg.d, "n_heads": cfg.n_heads,
-            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
-            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
-            "k_grid": list(cfg.k_grid),
-            "tau_grid_years": list(cfg.tau_grid_years),
-            "centre_on": cfg.centre_on,
-        }
-        return _SANTAAdapter(m, n_tau, n_money), kw
-    if name == "per_cell_transformer":
-        # PerCellTransformer — SANTA-Temporal with the coordinate
-        # embeddings removed. The missing cell in the factorial design:
-        #
-        #   model              coord-embeddings   cross-cell mixing
-        #   SANTA-Temporal     yes                none
-        #   VanillaTransformer no                 bottleneck (Linear(110→d))
-        #   PerCellTransformer NO                 NONE
-        #
-        # Matched per-block specs with SANTA-Temporal (d=56, n_heads=4,
-        # n_layers=2, ff_mult=1, d_head_hidden=24, dropout=0.1) so the
-        # ~6.6k parameter delta vs SANTA-Temporal is EXACTLY the cost of
-        # the two CoordinateEmbedding MLPs. This is the clean A/B
-        # comparison the thesis needs:
-        #   A. PerCell vs SANTA-Temporal      → isolates the embeddings
-        #   B. PerCell vs VanillaTransformer  → isolates the tokenisation
-        # tau_vals / money_vals are accepted (Config completeness) but
-        # the model deliberately does NOT consume them — no coord MLPs.
-        if tau_vals is None or money_vals is None:
-            raise ValueError("per_cell_transformer needs tau_vals and "
-                             "money_vals from the parsed grid (Config "
-                             "completeness only — embeddings are removed).")
-        cfg = SANTAConfig(
-            M=n_money, T=n_tau, L=L,
-            horizons=tuple(range(1, P + 1)),
-            d=56, n_heads=4, n_layers=2, d_ff_mult=1,
-            d_head_hidden=24, dropout=0.1,
-            k_grid=tuple(float(v) for v in money_vals),
-            tau_grid_years=tuple(float(v) for v in tau_vals),
-            centre_on="last",
-        )
-        m = PerCellTransformer(cfg)
-        kw = {
-            "M": cfg.M, "T": cfg.T, "L": cfg.L,
-            "horizons": list(cfg.horizons),
-            "d": cfg.d, "n_heads": cfg.n_heads,
-            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
-            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
-            "k_grid": list(cfg.k_grid),
-            "tau_grid_years": list(cfg.tau_grid_years),
-            "centre_on": cfg.centre_on,
-        }
-        return _SANTAAdapter(m, n_tau, n_money), kw
-    if name == "santa_temporal":
-        # SANTA-Temporal at the matched-budget (50k) configuration.
-        # n_heads=4, n_layers=2, d_ff_mult=1, d_head_hidden=24, dropout=0.1
-        # are identical to the SANTA / SANTA-Flat branches; only `d`
-        # differs — widened from SANTA's 32 to 56 so SANTA-Temporal's
-        # one-SubBlock-per-layer trunk lands at ~50.6k parameters,
-        # matching the family budget. SANTA-Temporal carries the
-        # widest d because it has the fewest SubBlocks; the extra width
-        # substitutes for missing spatial mixing.
-        # (The matched-per-block-spec sibling — d=32 like SANTA, naturally
-        # ~18k — is now archived under SANTA_temporal/eval/63_21/med/.)
-        if tau_vals is None or money_vals is None:
-            raise ValueError("santa_temporal needs tau_vals and money_vals "
-                             "from the parsed grid.")
-        cfg = SANTAConfig(
-            M=n_money, T=n_tau, L=L,
-            horizons=tuple(range(1, P + 1)),
-            d=56, n_heads=4, n_layers=2, d_ff_mult=1,
-            d_head_hidden=24, dropout=0.1,
-            k_grid=tuple(float(v) for v in money_vals),
-            tau_grid_years=tuple(float(v) for v in tau_vals),
-            centre_on="last",
-        )
-        m = SANTATemporal(cfg)
-        kw = {
-            "M": cfg.M, "T": cfg.T, "L": cfg.L,
-            "horizons": list(cfg.horizons),
-            "d": cfg.d, "n_heads": cfg.n_heads,
-            "n_layers": cfg.n_layers, "d_ff_mult": cfg.d_ff_mult,
-            "d_head_hidden": cfg.d_head_hidden, "dropout": cfg.dropout,
-            "k_grid": list(cfg.k_grid),
-            "tau_grid_years": list(cfg.tau_grid_years),
-            "centre_on": cfg.centre_on,
-        }
-        return _SANTAAdapter(m, n_tau, n_money), kw
+        cfg = make_cfg(d=d_t)
+        return _SANTAAdapter(VanillaTransformer(cfg), n_tau, n_money), resolved_kw(cfg)
+    if name == "dlinear":
+        # Linear floor with decomposition: channel-independent per-cell DLinear
+        # (trend+seasonal split → one affine map of the lookback per cell). No
+        # attention, no coordinate embeddings — it ignores the attention-only
+        # Config fields. Its only extra knob is the moving-average kernel_size.
+        cfg = make_cfg(d=16)
+        kernel_size = DLINEAR_KERNEL_SIZE
+        return (_SANTAAdapter(DLinear(cfg, kernel_size=kernel_size), n_tau, n_money),
+                resolved_kw(cfg, kernel_size=kernel_size))
+    if name == "linear":
+        # The simplest floor: DLinear without the decomposition — one linear map of
+        # the centred lookback per cell (NLinear-style, since centring subtracts
+        # today). DLinear vs linear isolates the value of the trend/seasonal split.
+        cfg = make_cfg(d=16)
+        return _SANTAAdapter(LinearForecaster(cfg), n_tau, n_money), resolved_kw(cfg)
     raise ValueError(f"Unknown model: {name}")
 
 
 LR_BY_MODEL = {
-    "dlinear":        LR_DLINEAR,
-    "patchtst":       LR_PATCHTST,
-    "hot":            LR_HOT,
-    "tucker_dlinear": LR_TUCKER_DLINEAR,
-    "gwn":            LR_GWN,
-    "pcaformer":      LR_PCAFORMER,
-    "itransformer":   LR_ITRANSFORMER,
-    "convlstm":       LR_CONVLSTM,
-    "santa":          LR_SANTA,
-    "santa_flat":     LR_SANTA_FLAT,
-    "santa_temporal": LR_SANTA_TEMPORAL,
-    "transformer":    LR_TRANSFORMER,
+    "santa":                LR_SANTA,
+    "santa_flat":           LR_SANTA_FLAT,
+    "santa_temporal":       LR_SANTA_TEMPORAL,
+    "transformer":          LR_TRANSFORMER,
     "per_cell_transformer": LR_PER_CELL_TRANSFORMER,
+    "dlinear":              LR_DLINEAR,
+    "linear":               LR_LINEAR,
 }
 
 WD_BY_MODEL = {
-    "dlinear":        WD_DLINEAR,
-    "patchtst":       WD_PATCHTST,
-    "hot":            WD_HOT,
-    "tucker_dlinear": WD_TUCKER_DLINEAR,
-    "gwn":            WD_GWN,
-    "pcaformer":      WD_PCAFORMER,
-    "itransformer":   WD_ITRANSFORMER,
-    "convlstm":       WD_CONVLSTM,
-    "santa":          WD_SANTA,
-    "santa_flat":     WD_SANTA_FLAT,
-    "santa_temporal": WD_SANTA_TEMPORAL,
-    "transformer":    WD_TRANSFORMER,
+    "santa":                WD_SANTA,
+    "santa_flat":           WD_SANTA_FLAT,
+    "santa_temporal":       WD_SANTA_TEMPORAL,
+    "transformer":          WD_TRANSFORMER,
     "per_cell_transformer": WD_PER_CELL_TRANSFORMER,
+    "dlinear":              WD_DLINEAR,
+    "linear":               WD_LINEAR,
 }
 
 
@@ -946,13 +487,7 @@ def _per_regime_breakdown(preds: np.ndarray, Yte: np.ndarray,
                   `rows`, `data_end`).
     """
     L, P = LOOKBACK, pred_len
-    rows = data["rows"]
-    N = rows["N"]
-    val_end = rows["val_end"]
-    n_win = N - L - P + 1
-    starts = np.arange(n_win)
-    target_end = starts + L + P
-    test_starts = starts[target_end > val_end]
+    test_starts = data["test_starts"]            # same split the models were trained/scored on
     if test_starts.size == 0:
         return
     last_target_idx = test_starts + L + P - 1
@@ -1033,59 +568,31 @@ def _iter_batches(X: np.ndarray, Y: np.ndarray, batch: int,
 
 
 def _epoch(model, X, Y, batch, device, optimizer=None, generator=None,
-           grad_clip=None,
-           ortho_q_fn=None, ortho_q_weight=0.0,
-           ortho_L_fn=None, ortho_L_weight=0.0):
-    """Run one epoch. Returns (mean_data_loss, mean_ortho_q, mean_ortho_L).
-
-    Optional penalties (no-arg callables returning scalar tensors)
-    fold into the training optimisation target:
-        total = data_loss
-              + ortho_q_weight * ortho_q_fn()
-              + ortho_L_weight * ortho_L_fn()
-    No model currently registers a penalty — the hooks are kept so the
-    signature stays uniform with hyperparameter_tuning.py. The reported
-    `mean_data_loss` is the MSE only (never the combined objective) so
-    train/val numbers stay comparable across models with and without
-    the penalties.
-    """
+           grad_clip=None):
+    """Run one epoch and return the mean MSE over samples. Trains when an
+    optimizer is given (with optional grad-norm clipping); otherwise evaluates
+    under no_grad. The MSE on (ẑ, y) equals surface_loss(netDelta, …) with uniform
+    horizon weights, because the adapter reconstructs ẑ = z_today + netDelta."""
     train = optimizer is not None
     model.train(train)
     loss_fn = nn.MSELoss()
-    total, ortho_q_total, ortho_L_total, n = 0.0, 0.0, 0.0, 0
+    total, n = 0.0, 0
     ctx = torch.enable_grad() if train else torch.no_grad()
     with ctx:
         for xb, yb in _iter_batches(X, Y, batch, shuffle=train,
                                     device=device, generator=generator):
             pred = model(xb)
-            data_loss = loss_fn(pred, yb)
-            total_loss = data_loss
-            if ortho_q_fn is not None:
-                ortho_q = ortho_q_fn()
-                total_loss = total_loss + ortho_q_weight * ortho_q
-                ortho_q_val = float(ortho_q.detach())
-            else:
-                ortho_q_val = 0.0
-            if ortho_L_fn is not None:
-                ortho_L = ortho_L_fn()
-                total_loss = total_loss + ortho_L_weight * ortho_L
-                ortho_L_val = float(ortho_L.detach())
-            else:
-                ortho_L_val = 0.0
+            loss = loss_fn(pred, yb)
             if train:
                 optimizer.zero_grad()
-                total_loss.backward()
+                loss.backward()
                 if grad_clip is not None:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
             bs = xb.shape[0]
-            total       += data_loss.item() * bs
-            ortho_q_total += ortho_q_val   * bs
-            ortho_L_total += ortho_L_val   * bs
+            total += loss.item() * bs
             n += bs
-    return (total       / max(n, 1),
-            ortho_q_total / max(n, 1),
-            ortho_L_total / max(n, 1))
+    return total / max(n, 1)
 
 
 def _predict(model, X, batch, device) -> np.ndarray:
@@ -1101,167 +608,35 @@ def _predict(model, X, batch, device) -> np.ndarray:
 def train_deep_model(name: str, data: dict, pred_len: int,
                      device: torch.device, seed: int,
                      batch_size: int = BATCH_SIZE,
-                     winner_cfg: dict | None = None,
                      out_dir: str | None = None):
-    """Train one deep model with the shared trainer; save artefacts.
+    """Train one deep model with the shared trainer and save artefacts.
 
-    If `winner_cfg` is provided (the saved config.json from a tuning
-    winner), its `model_kwargs`, optimizer choice, `lr`, `weight_decay`,
-    `lr_g`, `wd_g`, `grad_clip`, `min_epochs`, and `batch_size` override
-    the train.py defaults. Used by multi_seed.py --from_winner.
-
-    `out_dir` overrides the default timestamped output path. eval_seeds.py
-    uses this to route outputs directly to the canonical seed slot.
+    Every model uses the same recipe — AdamW with decoupled weight decay,
+    grad-norm clipping at 1.0, and early stopping on val MSE after MIN_EPOCHS —
+    so cross-model comparisons isolate architecture, not the training procedure.
+    Per-model lr / weight_decay come from LR_BY_MODEL / WD_BY_MODEL. `out_dir`
+    overrides the default timestamped path (e.g. to route to a fixed seed slot).
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
     gen = torch.Generator().manual_seed(seed)
 
     grid = data["grid"]
-    C    = data["rows"]["n_channels"]
     Xtr, Ytr = data["train"]
     Xva, Yva = data["val"]
     Xte, Yte = data["test"]
 
-    # Resolve model + trainer knobs. winner_cfg, if given, fully drives
-    # them so we reproduce the tuning combo exactly (same optimizer,
-    # same grad_clip policy, same min_epochs).
-    if winner_cfg is None:
-        adapter, resolved = build_model(
-            name, pred_len, C, grid.n_tau, grid.n_money,
-            tau_vals=grid.tau_vals, money_vals=grid.money_vals,
-        )
-        lr = LR_BY_MODEL[name]
-        wd = WD_BY_MODEL[name]
-        min_epochs = MIN_EPOCHS
-        # AdamW + grad_clip=1.0 for every deep model. AdamW's decoupled
-        # weight decay matters for transformers (HOT/PatchTST) and for
-        # GWN's gated dilated convs; for DLinear/Tucker it's a no-op
-        # while WD is small but lets us add decoupled WD without re-
-        # tuning. grad_clip stabilises GWN's noisy-val updates and HOT/
-        # PatchTST's attention init. santa is another transformer
-        # so it also lands on AdamW.
-        use_adamw = name in ("tucker_dlinear", "hot", "patchtst", "dlinear",
-                             "pcaformer", "itransformer", "santa",
-                             "santa_flat", "santa_temporal", "transformer",
-                             "per_cell_transformer")
-        grad_clip = 1.0 if use_adamw else None
-        if name == "tucker_dlinear":
-            # G core gets its own multipliers; factor matrices stay at
-            # base lr / wd.
-            lr_g = lr * LR_TUCKER_DLINEAR_G_MULT
-            wd_g = wd * WD_TUCKER_DLINEAR_G_MULT
-        else:
-            lr_g = wd_g = None
-    else:
-        resolved = winner_cfg["model_kwargs"]
-        adapter  = build_adapter_from_kwargs(
-            name, resolved, grid.n_tau, grid.n_money,
-        )
-        lr  = float(winner_cfg["lr"])
-        wd  = float(winner_cfg["weight_decay"])
-        min_epochs = int(winner_cfg["min_epochs"])
-        batch_size = int(winner_cfg["batch_size"])
-        use_adamw  = (winner_cfg.get("optimizer") == "AdamW")
-        gc = winner_cfg.get("grad_clip")
-        grad_clip = float(gc) if gc is not None else None
-        lr_g = winner_cfg.get("lr_g")
-        wd_g = winner_cfg.get("wd_g")
-        if lr_g is not None:
-            lr_g = float(lr_g)
-        if wd_g is not None:
-            wd_g = float(wd_g)
-
+    adapter, resolved = build_model(
+        name, pred_len, grid.n_tau, grid.n_money,
+        tau_vals=grid.tau_vals, money_vals=grid.money_vals,
+    )
+    lr = LR_BY_MODEL[name]
+    wd = WD_BY_MODEL[name]
+    grad_clip = 1.0
     adapter.to(device)
     n_params = sum(p.numel() for p in adapter.parameters())
 
-    # Shared forecast-head bias warm-start (iTransformer).
-    #
-    # If the underlying model exposes a shared `head` (nn.Linear with
-    # bias of shape [P]), set the bias to the per-horizon training
-    # mean (averaged over cells). This makes the model's step-0
-    # forecast "predict the cross-cell historical mean per horizon" —
-    # a coarse but reasonable level baseline that the model then
-    # refines, rather than spending early-training capacity learning
-    # absolute levels from scratch.
-    #
-    # Ytr is [N_train, P, C=H*W] with C laid out tau-outer-moneyness-
-    # inner (parse_grid convention). Per-horizon mean is just
-    # Ytr.mean(axis=0).mean(axis=1) → shape [P].
-    inner_model = getattr(adapter, "model", adapter)
-    if name == "itransformer":
-        # Skip the warm-start when per-cell RevIN is active: under RevIN
-        # the model's output is denormalised by adding the input's
-        # per-cell lookback mean back, so head.bias=0 already yields a
-        # "predict per-cell lookback mean" warm start. Leaving the bias
-        # at zero also keeps it interpretable as a learned deviation
-        # from RevIN's baseline.
-        revin_on = bool(getattr(inner_model, "revin", False))
-        head_module = getattr(inner_model, "head", None)
-        if (isinstance(head_module, nn.Linear)
-                and head_module.bias is not None
-                and head_module.out_features == pred_len
-                and not revin_on):
-            # Ytr: numpy [N, P, C]; mean over N and over cells gives [P].
-            per_horizon_mean = Ytr.mean(axis=0).mean(axis=1)         # [P]
-            with torch.no_grad():
-                head_module.bias.copy_(
-                    torch.from_numpy(per_horizon_mean.astype(np.float32)).to(device)
-                )
-            print(f"  itransformer head.bias warm-started: "
-                  f"mean={head_module.bias.mean().item():+.4f}  "
-                  f"std={head_module.bias.std().item():.4f}  "
-                  f"shape={tuple(head_module.bias.shape)}")
-        elif revin_on and isinstance(head_module, nn.Linear):
-            print(f"  itransformer revin=True: head.bias kept at zero; "
-                  f"per-cell RevIN supplies the level warm-start.")
-
-    # PCAFormer one-shot PCA fit. The model's PCA basis must be set
-    # before the first forward pass; we fit on the same training
-    # windows the trainer is about to use, in the same RevIN-normalised
-    # space the forward will see. Mirrors the adapter's [B,L,C] →
-    # [B,L,W,H] reshape so the model fits on the canonical surface
-    # layout.
-    inner = getattr(adapter, "model", adapter)
-    if name == "pcaformer":
-        Xtr_t = torch.from_numpy(Xtr).to(device)
-        N_w, L_w, C_w = Xtr_t.shape
-        surfaces = (Xtr_t
-                    .reshape(N_w, L_w, grid.n_tau, grid.n_money)
-                    .permute(0, 1, 3, 2)
-                    .contiguous())                            # [N, L, W, H]
-        inner.fit_pca(surfaces)
-        ev = inner.explained_variance_ratio(surfaces).item()
-        print(f"  pcaformer PCA basis fit on {N_w} train windows × "
-              f"{L_w} timesteps; top-{inner.n_factors} "
-              f"explained variance ratio = {ev:.4f}")
-        del Xtr_t, surfaces
-
-    # Optional per-model regularisers added to the training loss. No
-    # model currently registers a penalty (the old AxialFactor
-    # orthogonality hooks were removed with that model); the
-    # `ortho_q_fn` / `ortho_L_fn` plumbing is kept null so the
-    # `_epoch` signature stays uniform for hyperparameter_tuning.py,
-    # which calls the same helper.
-    ortho_q_fn = None
-    ortho_q_weight = 0.0
-    ortho_L_fn = None
-    ortho_L_weight = 0.0
-    has_ortho = False
-
-    if name == "tucker_dlinear" and lr_g is not None:
-        g_params, other_params = [], []
-        for pname, p in adapter.named_parameters():
-            (g_params if pname.endswith(".G") else other_params).append(p)
-        optimizer = torch.optim.AdamW(
-            [{"params": other_params, "lr": lr,   "weight_decay": wd},
-             {"params": g_params,     "lr": lr_g, "weight_decay": wd_g}],
-        )
-        opt_name = "AdamW"
-    else:
-        opt_cls  = torch.optim.AdamW if use_adamw else torch.optim.Adam
-        optimizer = opt_cls(adapter.parameters(), lr=lr, weight_decay=wd)
-        opt_name = "AdamW" if use_adamw else "Adam"
+    optimizer = torch.optim.AdamW(adapter.parameters(), lr=lr, weight_decay=wd)
 
     if out_dir is None:
         ts      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
@@ -1272,25 +647,15 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     print(f"[{name}  pred_len={pred_len}  device={device}]")
     print(f"  windows: train={len(Xtr)}  val={len(Xva)}  test={len(Xte)}")
     print(f"  params:  {n_params:,}")
-    lr_str = f"lr={lr}" + (f" (lr_G={lr_g:.4g})" if lr_g is not None else "")
-    wd_str = f"wd={wd}" + (f" (wd_G={wd_g:.4g})" if wd_g is not None else "")
-    print(f"  {opt_name}  {lr_str}  {wd_str}  batch={batch_size}  "
-          f"epochs<={EPOCHS}  patience={PATIENCE} (min_epochs={min_epochs})"
-          f"{f'  grad_clip={grad_clip}' if grad_clip is not None else ''}")
-    if winner_cfg is not None:
-        print(f"  from_winner: {winner_cfg['_winner_source']} "
-              f"(combo={winner_cfg['_winner_combo']})")
+    print(f"  AdamW  lr={lr}  wd={wd}  batch={batch_size}  "
+          f"epochs<={EPOCHS}  patience={PATIENCE} (min_epochs={MIN_EPOCHS})  "
+          f"grad_clip={grad_clip}")
     print(f"  out:     {os.path.relpath(out_dir, ROOT)}")
 
     log_path = os.path.join(out_dir, "train_log.csv")
     log_f    = open(log_path, "w", newline="")
     log_w    = csv.writer(log_f)
-    # `ortho_q` and `ortho_L` columns are the mean per-batch penalty
-    # values reported by `_epoch` (0 when no penalty is registered —
-    # currently the case for every model). Kept for CSV schema
-    # stability across the per-model train logs.
-    log_w.writerow(["epoch", "train_loss", "val_loss", "lr",
-                    "epoch_time_s", "ortho_q", "ortho_L"])
+    log_w.writerow(["epoch", "train_loss", "val_loss", "lr", "epoch_time_s"])
 
     best_val   = float("inf")
     best_epoch = 0
@@ -1300,14 +665,9 @@ def train_deep_model(name: str, data: dict, pred_len: int,
 
     for epoch in range(1, EPOCHS + 1):
         t0 = time.time()
-        tr_loss, tr_ortho_q, tr_ortho_L = _epoch(
-            adapter, Xtr, Ytr, batch_size, device,
-            optimizer=optimizer, generator=gen, grad_clip=grad_clip,
-            ortho_q_fn=ortho_q_fn, ortho_q_weight=ortho_q_weight,
-            ortho_L_fn=ortho_L_fn, ortho_L_weight=ortho_L_weight,
-        )
-        va_loss, _, _ = _epoch(adapter, Xva, Yva, batch_size, device,
-                               optimizer=None)
+        tr_loss = _epoch(adapter, Xtr, Ytr, batch_size, device,
+                         optimizer=optimizer, generator=gen, grad_clip=grad_clip)
+        va_loss = _epoch(adapter, Xva, Yva, batch_size, device)
         dt = time.time() - t0
         improved = va_loss < best_val
         if improved:
@@ -1317,18 +677,14 @@ def train_deep_model(name: str, data: dict, pred_len: int,
                           for k, v in adapter.state_dict().items()}
 
         marker = "  [best]" if improved else ""
-        ortho_str = (f"  ortho_q={tr_ortho_q:.6f}  ortho_L={tr_ortho_L:.6f}"
-                     if has_ortho else "")
         print(f"  epoch {epoch:3d}/{EPOCHS}  "
-              f"train={tr_loss:.6f}  val={va_loss:.6f}{ortho_str}  "
-              f"({dt:.1f}s){marker}")
+              f"train={tr_loss:.6f}  val={va_loss:.6f}  ({dt:.1f}s){marker}")
         log_w.writerow([epoch, f"{tr_loss:.8f}", f"{va_loss:.8f}",
-                        f"{lr:.8g}", f"{dt:.3f}",
-                        f"{tr_ortho_q:.8f}", f"{tr_ortho_L:.8f}"])
+                        f"{lr:.8g}", f"{dt:.3f}"])
         log_f.flush()
 
-        # Early stop only after min_epochs.
-        if epoch >= min_epochs and (epoch - best_epoch) >= PATIENCE:
+        # Early stop only after MIN_EPOCHS.
+        if epoch >= MIN_EPOCHS and (epoch - best_epoch) >= PATIENCE:
             stop_epoch = epoch
             print(f"  early stop at epoch {epoch} "
                   f"(best val={best_val:.6f} @ epoch {best_epoch})")
@@ -1371,25 +727,19 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     hyper = {
         "model":          name,
         "model_kwargs":   resolved,
-        "optimizer":      opt_name,
+        "optimizer":      "AdamW",
         "lr":             lr,
         "weight_decay":   wd,
-        "lr_g":           lr_g,
-        "wd_g":           wd_g,
         "grad_clip":      grad_clip,
         "epochs":         EPOCHS,
         "patience":       PATIENCE,
-        "min_epochs":     min_epochs,
+        "min_epochs":     MIN_EPOCHS,
         "batch_size":     batch_size,
         "lookback":       LOOKBACK,
         "pred_len":       pred_len,
         "seed":           seed,
         "device":         str(device),
         "n_params":       n_params,
-        "winner_source":  (winner_cfg["_winner_source"]
-                           if winner_cfg is not None else None),
-        "winner_combo":   (winner_cfg["_winner_combo"]
-                           if winner_cfg is not None else None),
         "data_end":       data.get("data_end"),
         "first_date":     data.get("first_date"),
         "last_date":      data.get("last_date"),
@@ -1453,10 +803,7 @@ def main():
     ap.add_argument("--csv_path",
                     default=os.path.join(ROOT, "SPX_surfaces.csv"),
                     help="Path to the SPX surfaces CSV (iv_{m}_{tau} columns). "
-                         "Default is the repo-root SPX_surfaces.csv (15x10 "
-                         "grid) — same file eval_seeds.py uses, and the only "
-                         "copy that survives a fresh clone since "
-                         "_data_prep/data/* is gitignored.")
+                         "Default is the repo-root SPX_surfaces.csv (11×10 grid).")
     ap.add_argument("--train_frac", type=float, default=0.7)
     ap.add_argument("--val_frac",   type=float, default=0.1)
     ap.add_argument("--data_end",   type=str,   default="2023-12-29",
@@ -1464,14 +811,7 @@ def main():
                          "Pass 'none' to keep all rows.")
     ap.add_argument("--seed",       type=int,   default=42)
     ap.add_argument("--batch_size", type=int,   default=BATCH_SIZE,
-                    help=f"Mini-batch size. Default: {BATCH_SIZE} "
-                         "(the BATCH_SIZE constant in train.py). "
-                         "Ignored when --from_winner is set.")
-    ap.add_argument("--from_winner", action="store_true",
-                    help="Override train.py defaults with the tuning "
-                         "winner's config.json for (--model, --pred_len). "
-                         "Reads <ModelDir>/tuning_results/63_<pred_len>/"
-                         "summary.json. Not valid with --model var/all.")
+                    help=f"Mini-batch size. Default: {BATCH_SIZE}.")
     args = ap.parse_args()
 
     if args.train_frac + args.val_frac >= 1.0:
@@ -1491,10 +831,6 @@ def main():
           f"val={data['val'][0].shape[0]}  test={data['test'][0].shape[0]}")
     print(f"  test starts predicting at: {data['test_first_target_date']}\n")
 
-    if args.from_winner and args.model in ("var", "all"):
-        raise SystemExit("--from_winner requires a single deep model "
-                         "(not 'var' or 'all').")
-
     if args.model == "var":
         train_var(data, args.pred_len, args.seed)
         return
@@ -1504,10 +840,8 @@ def main():
                              batch_size=args.batch_size)
         return
 
-    winner_cfg = (load_winner_config(args.model, args.pred_len)
-                  if args.from_winner else None)
     train_deep_model(args.model, data, args.pred_len, device, args.seed,
-                     batch_size=args.batch_size, winner_cfg=winner_cfg)
+                     batch_size=args.batch_size)
 
 
 if __name__ == "__main__":

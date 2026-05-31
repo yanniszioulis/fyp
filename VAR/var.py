@@ -274,10 +274,10 @@ def run_var_baseline(data: dict, pred_len: int,
     # Step 4 — forecast β̂_{t+h} for each TEST base date, then reconstruct
     # ------------------------------------------------------------------
     # The base date for a test window starting at row s is t = s + L - 1
-    # (the last input row). We use the same s indices train.py uses to
-    # produce Xte/Yte so the predictions align row-for-row with Yte.
-    starts = np.arange(N_rows - L - P + 1)
-    test_starts = starts[(starts + L + P) > val_end]
+    # (the last input row). We reuse the exact test-window starts train.py
+    # assigned (the shared whole-horizon-within-split rule) so the VAR
+    # predictions align row-for-row with Yte and with the neural models.
+    test_starts = data["test_starts"]
     base_indices = test_starts + L - 1
     assert len(base_indices) == Xte.shape[0], \
         f"Mismatch: var base_indices={len(base_indices)} vs Xte={Xte.shape[0]}"

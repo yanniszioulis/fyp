@@ -21,7 +21,7 @@
   "data_end": "2023-12-29",
   "first_date": "2004-01-02",
   "last_date": "2023-12-29",
-  "test_first_target_date": "2019-12-02",
+  "test_first_target_date": "2019-12-31",
   "grid": {
     "n_tau": 10,
     "n_money": 11,

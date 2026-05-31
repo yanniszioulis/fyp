@@ -1,17 +1,24 @@
 """
 Plot raw OTM call/put quotes against the kernel-smoothed IV surface for
-two randomly chosen trading days, side by side, in 3D. Each panel shows
-the smoothed surface as a viridis-shaded mesh and the raw quotes as a
-3D scatter (calls blue, puts red). A single shared legend sits above
-the panels.
+two trading days side-by-side, chosen to illustrate the two regimes
+the smoother has to handle:
+
+  LEFT  — 2004-03-22: ~488 raw quotes, ATM 30d IV ~19%   (sparse early)
+  RIGHT — 2020-03-16: ~20k  raw quotes, ATM 30d IV ~79%  (dense COVID)
+
+Each panel shows the smoothed surface as a viridis-shaded mesh and the
+raw quotes as a 3D scatter (calls blue triangles, puts red dots). A
+single shared legend sits along the bottom and a shared colourbar on
+the left.
 
 Usage:
     python _data_prep/plot_quotes_vs_surface.py \
         --surfaces SPX_surfaces.csv \
         --options  _data_prep/SPX_options.csv \
         --forward  _data_prep/SPX_forward.csv \
-        --out      _data_prep/quotes_vs_surface.pdf \
-        --seed 42
+        --out      _data_prep/quotes_vs_surface.pdf
+    # override the baked-in pair:
+    #   --dates 2008-09-15 2023-10-19
 """
 import argparse
 from pathlib import Path
@@ -136,8 +143,8 @@ def surface_grid_for_row(row, m_vals, tau_vals):
     return grid
 
 
-def render_panel(ax, m_vals, tau_vals, surface, quotes, date_str, vmin, vmax,
-                 cmap):
+def render_panel(ax, m_vals, tau_vals, surface, quotes, date_str, n_quotes,
+                 vmin, vmax, cmap):
     # Restrict everything to the surface support: m and T axes only span
     # the smoothed grid (m in [-0.10, +0.10], T in [tau_min, tau_max]).
     m_min, m_max     = float(min(m_vals)), float(max(m_vals))
@@ -148,7 +155,7 @@ def render_panel(ax, m_vals, tau_vals, surface, quotes, date_str, vmin, vmax,
     M, LT = np.meshgrid(m_vals, log_tau)
     surf_mappable = ax.plot_surface(
         M, LT, surface, cmap=cmap, vmin=vmin, vmax=vmax,
-        alpha=0.55, linewidth=0.2, edgecolor="0.3",
+        alpha=0.42, linewidth=0.2, edgecolor="0.3",
         rstride=1, cstride=1, antialiased=True,
     )
 
@@ -163,10 +170,10 @@ def render_panel(ax, m_vals, tau_vals, surface, quotes, date_str, vmin, vmax,
     lt_p = np.log10(puts["ttm"].to_numpy())
 
     ax.scatter(puts["moneyness"], lt_p, puts["impl_volatility"],
-               c=PUT_COLOR, marker="o", s=6, alpha=0.65,
+               c=PUT_COLOR, marker="o", s=14, alpha=0.85,
                depthshade=False, edgecolors="none")
     ax.scatter(calls["moneyness"], lt_c, calls["impl_volatility"],
-               c=CALL_COLOR, marker="^", s=8, alpha=0.65,
+               c=CALL_COLOR, marker="^", s=16, alpha=0.85,
                depthshade=False, edgecolors="none")
 
     # Snap each round-number maturity to its nearest kernel grid value so the
@@ -192,12 +199,20 @@ def render_panel(ax, m_vals, tau_vals, surface, quotes, date_str, vmin, vmax,
     ax.set_xticks([-0.10, -0.05, 0.0, 0.05, 0.10])
     ax.set_xticklabels([r"$-0.10$", r"$-0.05$", r"$0$",
                         r"$0.05$", r"$0.10$"])
-    ax.set_xlabel(r"$\log(K/F)$", labelpad=4)
-    ax.set_ylabel(r"$T$", labelpad=4)
+    ax.set_xlabel(r"Log moneyness $m$", labelpad=4)
+    ax.set_ylabel(r"Maturity $\tau$", labelpad=4)
     ax.set_zlabel("")                          # \sigma is on the colourbar
-    ax.set_title(date_str, pad=6, fontsize=15)
+    # Two-line title: date on top, raw-quote count underneath. The smaller
+    # second line is what makes the sparse-vs-dense contrast legible at a
+    # glance without needing the caption to spell it out.
+    ax.set_title(f"{date_str}\n" rf"{{\small ${n_quotes:,}$ quotes}}",
+                 pad=6, fontsize=14)
     ax.set_proj_type("ortho")                  # no perspective skew
-    ax.view_init(elev=20, azim=-55)
+    # Camera at (+x, +y): the (m=+0.10, tau=1y) corner faces the viewer,
+    # so the long-maturity edge runs along the front of the box and the
+    # surface unfolds front-to-back along tau without folding back on
+    # itself.
+    ax.view_init(elev=20, azim=55)
     return surf_mappable
 
 
@@ -208,41 +223,40 @@ def main():
     p.add_argument("--forward",  default="_data_prep/SPX_forward.csv")
     p.add_argument("--out",      default="_data_prep/quotes_vs_surface.pdf")
     p.add_argument("--seed",     type=int, default=42)
-    p.add_argument("--dates",    nargs="*", default=None,
-                   help="override random pick with explicit YYYY-MM-DD dates")
+    p.add_argument("--dates",    nargs="*",
+                   default=["2004-03-22", "2020-03-16"],
+                   help="two YYYY-MM-DD dates; default is the report's "
+                        "sparse-early vs dense-COVID contrast pair.")
     args = p.parse_args()
 
     surf = pd.read_csv(args.surfaces)
     surf["date"] = pd.to_datetime(surf["date"])
     m_vals, tau_vals, iv_cols = parse_surface_grid(surf.columns)
 
-    if args.dates:
-        target = pd.to_datetime(args.dates)
-        missing = [d for d in target if d not in set(surf["date"])]
-        if missing:
-            raise SystemExit(f"dates not in surfaces: {missing}")
-    else:
-        rng = np.random.default_rng(args.seed)
-        target = pd.to_datetime(
-            rng.choice(surf["date"].values, size=2, replace=False)
-        )
+    target = pd.to_datetime(args.dates)
+    missing = [d for d in target if d not in set(surf["date"])]
+    if missing:
+        raise SystemExit(f"dates not in surfaces: {missing}")
     target = pd.DatetimeIndex(sorted(target))
     print(f"plotting dates: {[d.date().isoformat() for d in target]}")
 
     fwd = load_forward(args.forward)
     quotes = quotes_for_dates(args.options, fwd, target)
 
-    # Shared colour range AND z-axis range across panels: capped at 0.30 IV.
-    # Anything above 0.30 saturates to the top of the colourbar and to the
-    # top of the z-axis box (deep wing quotes on crisis days will clip).
-    all_ivs = []
+    # Shared colour range AND z-axis range across panels. Derived from the
+    # SMOOTHED SURFACE IVs only — not from the raw quotes — because deep-OTM
+    # wing quotes on crisis days can sit at >150% IV and would otherwise
+    # blow vmax up and squash both surfaces flat against the bottom. The
+    # surface itself is what we want to give the full colour bandwidth to;
+    # the handful of outlier wing dots saturate in colour space but still
+    # plot at their true z-position.
+    surf_ivs = []
     for d in target:
         row = surf.loc[surf["date"] == d].iloc[0]
-        all_ivs.append(row[iv_cols].to_numpy(dtype=float))
-    all_ivs.append(quotes["impl_volatility"].to_numpy(dtype=float))
-    pool = np.concatenate([a[np.isfinite(a)] for a in all_ivs])
-    vmin = float(np.percentile(pool, 2))
-    vmax = 0.30
+        surf_ivs.append(row[iv_cols].to_numpy(dtype=float))
+    pool = np.concatenate([a[np.isfinite(a)] for a in surf_ivs])
+    vmin = float(np.floor(pool.min()      * 10) / 10)
+    vmax = float(np.ceil (pool.max() * 1.05 * 10) / 10)  # +5% headroom
 
     cmap = "viridis"
     fig = plt.figure(figsize=(8.4, 3.8))
@@ -254,7 +268,8 @@ def main():
         day_q = quotes[quotes["date"] == d]
         last_surf = render_panel(
             ax, m_vals, tau_vals, grid, day_q,
-            d.strftime("%Y-%m-%d"), vmin, vmax, cmap,
+            d.strftime("%Y-%m-%d"), int(len(day_q)),
+            vmin, vmax, cmap,
         )
 
     # shared legend along the top (calls / puts), colourbar on the right
@@ -278,9 +293,7 @@ def main():
     cbar_ax = fig.add_axes([0.085, 0.22, 0.018, 0.60])
     cbar = fig.colorbar(last_surf, cax=cbar_ax)
     cbar.ax.yaxis.set_ticks_position("left")    # ticks on the left of the bar
-    cbar.outline.set_visible(False)             # drop the surrounding box
-                                                # (was leaving a thin white gap
-                                                # between fill and spine bottom)
+    cbar.outline.set_visible(True)              # keep the surrounding box
 
     out = Path(args.out)
     fig.savefig(out, bbox_inches="tight")

@@ -1,0 +1,13 @@
+{
+  "model": "santa_temporal",
+  "pred_len": 42,
+  "lookback": 63,
+  "n_test": 966,
+  "best_val_mse": 0.23607594255374106,
+  "best_epoch": 19,
+  "stop_epoch": 34,
+  "test_mse": 0.36302515864372253,
+  "test_rmse": 0.602515691616179,
+  "test_mae": 0.36718547344207764,
+  "space": "standardized_log_iv"
+}

@@ -1,0 +1,13 @@
+{
+  "model": "per_cell_transformer",
+  "pred_len": 42,
+  "lookback": 63,
+  "n_test": 966,
+  "best_val_mse": 0.24405081686261412,
+  "best_epoch": 22,
+  "stop_epoch": 37,
+  "test_mse": 0.37709635496139526,
+  "test_rmse": 0.6140817168434469,
+  "test_mae": 0.36854609847068787,
+  "space": "standardized_log_iv"
+}

@@ -1,20 +1,20 @@
 \begin{table}[h]
 \centering
-\caption{Test-set mean-squared error in standardised log-IV space across forecast horizons. Seeded variants reported as $\mathrm{mean} \pm \mathrm{sd}$ across $10$ seeds at the $50\mathrm{k}$-parameter matched budget. Lower is better. Best per horizon in bold.}
+\caption{Test-set mean-squared error in standardised log-IV space across forecast horizons (each column is the overall error of the model trained at that horizon, averaged over its 1--$P$ steps and the 110 cells). Seeded variants reported as $\mathrm{mean}\pm\mathrm{sd}$ across $10$ seeds at the $50\mathrm{k}$-parameter matched budget. Test windows per horizon: 998/987/966/945 for $h{+}10/21/42/63$ (whole-horizon-within-split; boundary-straddling windows embargoed). Lower is better. Best per horizon in bold.}
 \label{tab:headline_mse}
 \begin{tabular}{lcccc}
 \toprule
 Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
 \midrule
-Persistence            & $0.10797$ & $0.22028$ & $0.39657$ & $0.52121$ \\
-VAR                    & $0.11849$ & $0.22951$ & $0.39580$ & $0.50563$ \\
+Persistence            & $0.10879$ & $0.22381$ & $0.41070$ & $0.50615$ \\
+VAR                    & $0.11919$ & $0.23307$ & $0.40941$ & $0.49163$ \\
 \midrule
-SANTA                  & $0.10572 \pm 0.0007$ & $\mathbf{0.20614 \pm 0.0010}$ & $\mathbf{0.35403 \pm 0.0025}$ & $\mathbf{0.45880 \pm 0.0084}$ \\
-SANTA-Flat             & $0.10579 \pm 0.0007$ & $0.20771 \pm 0.0014$ & $0.36197 \pm 0.0124$ & $0.46956 \pm 0.0379$ \\
-SANTA-Temporal         & $\mathbf{0.10534 \pm 0.0011}$ & $0.20762 \pm 0.0019$ & $0.35628 \pm 0.0044$ & $0.46710 \pm 0.0253$ \\
+SANTA                  & $\mathbf{0.10641 \pm 0.0004}$ & $\mathbf{0.20972 \pm 0.0011}$ & $\mathbf{0.36487 \pm 0.0030}$ & $\mathbf{0.43882 \pm 0.0059}$ \\
+SANTA-Flat             & $0.10672 \pm 0.0003$ & $0.21040 \pm 0.0014$ & $0.38458 \pm 0.0219$ & $0.46303 \pm 0.0369$ \\
+SANTA-Temporal         & $0.10687 \pm 0.0007$ & $0.21066 \pm 0.0036$ & $0.36955 \pm 0.0062$ & $0.44648 \pm 0.0092$ \\
 \midrule
-VanillaTransformer     & $0.10783 \pm 0.0013$ & $0.21232 \pm 0.0016$ & $0.37347 \pm 0.0054$ & $0.48675 \pm 0.0044$ \\
-PerCellTransformer     & $0.10715 \pm 0.0008$ & $0.20836 \pm 0.0018$ & $0.35926 \pm 0.0024$ & $0.47158 \pm 0.0207$ \\
+VanillaTransformer     & $0.10898 \pm 0.0006$ & $0.21769 \pm 0.0013$ & $0.38832 \pm 0.0020$ & $0.47243 \pm 0.0046$ \\
+PerCellTransformer     & $0.10766 \pm 0.0008$ & $0.21160 \pm 0.0015$ & $0.37168 \pm 0.0033$ & $0.45652 \pm 0.0200$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -27,15 +27,15 @@ PerCellTransformer     & $0.10715 \pm 0.0008$ & $0.20836 \pm 0.0018$ & $0.35926 
 \toprule
 Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
 \midrule
-Persistence            & $0.21054$ & $0.29168$ & $0.38687$ & $0.44617$ \\
-VAR                    & $0.22227$ & $0.29206$ & $0.37510$ & $0.42481$ \\
+Persistence            & $0.21160$ & $0.29419$ & $0.39585$ & $0.44730$ \\
+VAR                    & $0.22285$ & $0.29428$ & $0.38244$ & $0.42543$ \\
 \midrule
-SANTA                  & $0.20601 \pm 0.0010$ & $0.27846 \pm 0.0016$ & $0.35898 \pm 0.0021$ & $\mathbf{0.41436 \pm 0.0058}$ \\
-SANTA-Flat             & $0.20590 \pm 0.0007$ & $0.27943 \pm 0.0018$ & $\mathbf{0.35824 \pm 0.0046}$ & $0.41560 \pm 0.0181$ \\
-SANTA-Temporal         & $0.20629 \pm 0.0021$ & $0.27871 \pm 0.0022$ & $0.35962 \pm 0.0045$ & $0.41821 \pm 0.0159$ \\
+SANTA                  & $0.20726 \pm 0.0006$ & $\mathbf{0.28100 \pm 0.0011}$ & $\mathbf{0.36434 \pm 0.0012}$ & $\mathbf{0.40791 \pm 0.0020}$ \\
+SANTA-Flat             & $0.20820 \pm 0.0010$ & $0.28130 \pm 0.0016$ & $0.37400 \pm 0.0123$ & $0.41978 \pm 0.0212$ \\
+SANTA-Temporal         & $0.20796 \pm 0.0009$ & $0.28198 \pm 0.0032$ & $0.36690 \pm 0.0047$ & $0.41201 \pm 0.0064$ \\
 \midrule
-VanillaTransformer     & $\mathbf{0.20573 \pm 0.0010}$ & $\mathbf{0.27765 \pm 0.0021}$ & $0.36235 \pm 0.0028$ & $0.41966 \pm 0.0030$ \\
-PerCellTransformer     & $0.20686 \pm 0.0012$ & $0.27961 \pm 0.0022$ & $0.36077 \pm 0.0025$ & $0.42341 \pm 0.0148$ \\
+VanillaTransformer     & $\mathbf{0.20688 \pm 0.0010}$ & $0.28249 \pm 0.0016$ & $0.37232 \pm 0.0020$ & $0.41806 \pm 0.0036$ \\
+PerCellTransformer     & $0.20807 \pm 0.0018$ & $0.28152 \pm 0.0023$ & $0.36733 \pm 0.0022$ & $0.41870 \pm 0.0140$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -48,14 +48,14 @@ PerCellTransformer     & $0.20686 \pm 0.0012$ & $0.27961 \pm 0.0022$ & $0.36077 
 \toprule
 Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
 \midrule
-VAR                    & $-0.0974$ & $-0.0419$ & $0.0020$ & $0.0299$ \\
+VAR                    & $-0.0956$ & $-0.0414$ & $0.0031$ & $0.0287$ \\
 \midrule
-SANTA                  & $0.0209 \pm 0.006$ & $\mathbf{0.0642 \pm 0.005}$ & $\mathbf{0.1073 \pm 0.006}$ & $\mathbf{0.1197 \pm 0.016}$ \\
-SANTA-Flat             & $0.0202 \pm 0.006$ & $0.0571 \pm 0.006$ & $0.0872 \pm 0.031$ & $0.0991 \pm 0.073$ \\
-SANTA-Temporal         & $\mathbf{0.0244 \pm 0.010}$ & $0.0575 \pm 0.009$ & $0.1016 \pm 0.011$ & $0.1038 \pm 0.048$ \\
+SANTA                  & $\mathbf{0.0219 \pm 0.004}$ & $\mathbf{0.0629 \pm 0.005}$ & $\mathbf{0.1116 \pm 0.007}$ & $\mathbf{0.1330 \pm 0.012}$ \\
+SANTA-Flat             & $0.0190 \pm 0.003$ & $0.0599 \pm 0.006$ & $0.0636 \pm 0.053$ & $0.0852 \pm 0.073$ \\
+SANTA-Temporal         & $0.0177 \pm 0.006$ & $0.0587 \pm 0.016$ & $0.1002 \pm 0.015$ & $0.1179 \pm 0.018$ \\
 \midrule
-VanillaTransformer     & $0.0014 \pm 0.012$ & $0.0361 \pm 0.007$ & $0.0583 \pm 0.014$ & $0.0661 \pm 0.008$ \\
-PerCellTransformer     & $0.0076 \pm 0.008$ & $0.0541 \pm 0.008$ & $0.0941 \pm 0.006$ & $0.0952 \pm 0.040$ \\
+VanillaTransformer     & $-0.0017 \pm 0.005$ & $0.0273 \pm 0.006$ & $0.0545 \pm 0.005$ & $0.0666 \pm 0.009$ \\
+PerCellTransformer     & $0.0104 \pm 0.008$ & $0.0546 \pm 0.007$ & $0.0950 \pm 0.008$ & $0.0980 \pm 0.040$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -68,13 +68,14 @@ PerCellTransformer     & $0.0076 \pm 0.008$ & $0.0541 \pm 0.008$ & $0.0941 \pm 0
 \toprule
 Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
 \midrule
-Persistence            & $0.0887$ & $0.0402$ & $-0.0020$ & $-0.0308$ \\
-SANTA                  & $0.1078 \pm 0.006$ & $\mathbf{0.1018 \pm 0.005}$ & $\mathbf{0.1055 \pm 0.006}$ & $\mathbf{0.0926 \pm 0.017}$ \\
-SANTA-Flat             & $0.1071 \pm 0.006$ & $0.0950 \pm 0.006$ & $0.0855 \pm 0.031$ & $0.0713 \pm 0.075$ \\
-SANTA-Temporal         & $\mathbf{0.1109 \pm 0.009}$ & $0.0954 \pm 0.008$ & $0.0998 \pm 0.011$ & $0.0762 \pm 0.050$ \\
+Persistence            & $0.0873$ & $0.0398$ & $-0.0032$ & $-0.0295$ \\
 \midrule
-VanillaTransformer     & $0.0900 \pm 0.011$ & $0.0749 \pm 0.007$ & $0.0564 \pm 0.014$ & $0.0373 \pm 0.009$ \\
-PerCellTransformer     & $0.0957 \pm 0.007$ & $0.0921 \pm 0.008$ & $0.0923 \pm 0.006$ & $0.0673 \pm 0.041$ \\
+SANTA                  & $\mathbf{0.1072 \pm 0.003}$ & $\mathbf{0.1002 \pm 0.005}$ & $\mathbf{0.1088 \pm 0.007}$ & $\mathbf{0.1074 \pm 0.012}$ \\
+SANTA-Flat             & $0.1046 \pm 0.003$ & $0.0973 \pm 0.006$ & $0.0606 \pm 0.053$ & $0.0582 \pm 0.075$ \\
+SANTA-Temporal         & $0.1034 \pm 0.006$ & $0.0962 \pm 0.015$ & $0.0974 \pm 0.015$ & $0.0918 \pm 0.019$ \\
+\midrule
+VanillaTransformer     & $0.0857 \pm 0.005$ & $0.0660 \pm 0.005$ & $0.0515 \pm 0.005$ & $0.0391 \pm 0.009$ \\
+PerCellTransformer     & $0.0968 \pm 0.007$ & $0.0921 \pm 0.006$ & $0.0922 \pm 0.008$ & $0.0714 \pm 0.041$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -87,15 +88,14 @@ PerCellTransformer     & $0.0957 \pm 0.007$ & $0.0921 \pm 0.008$ & $0.0923 \pm 0
 \toprule
 Model & $h{+}10$ & $h{+}21$ & $h{+}42$ & $h{+}63$ \\
 \midrule
-VAR                    & $0.1341$ & $0.1765$ & $0.2317$ & $0.2673$ \\
+VAR                    & $0.1336$ & $0.1761$ & $0.2335$ & $0.2707$ \\
 \midrule
-SANTA                  & $0.1618 \pm 0.015$ & $\mathbf{0.2372 \pm 0.007}$ & $\mathbf{0.3147 \pm 0.014}$ & $0.3353 \pm 0.015$ \\
-SANTA-Flat             & $0.1718 \pm 0.019$ & $0.2340 \pm 0.017$ & $0.3121 \pm 0.004$ & $\mathbf{0.3468 \pm 0.015}$ \\
-SANTA-Temporal         & $\mathbf{0.1748 \pm 0.019}$ & $0.2371 \pm 0.016$ & $0.3069 \pm 0.019$ & $0.3163 \pm 0.026$ \\
+SANTA                  & $0.1438 \pm 0.017$ & $\mathbf{0.2323 \pm 0.008}$ & $\mathbf{0.3035 \pm 0.009}$ & $\mathbf{0.3352 \pm 0.008}$ \\
+SANTA-Flat             & $0.1529 \pm 0.012$ & $0.2263 \pm 0.014$ & $0.2963 \pm 0.017$ & $0.3313 \pm 0.014$ \\
+SANTA-Temporal         & $\mathbf{0.1622 \pm 0.019}$ & $0.2282 \pm 0.011$ & $0.2931 \pm 0.010$ & $0.3102 \pm 0.025$ \\
 \midrule
-VanillaTransformer     & $0.1041 \pm 0.023$ & $0.1287 \pm 0.029$ & $0.1325 \pm 0.024$ & $0.1179 \pm 0.033$ \\
-PerCellTransformer     & $0.1387 \pm 0.018$ & $0.1881 \pm 0.008$ & $0.2625 \pm 0.017$ & $0.2593 \pm 0.047$ \\
+VanillaTransformer     & $0.0969 \pm 0.019$ & $0.1029 \pm 0.022$ & $0.1027 \pm 0.022$ & $0.1029 \pm 0.021$ \\
+PerCellTransformer     & $0.1286 \pm 0.015$ & $0.1806 \pm 0.008$ & $0.2527 \pm 0.015$ & $0.2598 \pm 0.044$ \\
 \bottomrule
 \end{tabular}
 \end{table}
-

@@ -2,12 +2,12 @@
   "model": "santa",
   "pred_len": 42,
   "lookback": 63,
-  "n_test": 1007,
-  "best_val_mse": 0.2394291515319532,
+  "n_test": 966,
+  "best_val_mse": 0.24246629185619809,
   "best_epoch": 11,
   "stop_epoch": 26,
-  "test_mse": 0.35159042477607727,
-  "test_rmse": 0.5929506090527923,
-  "test_mae": 0.35702112317085266,
+  "test_mse": 0.36403006315231323,
+  "test_rmse": 0.6033490392403996,
+  "test_mae": 0.3640003204345703,
   "space": "standardized_log_iv"
 }

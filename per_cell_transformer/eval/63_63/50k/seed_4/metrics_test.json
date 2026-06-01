@@ -2,12 +2,12 @@
   "model": "per_cell_transformer",
   "pred_len": 63,
   "lookback": 63,
-  "n_test": 1007,
-  "best_val_mse": 0.30266287687343824,
+  "n_test": 945,
+  "best_val_mse": 0.30628048339668584,
   "best_epoch": 6,
   "stop_epoch": 21,
-  "test_mse": 0.4559943974018097,
-  "test_rmse": 0.6752735722666848,
-  "test_mae": 0.4132124185562134,
+  "test_mse": 0.44501951336860657,
+  "test_rmse": 0.6670978289341126,
+  "test_mae": 0.4114203155040741,
   "space": "standardized_log_iv"
 }

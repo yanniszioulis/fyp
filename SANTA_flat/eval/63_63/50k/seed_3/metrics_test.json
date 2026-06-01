@@ -2,12 +2,12 @@
   "model": "santa_flat",
   "pred_len": 63,
   "lookback": 63,
-  "n_test": 1007,
-  "best_val_mse": 0.2741655480731316,
+  "n_test": 945,
+  "best_val_mse": 0.2800794144640434,
   "best_epoch": 25,
   "stop_epoch": 40,
-  "test_mse": 0.5734853744506836,
-  "test_rmse": 0.7572881713394733,
-  "test_mae": 0.4638919234275818,
+  "test_mse": 0.5182190537452698,
+  "test_rmse": 0.7198743319116676,
+  "test_mae": 0.4456670582294464,
   "space": "standardized_log_iv"
 }

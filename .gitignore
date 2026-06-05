@@ -74,3 +74,9 @@ report/*.synctex.gz
 _data_prep/data/*
 _data_prep/out_hm_8e-4
 _data_prep/out_hm_2e-4_6e-4
+
+.claude/
+# Personal local Claude settings
+.claude/settings.local.json
+
+_testing_results_attempts

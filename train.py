@@ -5,7 +5,7 @@ train.py — train one (or all) IV-surface forecasters on SPX_surfaces.csv.
 Models
 ------
 Deep:  santa, santa_flat, santa_temporal, transformer, per_cell_transformer,
-       dlinear. All share the surface contract — (B,L,M,T) standardised log-IV
+       nlinear. All share the surface contract — (B,L,M,T) standardised log-IV
        in, netDelta out (the per-cell change from today) — and the same trainer:
        AdamW, grad-clip 1.0, MSE on standardised log-IV, max EPOCHS, early stop
        with PATIENCE (suppressed until MIN_EPOCHS). Per-model lr / weight_decay
@@ -61,7 +61,7 @@ import torch.nn as nn
 # flat `from <model> import ...` imports resolve.
 ROOT = os.path.dirname(os.path.abspath(__file__))
 for sub in (".", "SANTA", "SANTA_flat", "SANTA_temporal", "transformer",
-            "per_cell_transformer", "DLinear", "Linear", "VAR"):
+            "per_cell_transformer", "NLinear", "VAR"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
 from surface_core import Config            # noqa: E402
@@ -70,8 +70,7 @@ from santa_flat import SANTAFlat           # noqa: E402
 from santa_temporal import SANTATemporal   # noqa: E402
 from transformer import VanillaTransformer # noqa: E402
 from per_cell_transformer import PerCellTransformer  # noqa: E402
-from dlinear import DLinear                # noqa: E402
-from linear import LinearForecaster        # noqa: E402
+from nlinear import NLinearForecaster      # noqa: E402
 from var import run_var_baseline           # noqa: E402
 
 
@@ -82,23 +81,17 @@ from var import run_var_baseline           # noqa: E402
 #
 # The SANTA family (SANTA, its two spatial ablations, and the two transformer
 # floors) share one recipe — small lr, light decoupled WD — so cross-model
-# comparisons isolate architecture, not tuning. DLinear keeps its own faster lr
+# comparisons isolate architecture, not tuning. NLinear keeps its own faster lr
 # and zero WD (a pure linear map needs neither warm-up nor decoupled decay).
-LR_DLINEAR              = 4e-3
-LR_LINEAR               = 4e-3
+LR_NLINEAR              = 4e-3
 LR_SANTA                = 5e-4
 LR_SANTA_FLAT           = 5e-4
 LR_SANTA_TEMPORAL       = 5e-4
 LR_TRANSFORMER          = 5e-4
 LR_PER_CELL_TRANSFORMER = 5e-4
 
-WD_DLINEAR              = 0.0
-WD_LINEAR               = 0.0
+WD_NLINEAR              = 0.0
 
-# DLinear moving-average kernel for the trend/seasonal split (odd, ≤ L). Larger =
-# smoother trend / higher-frequency seasonal residual. Linear (no decomposition)
-# ignores it.
-DLINEAR_KERNEL_SIZE = 31
 WD_SANTA                = 1e-3
 WD_SANTA_FLAT           = 1e-3
 WD_SANTA_TEMPORAL       = 1e-3
@@ -116,7 +109,7 @@ VALID_PRED_LEN = (1, 5, 10, 21, 42, 63)
 # Every deep model shares the SANTA forecasting contract (netDelta on the centred
 # surface) and the _SANTAAdapter.
 DEEP_MODELS    = ("santa", "santa_flat", "santa_temporal",
-                  "transformer", "per_cell_transformer", "dlinear", "linear")
+                  "transformer", "per_cell_transformer", "nlinear")
 
 # Folder names per model (where outputs land relative to repo root).
 MODEL_DIR = {
@@ -125,8 +118,7 @@ MODEL_DIR = {
     "santa_temporal":       "SANTA_temporal",
     "transformer":          "transformer",
     "per_cell_transformer": "per_cell_transformer",
-    "dlinear":              "DLinear",
-    "linear":               "Linear",
+    "nlinear":              "NLinear",
     "var":                  "VAR",
 }
 
@@ -305,7 +297,7 @@ class _Adapter(nn.Module):
 
 class _SANTAAdapter(_Adapter):
     """Adapter for every model in the family (SANTA, its ablations, the two
-    transformer floors, and DLinear) — they all share the same contract:
+    transformer floors, and NLinear) — they all share the same contract:
     `(B, L, M, T)` standardised log-IV in, `netDelta (B, Hh, M, T)` out.
 
     The native model takes `(B, L, M, T)` standardised log-IV with
@@ -348,9 +340,8 @@ def build_model(name: str, pred_len: int,
     Every model shares the surface contract — (B,L,M,T) in, netDelta out — so all
     are wrapped by _SANTAAdapter and built from one shared Config. The per-model
     differences are the backbone class and the embedding width d, chosen so each
-    attention model lands in the same ~44-51k parameter envelope; DLinear is the
-    exception (a channel-independent linear map, naturally ~296k, with a
-    moving-average kernel_size as its only extra knob). horizons is set to (1,…,P)
+    attention model lands in the same ~44-51k parameter envelope; NLinear is the
+    exception (a single shared linear map, ~1.3k params). horizons is set to (1,…,P)
     so the output time axis matches the trainer's targets.
 
     tau_vals / money_vals are the live grid coordinates; only the
@@ -422,21 +413,12 @@ def build_model(name: str, pred_len: int,
             d_t = int(round(d_raw / 4.0) * 4)
         cfg = make_cfg(d=d_t)
         return _SANTAAdapter(VanillaTransformer(cfg), n_tau, n_money), resolved_kw(cfg)
-    if name == "dlinear":
-        # Linear floor with decomposition: channel-independent per-cell DLinear
-        # (trend+seasonal split → one affine map of the lookback per cell). No
-        # attention, no coordinate embeddings — it ignores the attention-only
-        # Config fields. Its only extra knob is the moving-average kernel_size.
+    if name == "nlinear":
+        # The simplest floor: ONE linear map of the centred lookback, shared across
+        # all cells (NLinear, individual=False; centring subtracts today, so this is
+        # the paper's NLinear normalisation). No decomposition, attention, or coords.
         cfg = make_cfg(d=16)
-        kernel_size = DLINEAR_KERNEL_SIZE
-        return (_SANTAAdapter(DLinear(cfg, kernel_size=kernel_size), n_tau, n_money),
-                resolved_kw(cfg, kernel_size=kernel_size))
-    if name == "linear":
-        # The simplest floor: DLinear without the decomposition — one linear map of
-        # the centred lookback per cell (NLinear-style, since centring subtracts
-        # today). DLinear vs linear isolates the value of the trend/seasonal split.
-        cfg = make_cfg(d=16)
-        return _SANTAAdapter(LinearForecaster(cfg), n_tau, n_money), resolved_kw(cfg)
+        return _SANTAAdapter(NLinearForecaster(cfg), n_tau, n_money), resolved_kw(cfg)
     raise ValueError(f"Unknown model: {name}")
 
 
@@ -446,8 +428,7 @@ LR_BY_MODEL = {
     "santa_temporal":       LR_SANTA_TEMPORAL,
     "transformer":          LR_TRANSFORMER,
     "per_cell_transformer": LR_PER_CELL_TRANSFORMER,
-    "dlinear":              LR_DLINEAR,
-    "linear":               LR_LINEAR,
+    "nlinear":              LR_NLINEAR,
 }
 
 WD_BY_MODEL = {
@@ -456,8 +437,7 @@ WD_BY_MODEL = {
     "santa_temporal":       WD_SANTA_TEMPORAL,
     "transformer":          WD_TRANSFORMER,
     "per_cell_transformer": WD_PER_CELL_TRANSFORMER,
-    "dlinear":              WD_DLINEAR,
-    "linear":               WD_LINEAR,
+    "nlinear":              WD_NLINEAR,
 }
 
 

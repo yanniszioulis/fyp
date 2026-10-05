@@ -1,42 +1,28 @@
 #!/usr/bin/env python3
-"""
-train.py — train one (or all) IV-surface forecasters on SPX_surfaces.csv.
+"""train.py — train one (or all) IV-surface forecasters on SPX_surfaces.csv.
 
 Models
 ------
-Deep:  santa, santa_flat, santa_temporal, transformer, per_cell_transformer,
-       nlinear. All share the surface contract — (B,L,M,T) standardised log-IV
-       in, netDelta out (the per-cell change from today) — and the same trainer:
-       AdamW, grad-clip 1.0, MSE on standardised log-IV, max EPOCHS, early stop
-       with PATIENCE (suppressed until MIN_EPOCHS). Per-model lr / weight_decay
-       are the LR_* / WD_* constants below; the architecture and embedding width
+Deep:  santa, santa_flat, santa_temporal, transformer, per_cell_transformer, nlinear.
+       All share the surface contract ((B,L,M,T) standardised log-IV in, netDelta out)
+       and the same trainer (AdamW, grad-clip 1.0, MSE, early stop on val). Per-model
+       lr / weight_decay are the LR_* / WD_* constants below; architecture and width
        are set in build_model.
-Stat:  var (Gonçalves–Guidolin two-stage: daily 5-param cross-sectional OLS on
-       the surface basis [1, M, M², τ, Mτ] with M = k/√τ, then a BIC-selected
-       VAR on the 5-dim β series — fit on TRAIN only, frozen on val/test). No
-       training loop.
+Stat:  var (Gonçalves–Guidolin two-stage: daily cross-sectional OLS on the basis
+       [1, M, M², τ, Mτ] with M = k/√τ, then a BIC-selected VAR on the β series,
+       fit on TRAIN only). No training loop.
 
-`--model all` runs the deep models sequentially. VAR must be invoked explicitly
-with `--model var`.
+Usage:  python train.py --model <name|all|var> --pred_len <1|5|10|21|42|63>
+        (--model all runs the deep models; VAR is run explicitly with --model var.)
 
-Data
-----
-Columns of SPX_surfaces.csv shaped iv_{moneyness}_{tau} are parsed into a
-[H=tau × W=moneyness] grid (current file: 10 × 11 = 110 cells). IV is taken in
-log space; a per-channel StandardScaler is fit on the training rows and applied
-to val/test. The train/val/test split is chronological by window-end position
-(default 80/10/10).
+Data:   iv_{moneyness}_{tau} columns → a (tau × moneyness) grid (10 × 11 = 110 cells),
+        log-IV, per-channel StandardScaler fit on train rows. Chronological
+        train/val/test split by window-end position (70/10/20 by default).
 
-Output
-------
-Deep models:  <ModelDir>/63_<pred_len>/<UTC-timestamp>/
-                  hyperparams.json, metrics_test.json, train_log.csv,
-                  preds.npy  (N_test, pred_len, n_channels)
-VAR:          VAR/results/63_<pred_len>/
-                  hyperparams.json, metrics_test.json, preds.npy
-
-Preds and stats are in standardised log-IV space (the training space);
-hyperparams.json stores the scaler mean/scale so preds can be inverted to IV.
+Output: <ModelDir>/eval/63_<pred_len>/seed_<seed>/ for deep models,
+        VAR/eval/63_<pred_len>/ for VAR — each with hyperparams.json, metrics_test.json
+        (+ best_model.pt, train_log.csv for deep; preds.npy for VAR). Preds/stats are in
+        standardised log-IV; hyperparams.json stores the scaler so preds invert to IV.
 """
 
 from __future__ import annotations
@@ -49,16 +35,13 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 
-# Repo root holds the shared framework (surface_core, embeddings); each model
-# lives in its own folder. Put the root and the model folders on sys.path so the
-# flat `from <model> import ...` imports resolve.
+# put the repo root + model folders on sys.path so the flat model imports resolve
 ROOT = os.path.dirname(os.path.abspath(__file__))
 for sub in (".", "SANTA", "SANTA_flat", "SANTA_temporal", "transformer",
             "per_cell_transformer", "NLinear", "VAR"):
@@ -74,15 +57,7 @@ from nlinear import NLinearForecaster      # noqa: E402
 from var import run_var_baseline           # noqa: E402
 
 
-# ─── User-editable per-model optimiser settings ───────────────────────────
-# lr / weight_decay used at training time. Every model trains with AdamW +
-# grad_clip=1.0 (decoupled WD; clip stabilises the attention init); all other
-# knobs (epochs, patience, min_epochs, batch) are shared, see below.
-#
-# The SANTA family (SANTA, its two spatial ablations, and the two transformer
-# floors) share one recipe — small lr, light decoupled WD — so cross-model
-# comparisons isolate architecture, not tuning. NLinear keeps its own faster lr
-# and zero WD (a pure linear map needs neither warm-up nor decoupled decay).
+# user-editable per-model lr / weight_decay (all AdamW + grad_clip=1.0; SANTA family shares one recipe, NLinear faster lr + zero WD)
 LR_NLINEAR              = 4e-3
 LR_SANTA                = 5e-4
 LR_SANTA_FLAT           = 5e-4
@@ -98,7 +73,7 @@ WD_SANTA_TEMPORAL       = 1e-3
 WD_TRANSFORMER          = 1e-3
 WD_PER_CELL_TRANSFORMER = 1e-3
 
-# Shared trainer settings (same for every deep model).
+# shared trainer settings (same for every deep model)
 EPOCHS     = 100
 PATIENCE   = 15
 MIN_EPOCHS = 15
@@ -106,12 +81,11 @@ BATCH_SIZE = 64
 
 LOOKBACK   = 63   # fixed across the project
 VALID_PRED_LEN = (1, 5, 10, 21, 42, 63)
-# Every deep model shares the SANTA forecasting contract (netDelta on the centred
-# surface) and the _SANTAAdapter.
+# every deep model shares the SANTA forecasting contract (netDelta on the centred surface) and the _SANTAAdapter
 DEEP_MODELS    = ("santa", "santa_flat", "santa_temporal",
                   "transformer", "per_cell_transformer", "nlinear")
 
-# Folder names per model (where outputs land relative to repo root).
+# folder names per model (where outputs land relative to repo root)
 MODEL_DIR = {
     "santa":                "SANTA",
     "santa_flat":           "SANTA_flat",
@@ -123,7 +97,7 @@ MODEL_DIR = {
 }
 
 
-# ─── Device pick: cuda → mps → cpu ────────────────────────────────────────
+# device pick: cuda → mps → cpu
 
 def pick_device() -> torch.device:
     if torch.cuda.is_available():
@@ -133,7 +107,7 @@ def pick_device() -> torch.device:
     return torch.device("cpu")
 
 
-# ─── Data loading ─────────────────────────────────────────────────────────
+# data loading
 
 @dataclass
 class GridSpec:
@@ -145,11 +119,8 @@ class GridSpec:
 
 
 def parse_grid(columns: list[str]) -> GridSpec:
-    """Parse `iv_{moneyness}_{tau}` columns into a (tau × moneyness) grid.
-
-    Column order in the reshape is set to (tau outer, moneyness inner) so
-    that `data[:, 150].reshape(N, H=n_tau, W=n_money)` matches the CSV
-    column ordering when iv_cols is laid out in that order.
+    """Parse `iv_{moneyness}_{tau}` columns into a (tau × moneyness) grid,
+    laying iv_cols out tau-outer / moneyness-inner.
     """
     parsed = []
     for c in columns:
@@ -159,7 +130,7 @@ def parse_grid(columns: list[str]) -> GridSpec:
         parsed.append((c, float(m), float(t)))
     money_vals = sorted({m for _, m, _ in parsed})
     tau_vals   = sorted({t for _, _, t in parsed})
-    # Layout iv_cols as tau-outer, moneyness-inner.
+    # layout iv_cols as tau-outer, moneyness-inner
     lookup = {(m, t): name for name, m, t in parsed}
     iv_cols = [lookup[(m, t)] for t in tau_vals for m in money_vals]
     return GridSpec(
@@ -171,23 +142,11 @@ def parse_grid(columns: list[str]) -> GridSpec:
 def split_starts(N: int, L: int, P: int, train_end: int, val_end: int):
     """Window start indices per split under the whole-horizon-within-split rule.
 
-    A window occupies lookback rows [s, s+L) and forecasts target rows
-    [s+L, s+L+P). It is assigned to the split whose row range fully contains its
-    *target horizon*, so no window ever forecasts a day belonging to another
-    split; windows whose horizon straddles a boundary are dropped (a natural
-    P-day embargo at each edge). Concretely:
-
-        train: target horizon entirely in [0, train_end)      -> target_end <= train_end
-        val:   target horizon entirely in [train_end, val_end) -> first_target >= train_end
-                                                                 and target_end <= val_end
-        test:  target horizon entirely in [val_end, N)         -> first_target >= val_end
-
-    Train is identical to the old target-end rule (its whole horizon is already
-    < train_end, so the model never trains on future). Val/test additionally
-    require the FIRST forecast day to be on/after their boundary, which removes
-    any backward reach-back into the prior split's days. Lookback (the model
-    input) may still span a boundary — that is observed history, not a label,
-    and is the standard, leakage-free way to condition a forecast.
+    A window occupies lookback rows [s, s+L) and forecasts [s+L, s+L+P). It is
+    assigned to the split that fully contains its target horizon, so no window
+    forecasts a day from another split; windows straddling a boundary are dropped
+    (a natural P-day embargo). Lookback may still span a boundary — observed
+    history, not a label, so leakage-free.
     """
     starts = np.arange(N - L - P + 1)
     first_target = starts + L          # first forecast row (today + 1)
@@ -202,16 +161,10 @@ def load_dataset(csv_path: str, train_frac: float, val_frac: float,
                  lookback: int, pred_len: int, data_end: str | None = None):
     """Return windowed train/val/test tensors and the per-channel scaler.
 
-    Steps
-    -----
-    1. Read CSV, optionally truncate to rows with date <= data_end,
-       parse the (tau × moneyness) grid, take log of IV values.
-    2. Row-level split: first train_frac rows define the scaler-fit domain.
-    3. StandardScaler per channel, fit on train rows, applied globally.
-    4. Build sliding windows (input=L, target=P) and assign each to a split via
-       `split_starts` (whole forecast horizon within the split; straddling
-       windows dropped). No window forecasts a day from another split, and no
-       training target lies in the scaler's held-out region — no leakage.
+    Reads the CSV (optionally truncated to date <= data_end), parses the grid, takes
+    log-IV, fits a per-channel StandardScaler on the first train_frac rows, builds
+    sliding windows (input L, target P), and assigns each to a split via split_starts
+    (whole horizon within the split; straddling windows dropped — no leakage).
     """
     df = pd.read_csv(csv_path)
     if data_end is not None:
@@ -269,21 +222,15 @@ def load_dataset(csv_path: str, train_frac: float, val_frac: float,
         "train":  (Xtr, Ytr),
         "val":    (Xva, Yva),
         "test":   (Xte, Yte),
-        # Window start indices of the test split (single source of truth for the
-        # split, so the regime breakdown and VAR align with the trained models
-        # instead of recomputing the masks and risking drift).
+        # test-split window starts (single source of truth so VAR aligns with the trained models)
         "test_starts": test_starts,
-        # Per-row dates (after data_end filtering), length N. Used by
-        # the post-training per-regime breakdown so we don't need to
-        # re-read the CSV; also lets eval scripts share the same source.
+        # per-row dates (after data_end filtering), length N
         "dates_iso": [str(d) for d in dates],
         "scaled_log_iv": scaled,  # full series for VAR
     }
 
 
-# ─── Model adapters ───────────────────────────────────────────────────────
-# Each adapter wraps a model so that its forward sees its native input
-# shape, and outputs are reshaped back to [B, P, C] (the trainer's space).
+# model adapters: reshape between the trainer's [B, L, C] and each model's native [B, L, M, T]
 
 class _Adapter(nn.Module):
     """Shared interface: input/output in [B, T, C] (the canonical space)."""
@@ -296,23 +243,13 @@ class _Adapter(nn.Module):
 
 
 class _SANTAAdapter(_Adapter):
-    """Adapter for every model in the family (SANTA, its ablations, the two
-    transformer floors, and NLinear) — they all share the same contract:
-    `(B, L, M, T)` standardised log-IV in, `netDelta (B, Hh, M, T)` out.
+    """Adapter for every model in the family — all share the contract (B, L, M, T)
+    standardised log-IV in, netDelta (B, Hh, M, T) out.
 
-    The native model takes `(B, L, M, T)` standardised log-IV with
-    M=moneyness, T=maturity, and emits `netDelta (B, Hh, M, T)` — the
-    residual added to today's surface. The trainer here works in
-    `(B, L, C=H*W)` with C laid out tau-outer / moneyness-inner
-    (parse_grid convention). Forward path:
-        x [B,L,C] -> [B,L,H=n_tau,W=n_money] -> permute -> [B,L,M=W,T=H]
-        model -> netDelta [B, Hh, M, T]
-        zhat = z_today + netDelta            (level in standardised log-IV)
-        zhat [B,Hh,M,T] -> permute -> [B,Hh,T,M] -> reshape -> [B,Hh,C]
-    Hh equals pred_len because SANTA is configured with
-    horizons=(1, …, pred_len) in build_model, so the output time axis
-    matches the trainer's Y axis exactly and MSE on (zhat, y) reduces
-    to surface_loss(netDelta, z_today, z_future) with uniform gamma.
+    The trainer works in (B, L, C) with C tau-outer / moneyness-inner (parse_grid
+    order); this reshapes to (B, L, M, T), runs the model, adds today's level to get
+    ẑ = z_today + netDelta, and reshapes back to (B, P, C). Hh == pred_len (horizons
+    (1..P) set in build_model), so MSE on (ẑ, y) == surface_loss with uniform gamma.
     """
     def __init__(self, model, n_tau, n_money):
         super().__init__(model)
@@ -337,17 +274,12 @@ def build_model(name: str, pred_len: int,
                 money_vals: list | None = None) -> tuple[nn.Module, dict]:
     """Construct an adapter-wrapped model; return (adapter, resolved_kwargs).
 
-    Every model shares the surface contract — (B,L,M,T) in, netDelta out — so all
-    are wrapped by _SANTAAdapter and built from one shared Config. The per-model
-    differences are the backbone class and the embedding width d, chosen so each
-    attention model lands in the same ~44-51k parameter envelope; NLinear is the
-    exception (a single shared linear map, ~1.3k params). horizons is set to (1,…,P)
-    so the output time axis matches the trainer's targets.
-
-    tau_vals / money_vals are the live grid coordinates; only the
-    coordinate-embedding models (SANTA and its spatial ablations) consume them, but
-    every model records them in its saved Config. The returned kwargs are that
-    resolved Config, written to hyperparams.json for the record only.
+    Every model shares the surface contract and is wrapped by _SANTAAdapter from one
+    Config; the per-model differences are the backbone class and the embedding width d,
+    chosen so each attention model lands in the same ~44-51k parameter envelope (NLinear
+    is the exception, ~1.3k). horizons = (1..P) so the output axis matches the targets.
+    tau_vals / money_vals are the live grid coords (only SANTA + spatial ablations use
+    them); all are recorded in the saved Config written to hyperparams.json.
     """
     L, P = LOOKBACK, pred_len
     if tau_vals is None or money_vals is None:
@@ -377,34 +309,25 @@ def build_model(name: str, pred_len: int,
         kw.update(extra)
         return kw
 
-    # Embedding width d per model, picked so each lands in the ~44-51k envelope by
-    # compensating for the number of SubBlocks per layer:
-    #   SANTA              (3 SubBlocks/layer)  d=32 → 43.8k
-    #   SANTA-Flat         (2 SubBlocks/layer)  d=40 → 47.0k
-    #   SANTA-Temporal     (1 SubBlock /layer)  d=56 → 50.6k
-    #   PerCellTransformer (S-Temporal backbone, no coords) d=56 → 44.0k
+    # embedding width d per model, chosen so each attention model lands in the ~44-51k param envelope (NLinear ~1.3k)
     if name == "santa":
-        # Factored spatial (A: moneyness, B: maturity) + temporal (C).
+        # factored spatial (A: moneyness, B: maturity) + temporal (C)
         cfg = make_cfg(d=32)
         return _SANTAAdapter(SANTA(cfg), n_tau, n_money), resolved_kw(cfg)
     if name == "santa_flat":
-        # Joint-spatial ablation: A+B replaced by one block over all M·T cells.
+        # joint-spatial ablation: A+B replaced by one block over all M·T cells
         cfg = make_cfg(d=40)
         return _SANTAAdapter(SANTAFlat(cfg), n_tau, n_money), resolved_kw(cfg)
     if name == "santa_temporal":
-        # Temporal-only ablation: both spatial blocks removed (widest d to
-        # compensate for the missing spatial mixing).
+        # temporal-only ablation: both spatial blocks removed (widest d to compensate)
         cfg = make_cfg(d=56)
         return _SANTAAdapter(SANTATemporal(cfg), n_tau, n_money), resolved_kw(cfg)
     if name == "per_cell_transformer":
-        # SANTA-Temporal's backbone with the coordinate embeddings removed; matched
-        # d=56 so the param delta vs SANTA-Temporal is exactly the coord-embed cost.
+        # SANTA-Temporal backbone minus coordinate embeddings (d=56 → param delta == coord-embed cost)
         cfg = make_cfg(d=56)
         return _SANTAAdapter(PerCellTransformer(cfg), n_tau, n_money), resolved_kw(cfg)
     if name == "transformer":
-        # Day-token floor. The surface-wide head scales linearly with n_horizons,
-        # so d is chosen per pred_len to keep total params in the family envelope;
-        # the closed-form fallback solves the ~50k budget for unlisted horizons.
+        # day-token floor; d chosen per pred_len to keep params in the family envelope
         d_by_P = {1: 48, 10: 24, 21: 16, 42: 8, 63: 8}
         d_t = d_by_P.get(P)
         if d_t is None:
@@ -414,9 +337,7 @@ def build_model(name: str, pred_len: int,
         cfg = make_cfg(d=d_t)
         return _SANTAAdapter(VanillaTransformer(cfg), n_tau, n_money), resolved_kw(cfg)
     if name == "nlinear":
-        # The simplest floor: ONE linear map of the centred lookback, shared across
-        # all cells (NLinear, individual=False; centring subtracts today, so this is
-        # the paper's NLinear normalisation). No decomposition, attention, or coords.
+        # simplest floor: one linear map of the centred lookback, shared across cells (NLinear)
         cfg = make_cfg(d=16)
         return _SANTAAdapter(NLinearForecaster(cfg), n_tau, n_money), resolved_kw(cfg)
     raise ValueError(f"Unknown model: {name}")
@@ -441,99 +362,7 @@ WD_BY_MODEL = {
 }
 
 
-# ─── Post-training per-regime breakdown ──────────────────────────────────
-# Calendar regime buckets, anchored at each window's last-horizon target
-# date. Matches eval_full.py's REGIMES exactly so the breakdown printed
-# here lines up with the cross-model comparison tables. Kept inline (not
-# imported) to avoid a circular import — eval_full.py already imports
-# from train.py.
-_REGIMES = (
-    ("COVID",          "2019-12-02", "2020-12-31"),
-    ("Reflation calm", "2021-01-01", "2021-12-31"),
-    ("Bear 2022",      "2022-01-01", "2022-12-31"),
-    ("Normalisation",  "2023-01-01", "2023-12-29"),
-)
-
-
-def _per_regime_breakdown(preds: np.ndarray, Yte: np.ndarray,
-                          Xte: np.ndarray, data: dict, pred_len: int) -> None:
-    """Print per-regime test MSE for the trained model alongside two
-    baselines (persistence + VAR), grouped by the calendar regime of
-    each test window's last target date.
-
-    `preds`/`Yte`: [N_test, pred_len, n_channels] in standardised log-IV.
-    `Xte`:        [N_test, lookback, n_channels] (for the persistence baseline).
-    `data`:       the dict returned by load_dataset (used for `dates_iso`,
-                  `rows`, `data_end`).
-    """
-    L, P = LOOKBACK, pred_len
-    test_starts = data["test_starts"]            # same split the models were trained/scored on
-    if test_starts.size == 0:
-        return
-    last_target_idx = test_starts + L + P - 1
-
-    dates_iso = data.get("dates_iso")
-    if dates_iso is None:
-        print("  per-regime breakdown skipped (data has no dates_iso).")
-        return
-    dates = pd.to_datetime(np.asarray(dates_iso))
-    last_target = dates[last_target_idx]
-
-    # Regime labels per test window.
-    labels = np.full(last_target.shape, "unassigned", dtype=object)
-    for name, lo, hi in _REGIMES:
-        m = (last_target >= pd.Timestamp(lo)) & (last_target <= pd.Timestamp(hi))
-        labels[m] = name
-
-    # Persistence: predict the last lookback day for every horizon.
-    persistence = np.broadcast_to(Xte[:, -1:, :], (Xte.shape[0], P, Xte.shape[2]))
-
-    # VAR baseline if available — preferred path is the canonical eval
-    # output; fall back to the most recent train_var() result.
-    var_paths = [
-        os.path.join(ROOT, "VAR", "eval",    f"{L}_{P}", "preds.npy"),
-        os.path.join(ROOT, "VAR", "results", f"{L}_{P}", "preds.npy"),
-    ]
-    var_preds = None
-    var_src = None
-    for p in var_paths:
-        if os.path.isfile(p):
-            cand = np.load(p)
-            if cand.shape == Yte.shape:
-                var_preds = cand
-                var_src = p
-                break
-
-    print("  per-regime test MSE:")
-    print(f"    {'regime':<18}{'n':>5}    {'model':>9}  {'persist':>9}  "
-          f"{'VAR':>9}    {'m/persist':>9}  {'m/VAR':>6}")
-    for name, _, _ in _REGIMES:
-        mask = labels == name
-        n_r = int(mask.sum())
-        if n_r == 0:
-            continue
-        m_mse = float(((preds[mask] - Yte[mask]) ** 2).mean())
-        p_mse = float(((persistence[mask] - Yte[mask]) ** 2).mean())
-        m_p   = m_mse / p_mse if p_mse > 0 else float("nan")
-        if var_preds is not None:
-            v_mse = float(((var_preds[mask] - Yte[mask]) ** 2).mean())
-            v_str = f"{v_mse:>9.4f}"
-            m_v   = m_mse / v_mse if v_mse > 0 else float("nan")
-            m_v_str = f"{m_v:>6.2f}"
-        else:
-            v_str = f"{'n/a':>9s}"
-            m_v_str = f"{'n/a':>6s}"
-        print(f"    {name:<18}{n_r:>5}    "
-              f"{m_mse:>9.4f}  {p_mse:>9.4f}  {v_str}    "
-              f"{m_p:>9.2f}  {m_v_str}")
-    if var_preds is None:
-        print(f"    (VAR baseline not found at "
-              f"VAR/eval/{L}_{P}/preds.npy or VAR/results/{L}_{P}/preds.npy)")
-    else:
-        print(f"    (VAR baseline from {os.path.relpath(var_src, ROOT)})")
-
-
-# ─── Training loop ────────────────────────────────────────────────────────
+# training loop
 
 def _iter_batches(X: np.ndarray, Y: np.ndarray, batch: int,
                   shuffle: bool, device: torch.device, generator=None):
@@ -549,10 +378,10 @@ def _iter_batches(X: np.ndarray, Y: np.ndarray, batch: int,
 
 def _epoch(model, X, Y, batch, device, optimizer=None, generator=None,
            grad_clip=None):
-    """Run one epoch and return the mean MSE over samples. Trains when an
-    optimizer is given (with optional grad-norm clipping); otherwise evaluates
-    under no_grad. The MSE on (ẑ, y) equals surface_loss(netDelta, …) with uniform
-    horizon weights, because the adapter reconstructs ẑ = z_today + netDelta."""
+    """Run one epoch and return mean MSE. Trains when an optimizer is given (with
+    optional grad-norm clipping); otherwise evaluates under no_grad. MSE on (ẑ, y)
+    equals surface_loss(netDelta, …) since the adapter reconstructs ẑ = z_today + netDelta.
+    """
     train = optimizer is not None
     model.train(train)
     loss_fn = nn.MSELoss()
@@ -591,11 +420,10 @@ def train_deep_model(name: str, data: dict, pred_len: int,
                      out_dir: str | None = None):
     """Train one deep model with the shared trainer and save artefacts.
 
-    Every model uses the same recipe — AdamW with decoupled weight decay,
-    grad-norm clipping at 1.0, and early stopping on val MSE after MIN_EPOCHS —
-    so cross-model comparisons isolate architecture, not the training procedure.
-    Per-model lr / weight_decay come from LR_BY_MODEL / WD_BY_MODEL. `out_dir`
-    overrides the default timestamped path (e.g. to route to a fixed seed slot).
+    Same recipe for every model — AdamW with decoupled weight decay, grad-norm clip 1.0,
+    early stop on val MSE after MIN_EPOCHS — so comparisons isolate architecture, not the
+    trainer. Per-model lr / weight_decay from LR_BY_MODEL / WD_BY_MODEL; out_dir overrides
+    the default eval/<L>_<P>/seed_<seed>/ path.
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -619,9 +447,8 @@ def train_deep_model(name: str, data: dict, pred_len: int,
     optimizer = torch.optim.AdamW(adapter.parameters(), lr=lr, weight_decay=wd)
 
     if out_dir is None:
-        ts      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-        out_dir = os.path.join(ROOT, MODEL_DIR[name],
-                               f"{LOOKBACK}_{pred_len}", ts)
+        out_dir = os.path.join(ROOT, MODEL_DIR[name], "eval",
+                               f"{LOOKBACK}_{pred_len}", f"seed_{seed}")
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"[{name}  pred_len={pred_len}  device={device}]")
@@ -663,7 +490,7 @@ def train_deep_model(name: str, data: dict, pred_len: int,
                         f"{lr:.8g}", f"{dt:.3f}"])
         log_f.flush()
 
-        # Early stop only after MIN_EPOCHS.
+        # early stop only after MIN_EPOCHS
         if epoch >= MIN_EPOCHS and (epoch - best_epoch) >= PATIENCE:
             stop_epoch = epoch
             print(f"  early stop at epoch {epoch} "
@@ -676,13 +503,11 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         print(f"  finished {EPOCHS} epochs (best val={best_val:.6f} "
               f"@ epoch {best_epoch})")
 
-    # Restore best weights for the test pass.
+    # restore best weights for the test pass
     adapter.load_state_dict(best_state)
     preds_te = _predict(adapter, Xte, batch_size, device)   # [N, P, C]
     np.save(os.path.join(out_dir, "preds.npy"), preds_te.astype(np.float32))
-    # Persist the best weights alongside the predictions so downstream
-    # analysis (probes, ablations) can load the trained model without
-    # retraining. best_state is already a CPU clone (see the val loop).
+    # persist best weights so they can be reloaded without retraining (best_state is a cpu clone)
     torch.save(best_state, os.path.join(out_dir, "best_model.pt"))
 
     mse = float(np.mean((preds_te - Yte) ** 2))
@@ -741,35 +566,28 @@ def train_deep_model(name: str, data: dict, pred_len: int,
         json.dump(hyper, f, indent=2)
 
     print(f"  test: mse={mse:.6f}  rmse={rmse:.6f}  mae={mae:.6f}")
-    _per_regime_breakdown(preds_te, Yte, Xte, data, pred_len)
     print(f"  saved → {os.path.relpath(out_dir, ROOT)}\n")
 
 
-# ─── VAR (Gonçalves–Guidolin two-stage on the 5-coefficient basis) ──────
+# VAR (Gonçalves–Guidolin two-stage on the 5-coefficient basis)
 
 def train_var(data: dict, pred_len: int, seed: int):
     """Thin wrapper around var.run_var_baseline.
 
-    Stage 1 fits ℓ = β₀ + β₁M + β₂M² + β₃τ + β₄Mτ across the 150 cells
-    daily (M = k/√τ, intra-day OLS, no temporal leakage). Stage 2 fits a
-    VAR(p) on the 5-dim β series over the TRAIN slice with p chosen by
-    BIC; parameters are frozen and used unchanged on val/test. The frozen
-    VAR is iterated forward at each test base date, β̂_{t+h} is plugged
-    back into the Stage-1 formula to reconstruct ℓ̂ on every cell, and
-    the result is restandardised so it can be scored against the same Yte
-    the neural models use. Run the per-regime breakdown afterwards on the
-    standardised preds for parity with the deep-model rows."""
-    Xte, Yte = data["test"]
-    out_dir = os.path.join(ROOT, MODEL_DIR["var"], "results",
+    Stage 1 fits ℓ = β₀ + β₁M + β₂M² + β₃τ + β₄Mτ daily across the 110 cells
+    (M = k/√τ, intra-day OLS); stage 2 fits a BIC-selected VAR(p) on the 5-dim β
+    series over the TRAIN slice, frozen on val/test. The VAR is iterated forward at
+    each test base date and plugged back into the stage-1 formula to reconstruct ℓ̂,
+    then restandardised to score against the same Yte the neural models use.
+    """
+    out_dir = os.path.join(ROOT, MODEL_DIR["var"], "eval",
                            f"{LOOKBACK}_{pred_len}")
     run_var_baseline(data, pred_len, seed=seed,
                      out_dir=out_dir, verbose=True)
-    preds = np.load(os.path.join(out_dir, "preds.npy"))
-    _per_regime_breakdown(preds, Yte, Xte, data, pred_len)
     print(f"  saved → {os.path.relpath(out_dir, ROOT)}\n")
 
 
-# ─── Entry point ──────────────────────────────────────────────────────────
+# entry point
 
 def main():
     ap = argparse.ArgumentParser(

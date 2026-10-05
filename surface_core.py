@@ -1,26 +1,13 @@
-"""
-surface_core.py
-===================================================================================
-Shared framework for the IV-surface forecasting family (SANTA, its ablations, the
-vanilla / per-cell transformers and DLinear).
+"""Shared framework for the IV-surface forecasting family.
 
-Everything here is model-agnostic — the configuration object, the neural
-primitives every attention model is built from, the instance-normalisation that
-defines the forecasting target, and the loss / windowing utilities. Each model
-file imports what it needs from here and contains only its own architecture.
+Model-agnostic pieces every model imports: the Config, the attention primitives,
+the instance-norm that defines the target, and the loss / windowing utilities.
 
-The shared forecasting contract
--------------------------------
-Every model in the family takes a window of standardised log-IV
-    z : (B, L, M, T)        L past days of an M×T surface, index -1 = today
-centres each cell's window on today (`instance_norm`), and predicts
-    netDelta : (B, n_horizons, M, T)
-the per-cell CHANGE from today to each horizon. The reconstruction is
-    ẑ_{t+h} = z_today + netDelta_h   (`reconstruct`)
-so a zero prediction reproduces the random-walk null. Training minimises
-`surface_loss` (uniform MSE on the cumulative standardised change); per-cell
-standardisation upstream gives the correct implicit variance weighting, so no
-explicit per-cell weights are used.
+Shared contract: each model takes a window of standardised log-IV z (B, L, M, T),
+centres each cell on today (instance_norm), and predicts netDelta (B, n_horizons, M, T)
+— the per-cell change from today to each horizon (ẑ = z_today + netDelta, so a zero
+prediction is the random-walk null). Training minimises surface_loss (uniform MSE on
+the standardised change).
 """
 
 from __future__ import annotations
@@ -32,17 +19,12 @@ import torch
 import torch.nn as nn
 
 
-# ----------------------------------------------------------------------------------
-# Config
-# ----------------------------------------------------------------------------------
+# config
 @dataclass
 class Config:
-    """Shared hyperparameters. Models ignore the fields they don't use (e.g. the
-    transformers and DLinear ignore the coordinate grids; DLinear ignores the
-    attention dims). `build_model` in train.py overrides M / T / L / horizons and
-    the coordinate grids with the live parsed dataset; the defaults below match
-    the current SPX grid (11 log-fwd-moneyness × 10 maturities) so the standalone
-    smoke tests run without a dataset.
+    """Shared hyperparameters; models ignore fields they don't use. build_model in
+    train.py overrides M / T / L / horizons and the coordinate grids from the parsed
+    dataset; the defaults match the current SPX grid so the smoke tests run standalone.
     """
     M: int = 11                      # moneyness points
     T: int = 10                      # maturity points
@@ -54,10 +36,7 @@ class Config:
     d_ff_mult: int = 2               # FFN hidden = d_ff_mult * d
     d_head_hidden: int = 48          # hidden width of the per-cell output head MLP
     dropout: float = 0.1
-    # Financial coordinates of the grid (lengths M and T). 11 uniform
-    # log-fwd-moneyness strikes in [-0.10, +0.10] at 0.02 spacing (ATM=0 at i=5)
-    # and 10 explicit day-count maturities in years. Only the coordinate-embedding
-    # models (SANTA and its spatial ablations) consume these.
+    # financial grid coordinates (M strikes, ATM=0 at i=5; T maturities); only SANTA + ablations use them
     k_grid: Tuple[float, ...] = tuple(
         round(-0.10 + 0.02 * i, 6) for i in range(11)
     )
@@ -75,21 +54,13 @@ class Config:
         return self.d // self.n_heads
 
 
-# ----------------------------------------------------------------------------------
-# Instance normalisation (Step 0) — defines the forecasting target
-# ----------------------------------------------------------------------------------
+# instance normalisation — defines the forecasting target
 def instance_norm(z: torch.Tensor):
     """Centre each cell's window on today (reversible instance norm).
 
-    z : (B, L, M, T) standardised log-IV window (chronological; index -1 = today).
-    Returns
-      u        (B, L, M, T)  centred history, u[:, -1] == 0 by construction
-      L0       (B, M, T)     today's level per cell (the centring constant)
-      s_tilde  (B, M, T)     per-cell window std — kept as an amplitude/regime cue
-                             and NOT divided out (amplitude is informative).
-    Because the window is centred on today, forecasting the future centred level
-    is identical to forecasting the change from today, so model outputs are the
-    netDelta directly.
+    z (B, L, M, T) → u centred history (u[:, -1] == 0), L0 today's level (B, M, T),
+    s_tilde per-cell window std (B, M, T), kept as an amplitude cue (not divided out).
+    Centring on today means forecasting the future level == forecasting the change.
     """
     L0 = z[:, -1, :, :]                            # today (B, M, T)
     u = z - L0.unsqueeze(1)                        # centred history (B, L, M, T)
@@ -97,17 +68,12 @@ def instance_norm(z: torch.Tensor):
     return u, L0, s_tilde
 
 
-# ----------------------------------------------------------------------------------
-# Multi-head self-attention with explicit Q/K/V
-# ----------------------------------------------------------------------------------
+# multi-head self-attention with explicit Q/K/V
 class MultiHeadSelfAttention(nn.Module):
     """Standard MHSA over the sequence axis (-2) of a (Bx, N, d) tensor.
 
-    Bx is a flattened batch (whatever axes we are NOT attending over); N is the
-    sequence length along the attended axis (M, T or L); d is the model dim.
-    Attention weights are shared across the flattened batch, so one operator is
-    learned per axis but its output is state-dependent (the softmax weights differ
-    per location/day because the inputs differ).
+    Bx is the flattened non-attended batch; N is the attended axis (M, T or L).
+    One operator is learned per axis; its softmax weights are still input-dependent.
     """
     def __init__(self, d: int, n_heads: int, dropout: float):
         super().__init__()
@@ -149,10 +115,8 @@ class FeedForward(nn.Module):
 
 
 class SubBlock(nn.Module):
-    """Pre-LN transformer sub-block operating on (Bx, N, d):
-           x <- x + MHSA(LN(x));   x <- x + FFN(LN(x))
-    This is the single attention unit every model in the family is built from;
-    only the axis flattened into the sequence position differs (M, T or L).
+    """Pre-LN transformer sub-block on (Bx, N, d): x += MHSA(LN(x)); x += FFN(LN(x)).
+    The single attention unit every model is built from; only the attended axis differs.
     """
     def __init__(self, cfg: Config):
         super().__init__()
@@ -168,9 +132,7 @@ class SubBlock(nn.Module):
         return x
 
 
-# ----------------------------------------------------------------------------------
-# Reconstruction + loss (Step 5)
-# ----------------------------------------------------------------------------------
+# reconstruction + loss
 def reconstruct(z_today: torch.Tensor, netDelta: torch.Tensor) -> torch.Tensor:
     """ẑ_{t+h} = z_today + netDelta_h.  z_today (B,M,T); netDelta (B,Hh,M,T)."""
     return z_today.unsqueeze(1) + netDelta                     # (B,Hh,M,T)
@@ -182,13 +144,9 @@ def surface_loss(netDelta: torch.Tensor,
                  gamma: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Uniform MSE on cumulative standardised changes.
 
-      netDelta : (B,Hh,M,T)  predicted change to each horizon
-      z_today  : (B,M,T)     standardised log-IV today
-      z_future : (B,Hh,M,T)  standardised log-IV at each horizon (the targets)
-      gamma    : (Hh,)       horizon weights (default ones)
-
-    RW null = netDelta == 0  =>  loss = mean over cells/horizons of (Δz)². No
-    per-cell weight w(m,τ): per-cell standardisation already equalises cell scales.
+    netDelta/z_future (B,Hh,M,T), z_today (B,M,T), gamma (Hh,) horizon weights.
+    netDelta == 0 is the random-walk null; per-cell standardisation upstream already
+    equalises cell scales, so no explicit per-cell weight.
     """
     B, Hh, M, T = netDelta.shape
     Dz = z_future - z_today.unsqueeze(1)                       # (B,Hh,M,T) target change
@@ -214,19 +172,14 @@ def destandardise(z: torch.Tensor, mu_cell: torch.Tensor,
     return z * sd_cell + mu_cell
 
 
-# ----------------------------------------------------------------------------------
-# Window builder (honours the chronological split + H-day embargo externally)
-# ----------------------------------------------------------------------------------
+# window builder (honours the chronological split + H-day embargo externally)
 def build_windows(Z: torch.Tensor, horizons: Tuple[int, ...], L: int
                   ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Z: (S, M, T) chronological standardised log-IV series (stats from TRAIN only).
-    Returns
-      windows  : (Nsamp, L, M, T)  input windows (index -1 = base date t)
-      z_today  : (Nsamp, M, T)
-      z_future : (Nsamp, Hh, M, T)
-      base_idx : (Nsamp,)          the integer index t of each sample (for split masks)
+    """Build sliding windows from Z (S, M, T) chronological standardised log-IV.
 
-    Standardisation must already be applied to Z using TRAIN-ONLY mu/sd.
+    Returns windows (Nsamp, L, M, T), z_today (Nsamp, M, T), z_future (Nsamp, Hh, M, T),
+    and base_idx (Nsamp,) the index t of each sample. Z must already be standardised
+    with TRAIN-only mu/sd.
     """
     S, M, T = Z.shape
     Hmax = max(horizons)

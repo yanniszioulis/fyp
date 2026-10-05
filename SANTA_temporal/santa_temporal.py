@@ -1,25 +1,4 @@
-"""
-santa_temporal.py
-===================================================================================
-SANTA-Temporal — temporal-only ablation of SANTA.
-
-Keeps Block C (per-cell temporal attention over the L lags) and REMOVES both
-spatial blocks — no moneyness attention, no maturity attention. Each cell evolves
-purely as its own time series, attended over its own history; no information flows
-BETWEEN cells inside the backbone. Everything else is inherited verbatim from SANTA
-by subclassing.
-
-This is the mirror-image ablation of SANTA-Flat:
-
-    SANTA          : factored spatial (A + B) + temporal (C)
-    SANTA-Flat     : JOINT spatial (S)        + temporal (C)   [vary the spatial mix]
-    SANTA-Temporal : no spatial               + temporal (C)   [remove the spatial mix]
-
-so the three together isolate whether the model needs any cross-cell information at
-all, and if so whether the two spatial axes should be mixed jointly or in factored
-Kronecker style. Cross-cell information can still enter only through the (constant)
-coordinate embeddings at Step 1 and the shared head — never inside the trunk.
-"""
+"""SANTA-Temporal — temporal-only ablation: both spatial attention blocks removed."""
 
 from __future__ import annotations
 import os
@@ -38,19 +17,10 @@ from surface_core import Config, SubBlock
 from santa import SANTA
 
 
-# ----------------------------------------------------------------------------------
-# Temporal-only layer: one SubBlock over the L lags at every cell. No spatial mix.
-# ----------------------------------------------------------------------------------
+
+# temporal-only layer
 class TemporalOnlyLayer(nn.Module):
-    """One layer of the SANTA-Temporal backbone: a single temporal SubBlock.
-
-      C) Temporal attention — sequence axis is L. The reshape/permute is
-         byte-for-byte the same as SANTA's FactoredLayer.block_time; the temporal
-         mechanism is the half of the model held constant across all three variants.
-
-    No moneyness/maturity/joint-spatial block: the M·T cells are processed as
-    independent per-cell time series at every layer.
-    """
+    
     def __init__(self, cfg: Config):
         super().__init__()
         self.cfg = cfg
@@ -64,16 +34,9 @@ class TemporalOnlyLayer(nn.Module):
         return x
 
 
-# ----------------------------------------------------------------------------------
-# Top-level model: SANTA with both spatial blocks deleted (temporal-only stack)
-# ----------------------------------------------------------------------------------
+# top-level model
 class SANTATemporal(SANTA):
-    """SANTA with both spatial blocks removed; layer stack is temporal-only.
 
-    Inherits SANTA's __init__ (embeddings, head, buffers, the FactoredLayer stack)
-    then replaces self.layers in place. cfg.n_layers and every per-block hyperparam
-    are unchanged; forward / instance norm / attention collection are inherited.
-    """
     def __init__(self, cfg: Config):
         super().__init__(cfg)
         self.layers = nn.ModuleList(
@@ -81,9 +44,7 @@ class SANTATemporal(SANTA):
         )
 
 
-# ----------------------------------------------------------------------------------
-# Smoke test
-# ----------------------------------------------------------------------------------
+# smoke test
 if __name__ == "__main__":
     from surface_core import build_windows, surface_loss, rw_loss
     torch.manual_seed(0)

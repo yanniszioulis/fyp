@@ -1,0 +1,103 @@
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{l l @{\hspace{2.2em}} c @{\hspace{1em}} c @{\hspace{1em}} c}
+\toprule
+Horizon & Model & MSE & MAE & IC \\
+\midrule
+\multirow{8}{*}{$h{+}10$}
+ & Persistence  & $\mathbf{0.57205}$ & $0.49506$ & --- \\
+ & VAR          & $0.63519$ & $0.49722$ & $\mathbf{0.2587}$ \\
+ & NLinear      & $0.63289 \pm 0.0216$ & $0.49596 \pm 0.0149$ & $0.1054 \pm 0.042$ \\
+ & Day-Token    & $0.61487 \pm 0.0055$ & $0.49613 \pm 0.0041$ & $0.1175 \pm 0.027$ \\
+ & Per-Cell     & $0.60346 \pm 0.0081$ & $0.50022 \pm 0.0050$ & $-0.0091 \pm 0.035$ \\
+ & SANTA-T      & $0.59774 \pm 0.0154$ & $0.49873 \pm 0.0103$ & $\underline{0.1537 \pm 0.103}$ \\
+ & SANTA-F      & $0.58432 \pm 0.0070$ & $\underline{0.48927 \pm 0.0035}$ & $0.0720 \pm 0.133$ \\
+ & SANTA        & $\underline{0.57953 \pm 0.0070}$ & $\mathbf{0.48816 \pm 0.0038}$ & $0.0815 \pm 0.052$ \\
+\midrule
+\multirow{8}{*}{$h{+}21$}
+ & Persistence  & $1.41394$ & $0.77147$ & --- \\
+ & VAR          & $1.52364$ & $0.74471$ & $0.2790$ \\
+ & NLinear      & $1.45395 \pm 0.0202$ & $0.74399 \pm 0.0121$ & $-0.0022 \pm 0.044$ \\
+ & Day-Token    & $1.44932 \pm 0.0201$ & $0.74987 \pm 0.0069$ & $0.1452 \pm 0.018$ \\
+ & Per-Cell     & $1.40200 \pm 0.0119$ & $0.74327 \pm 0.0061$ & $-0.0587 \pm 0.048$ \\
+ & SANTA-T      & $1.39602 \pm 0.0371$ & $0.74102 \pm 0.0222$ & $\mathbf{0.3878 \pm 0.102}$ \\
+ & SANTA-F      & $\underline{1.39093 \pm 0.0184}$ & $\underline{0.73747 \pm 0.0084}$ & $0.3340 \pm 0.120$ \\
+ & SANTA        & $\mathbf{1.38022 \pm 0.0126}$ & $\mathbf{0.73365 \pm 0.0057}$ & $\underline{0.3807 \pm 0.021}$ \\
+\midrule
+\multirow{8}{*}{$h{+}42$}
+ & Persistence  & $2.92332$ & $1.23002$ & --- \\
+ & VAR          & $2.99228$ & $1.14830$ & $0.2987$ \\
+ & NLinear      & $2.79960 \pm 0.0378$ & $1.13972 \pm 0.0226$ & $0.0433 \pm 0.056$ \\
+ & Day-Token    & $2.86993 \pm 0.0231$ & $1.16687 \pm 0.0100$ & $0.1628 \pm 0.033$ \\
+ & Per-Cell     & $2.73979 \pm 0.0297$ & $1.14025 \pm 0.0074$ & $0.0575 \pm 0.080$ \\
+ & SANTA-T      & $\underline{2.72616 \pm 0.0596}$ & $\underline{1.13467 \pm 0.0163}$ & $\mathbf{0.4839 \pm 0.038}$ \\
+ & SANTA-F      & $2.83230 \pm 0.1416$ & $1.17895 \pm 0.0523$ & $0.4300 \pm 0.053$ \\
+ & SANTA        & $\mathbf{2.68792 \pm 0.0297}$ & $\mathbf{1.12831 \pm 0.0099}$ & $\underline{0.4821 \pm 0.054}$ \\
+\midrule
+\multirow{8}{*}{$h{+}63$}
+ & Persistence  & $3.59735$ & $1.45290$ & --- \\
+ & VAR          & $3.54198$ & $1.31979$ & $0.3578$ \\
+ & NLinear      & $3.30643 \pm 0.0355$ & $1.29659 \pm 0.0240$ & $0.0994 \pm 0.059$ \\
+ & Day-Token    & $3.45039 \pm 0.0409$ & $1.35475 \pm 0.0259$ & $0.1916 \pm 0.031$ \\
+ & Per-Cell     & $3.22360 \pm 0.0453$ & $1.30209 \pm 0.0114$ & $0.1868 \pm 0.079$ \\
+ & SANTA-T      & $\underline{3.20419 \pm 0.0461}$ & $\mathbf{1.28955 \pm 0.0168}$ & $\underline{0.5177 \pm 0.036}$ \\
+ & SANTA-F      & $3.23018 \pm 0.1004$ & $1.30458 \pm 0.0350$ & $0.5039 \pm 0.067$ \\
+ & SANTA        & $\mathbf{3.17829 \pm 0.0736}$ & $\underline{1.29655 \pm 0.0156}$ & $\mathbf{0.5457 \pm 0.065}$ \\
+\bottomrule
+\end{tabular}
+\caption{Test-set accuracy across horizons (standardised log-IV), \textbf{COVID crisis period} (forecast base date 30 Dec 2019 -- 30 Apr 2020). Trained models reported as $\mathrm{mean}\pm\mathrm{sd}$ over $10$ seeds. Best per horizon and metric in \textbf{bold}, second \underline{underlined}. Windows per horizon: $n=85/85/85/85$ for $h{+}10/21/42/63$.}
+\label{tab:results_covid}
+\end{table}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{l l @{\hspace{2.2em}} c @{\hspace{1em}} c @{\hspace{1em}} c}
+\toprule
+Horizon & Model & MSE & MAE & IC \\
+\midrule
+\multirow{8}{*}{$h{+}10$}
+ & Persistence  & $0.06566$ & $0.18521$ & --- \\
+ & VAR          & $0.07116$ & $0.19731$ & $0.1151$ \\
+ & NLinear      & $0.06284 \pm 0.0007$ & $0.18573 \pm 0.0011$ & $0.0977 \pm 0.018$ \\
+ & Day-Token    & $0.06188 \pm 0.0007$ & $\mathbf{0.17995 \pm 0.0008}$ & $0.0924 \pm 0.019$ \\
+ & Per-Cell     & $\underline{0.06150 \pm 0.0013}$ & $\underline{0.18088 \pm 0.0022}$ & $0.1232 \pm 0.015$ \\
+ & SANTA-T      & $\mathbf{0.06117 \pm 0.0012}$ & $0.18088 \pm 0.0013$ & $\mathbf{0.1468 \pm 0.016}$ \\
+ & SANTA-F      & $0.06226 \pm 0.0007$ & $0.18204 \pm 0.0011$ & $\underline{0.1419 \pm 0.010}$ \\
+ & SANTA        & $0.06237 \pm 0.0006$ & $0.18110 \pm 0.0007$ & $0.1337 \pm 0.019$ \\
+\midrule
+\multirow{8}{*}{$h{+}21$}
+ & Persistence  & $0.11166$ & $0.24921$ & --- \\
+ & VAR          & $0.11146$ & $0.25183$ & $0.1539$ \\
+ & NLinear      & $0.10395 \pm 0.0010$ & $0.24502 \pm 0.0010$ & $0.1344 \pm 0.010$ \\
+ & Day-Token    & $0.10162 \pm 0.0009$ & $0.23845 \pm 0.0014$ & $0.0989 \pm 0.023$ \\
+ & Per-Cell     & $0.09942 \pm 0.0019$ & $\mathbf{0.23801 \pm 0.0025}$ & $0.1809 \pm 0.010$ \\
+ & SANTA-T      & $\mathbf{0.09896 \pm 0.0020}$ & $0.23872 \pm 0.0025$ & $0.2018 \pm 0.008$ \\
+ & SANTA-F      & $\underline{0.09916 \pm 0.0015}$ & $\underline{0.23831 \pm 0.0018}$ & $\underline{0.2057 \pm 0.009}$ \\
+ & SANTA        & $0.09942 \pm 0.0008$ & $0.23835 \pm 0.0011$ & $\mathbf{0.2100 \pm 0.008}$ \\
+\midrule
+\multirow{8}{*}{$h{+}42$}
+ & Persistence  & $0.16828$ & $0.31537$ & --- \\
+ & VAR          & $0.16021$ & $0.30855$ & $0.2085$ \\
+ & NLinear      & $0.15584 \pm 0.0024$ & $0.30676 \pm 0.0016$ & $0.1932 \pm 0.014$ \\
+ & Day-Token    & $0.14889 \pm 0.0017$ & $0.29566 \pm 0.0016$ & $0.1007 \pm 0.023$ \\
+ & Per-Cell     & $0.14320 \pm 0.0021$ & $\underline{0.29276 \pm 0.0019}$ & $0.2441 \pm 0.013$ \\
+ & SANTA-T      & $\underline{0.14218 \pm 0.0047}$ & $0.29282 \pm 0.0049$ & $0.2546 \pm 0.014$ \\
+ & SANTA-F      & $0.14842 \pm 0.0119$ & $0.29634 \pm 0.0093$ & $\underline{0.2615 \pm 0.021}$ \\
+ & SANTA        & $\mathbf{0.14074 \pm 0.0008}$ & $\mathbf{0.29063 \pm 0.0009}$ & $\mathbf{0.2720 \pm 0.010}$ \\
+\midrule
+\multirow{8}{*}{$h{+}63$}
+ & Persistence  & $0.20062$ & $0.34791$ & --- \\
+ & VAR          & $0.19014$ & $0.33704$ & $0.2427$ \\
+ & NLinear      & $0.19078 \pm 0.0020$ & $0.34335 \pm 0.0017$ & $0.2204 \pm 0.007$ \\
+ & Day-Token    & $0.17810 \pm 0.0018$ & $0.32548 \pm 0.0021$ & $0.0973 \pm 0.021$ \\
+ & Per-Cell     & $0.18303 \pm 0.0193$ & $0.33139 \pm 0.0147$ & $0.2395 \pm 0.039$ \\
+ & SANTA-T      & $\underline{0.17392 \pm 0.0070}$ & $\underline{0.32527 \pm 0.0060}$ & $0.2637 \pm 0.029$ \\
+ & SANTA-F      & $0.18954 \pm 0.0356$ & $0.33233 \pm 0.0223$ & $\underline{0.2880 \pm 0.015}$ \\
+ & SANTA        & $\mathbf{0.16806 \pm 0.0020}$ & $\mathbf{0.32008 \pm 0.0024}$ & $\mathbf{0.2930 \pm 0.013}$ \\
+\bottomrule
+\end{tabular}
+\caption{Test-set accuracy across horizons (standardised log-IV), \textbf{post-crisis period} (forecast base date from 1 May 2020 onwards). Trained models reported as $\mathrm{mean}\pm\mathrm{sd}$ over $10$ seeds. Best per horizon and metric in \textbf{bold}, second \underline{underlined}. Windows per horizon: $n=913/902/881/860$ for $h{+}10/21/42/63$.}
+\label{tab:results_postcovid}
+\end{table}

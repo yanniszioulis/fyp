@@ -1,16 +1,15 @@
 """
 Preprocess OptionMetrics SPX quotes into a daily implied-volatility surface.
 
-Coordinates: (log T, log(K/F)). Default grid is 11 moneyness points in
-[-0.10, +0.10] at 0.02 steps (odd -> centre cell at ATM-forward) and an
-explicit intuitive tau list of round day-counts from 30d to 365d.
+Coordinates: (log T, log(K/F)). Grid is 11 moneyness points in
+[-0.10, +0.10] at 0.02 steps and an explicit intuitive tau list 
+of round day-counts from 30d to 365d.
 
 Surface is a vega-weighted Nadaraya-Watson smooth of OTM + narrow-ATM-band
 quotes. h_tau, h_m are kernel variances; h_m ramps in log(tau) from h_m at
 tau_min to h_m_long at tau_max.
 
-Output: SPX_surfaces.csv, `iv_{m}_{tau}` columns ordered tau-major
-(k = i_t * n_moneyness + i_m); reshape C-order to (n_tau, n_moneyness).
+Output: SPX_surfaces.csv, `iv_{m}_{tau}` columns ordered tau-major.
 """
 import os
 from os.path import join
@@ -108,8 +107,7 @@ class OptionMetricsPreprocess:
         # per-day fit error of the gridded surface vs the raw quotes
         self.fit_rows = []
 
-        # Per-tau moneyness bandwidth: ramp linearly in log(tau) from h_m at
-        # tau_min to h_m_long at tau_max. Flat order is tau-major C-order.
+        # per-tau moneyness bandwidth: ramps in log(tau) from h_m (tau_min) to h_m_long (tau_max)
         tau_grid = self._make_tau_grid(self.ttm_min, self.ttm_max, self.n_tau)
         if self.h_m_long is None:
             self._h_m_per_tau = np.full(self.n_tau, self.h_m, dtype=np.float64)
@@ -126,8 +124,7 @@ class OptionMetricsPreprocess:
         os.makedirs(output_dir, exist_ok=True)
 
     def load_data(self):
-        # Forward file is small; load and dedup it up front so each options
-        # chunk can be merged against it in the streaming loop below.
+        # forward file is small — load and dedup up front, then merge each options chunk against it
         print("Loading forward prices...")
         fwd = pd.read_csv(self.forward_file)
         print(f"Loaded {len(fwd):,} forward records")
@@ -159,11 +156,7 @@ class OptionMetricsPreprocess:
                .drop(columns=["am_settlement"])
         )
 
-        # Stream the (multi-GB) options file: each chunk is merged, range- and
-        # forward-filtered and column-pruned *before* it is retained, so peak
-        # memory tracks the filtered surface support, not the raw file. The
-        # ttm / moneyness windows are date-independent, so applying them here
-        # is equivalent to the per-day filtering done later.
+        # stream the options file
         print("Loading options data in chunks...")
         usecols = ["date", "exdate", "cp_flag", "strike_price",
                    "impl_volatility", "volume", "vega"]
@@ -214,12 +207,11 @@ class OptionMetricsPreprocess:
                   f"forward after merge; dropped.")
 
     def _make_tau_grid(self, t_min, t_max, n):
-        # Maturities are the explicit intuitive list set in __init__.
+        # maturities are the explicit intuitive list set in __init__
         return self.tau_grid_years.copy()
 
     def process_daily_surfaces(self):
-        # ttm / moneyness and their range filters are applied per-chunk in
-        # load_data; here we only group the retained quotes into surfaces.
+        # range filters are applied per-chunk in load_data; here we just group retained quotes into surfaces
         n_dates = self.options_df["date"].nunique()
         print(f"Processing {n_dates} unique dates...")
 
@@ -234,9 +226,7 @@ class OptionMetricsPreprocess:
                 print(f"Processing date {i+1}/{n_dates}: "
                       f"{date.strftime('%Y-%m-%d')}")
 
-            # Wing-relaxed filters: |m| > 0.07 keeps thinly-traded OTM quotes
-            # (looser vega cutoff, volume not required) to feed the otherwise
-            # sparse wing cells. Dense ATM core keeps the strict filters.
+            # wing-relaxed filters: |m| > 0.07 admits thin OTM quotes (looser vega, no volume req); ATM core stays strict
             base_ok = (
                 np.isfinite(day_options["impl_volatility"])
                 & (day_options["impl_volatility"] > self.iv_min)
@@ -255,8 +245,7 @@ class OptionMetricsPreprocess:
 
             day = day_options[base_ok & in_window & vega_ok & vol_ok]
 
-            # OTM only, plus a +/-0.01 ATM band on each side (admits near-ATM
-            # quotes of both types; deepest ITM kept is only ~1% in the money).
+            # OTM only, plus a ±0.01 ATM band each side (deepest ITM kept is ~1% in the money)
             calls = day[day["cp_flag"] == "C"]
             puts  = day[day["cp_flag"] == "P"]
             calls_keep = calls[(calls["moneyness"] > 0.0)
@@ -320,15 +309,13 @@ class OptionMetricsPreprocess:
         # h_m varies per tau row; broadcast against the flat grid axis.
         h_m_col = self._h_m_flat[:, None]
         log_k = -0.5 * (x ** 2 / self.h_tau + y ** 2 / h_m_col)
-        # softmax-stabilise; ratios (and Kish neff) are unaffected.
         log_k -= log_k.max(axis=1, keepdims=True)
         w = np.exp(log_k) * vega[None, :]
         w_sum = w.sum(axis=1)
 
         with np.errstate(invalid="ignore", divide="ignore"):
             Z_flat = (w * iv[None, :]).sum(axis=1) / np.where(w_sum > 0, w_sum, np.nan)
-            # Guards: Kish neff catches "one obs dominates"; max_share is the
-            # stricter single-obs cap. Cells failing either get ffill/bfill'd.
+            # guards: Kish neff catches "one obs dominates", max_share caps single-obs; failures get ffill/bfill'd
             neff      = w_sum ** 2 / (w ** 2).sum(axis=1)
             max_share = w.max(axis=1) / np.where(w_sum > 0, w_sum, np.nan)
 
@@ -371,8 +358,6 @@ class OptionMetricsPreprocess:
         m_grid = np.linspace(self.moneyness_min, self.moneyness_max, self.n_moneyness)
         t_grid = self._make_tau_grid(self.ttm_min, self.ttm_max, self.n_tau)
 
-        # Column order is part of the contract with downstream consumers:
-        # tau outer, moneyness inner (k = i_t * n_moneyness + i_m).
         columns = ["date", "forward_ref"]
         for i in range(self.n_tau):
             for j in range(self.n_moneyness):
@@ -419,8 +404,7 @@ class OptionMetricsPreprocess:
     def _accumulate_fit(self, date, options, surface):
         """Per-day fit error: bilinearly interpolate the gridded surface (in the
         kernel's own log-T / m coordinates) to each raw quote and compare to the
-        quoted IV. Restricted to quotes inside the grid box, since the surface
-        only spans the target window."""
+        quoted IV. Restricted to quotes inside the grid box."""
         m_t  = np.linspace(self.moneyness_min, self.moneyness_max, self.n_moneyness)
         t_t  = self._make_tau_grid(self.ttm_min, self.ttm_max, self.n_tau)
         lt_t = np.log(t_t)

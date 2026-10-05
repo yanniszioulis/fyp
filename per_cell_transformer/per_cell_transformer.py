@@ -1,26 +1,4 @@
-"""
-per_cell_transformer.py
-===================================================================================
-PerCellTransformer — SANTA-Temporal with the coordinate embeddings removed.
-
-The missing cell in the factorial design:
-
-    model               coord embeddings   cross-cell mixing
-    SANTA-Temporal      yes (k, log τ)     none
-    VanillaTransformer  no                 bottleneck (Linear(M·T → d))
-    PerCellTransformer  NO                 NONE                       <-- this file
-
-Per-cell tokenisation (each (m, τ) cell is its own length-L sequence, attended over
-with shared weights, cells never mix in the trunk) is kept; only the surface-aware
-coordinate embeddings are dropped — so the model keeps the value embedding and the
-lag embedding (without which temporal attention would be order-invariant).
-
-What this isolates
-    A. PerCell vs SANTA-Temporal     → the cost/value of the coordinate embeddings
-    B. PerCell vs VanillaTransformer → per-cell sequences vs the day-token bottleneck
-Together they decompose the SANTA-vs-VanillaTransformer gap into its coordinate and
-tokenisation components.
-"""
+"""PerCellTransformer — SANTA-Temporal backbone without the coordinate embeddings."""
 
 from __future__ import annotations
 import os
@@ -42,33 +20,27 @@ from santa_temporal import TemporalOnlyLayer
 
 
 class PerCellTransformer(SANTA):
-    """SANTA-Temporal minus the coordinate embeddings.
-
-    Inherits enable_attn_collection from SANTA. __init__ is built from scratch (it
-    does NOT call SANTA.__init__) so the deleted coordinate modules / buffers are
-    never instantiated — no wasted parameters, no orphan buffers.
-    """
+    """SANTA-Temporal minus the coordinate embeddings."""
 
     def __init__(self, cfg: Config):
         nn.Module.__init__(self)
         self.cfg = cfg
 
-        # Value embedding only (per-cell scalar → d); coordinate embeddings omitted.
+        # value embedding only (per-cell scalar → d); coordinate embeddings omitted
         self.value_proj = nn.Linear(1, cfg.d)
 
-        # Lag embedding stays — without it temporal attention is permutation-
-        # invariant in time. Identical to SANTA's lag table.
+        # lag embedding stays
         self.emb_lag = nn.Embedding(cfg.L, cfg.d)
         self.register_buffer("lag_idx", torch.arange(cfg.L))
         self.emb_drop = nn.Dropout(cfg.dropout)
 
-        # Backbone: temporal-only layers (identical to SANTA-Temporal).
+        # backbone: temporal-only layers (identical to SANTA-Temporal)
         self.layers = nn.ModuleList(
             [TemporalOnlyLayer(cfg) for _ in range(cfg.n_layers)]
         )
         self.final_ln = nn.LayerNorm(cfg.d)
 
-        # Head: per-cell shared MLP with level + scale re-injection (same as SANTA).
+        # head: per-cell shared MLP with level + scale re-injection
         self.head = nn.Sequential(
             nn.Linear(cfg.d + 2, cfg.d_head_hidden),
             nn.GELU(),
@@ -81,33 +53,32 @@ class PerCellTransformer(SANTA):
         B, L, M, T = z.shape
         assert (L, M, T) == (cfg.L, cfg.M, cfg.T), "window shape mismatch"
 
-        # Step 0: instance-norm centring.
+        # instance-norm centring
         u, L0, s_tilde = instance_norm(z)
 
-        # Step 1: value embedding + lag only — no coordinate embeddings.
+        # value embedding + lag
         val = self.value_proj(u.unsqueeze(-1))           # (B, L, M, T, d)
         pL  = self.emb_lag(self.lag_idx)                  # (L, d)
-        x   = val + pL[None, :, None, None, :]            # add lag along L
+        x   = val + pL[None, :, None, None, :]
         x   = self.emb_drop(x)
 
-        # Step 2: temporal-only attention stack (per-cell, shared weights).
+        # temporal-only attention stack (per-cell, shared weights)
         for layer in self.layers:
             x = layer(x)
         x = self.final_ln(x)                              # (B, L, M, T, d)
 
-        # Step 3: today-token readout at every cell.
+        # today-token readout at every cell
         r = x[:, -1, :, :, :]                             # (B, M, T, d)
 
-        # Step 4: re-inject level + scale and project through the head.
+        # re-inject level + scale and project through the head
         g = torch.cat([r, L0.unsqueeze(-1), s_tilde.unsqueeze(-1)], dim=-1)
         netDelta = self.head(g)                           # (B, M, T, Hh)
         netDelta = netDelta.permute(0, 3, 1, 2).contiguous()
         return netDelta
 
 
-# ----------------------------------------------------------------------------------
-# Smoke test
-# ----------------------------------------------------------------------------------
+
+# smoke test
 if __name__ == "__main__":
     from surface_core import build_windows, surface_loss, rw_loss
     from santa_temporal import SANTATemporal

@@ -1,9 +1,0 @@
-{
-  "model": "patchtst",
-  "variant": null,
-  "seed": 1,
-  "winner_combo": "combo_0063",
-  "winner_source": "PatchTST/tuning_results/63_42/combo_0063/config.json",
-  "pred_len": 42,
-  "data_end": "2023-12-29"
-}

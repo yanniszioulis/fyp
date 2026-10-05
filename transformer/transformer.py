@@ -1,28 +1,4 @@
-"""
-transformer.py
-===================================================================================
-VanillaTransformer — the architectural floor for the SANTA family.
-
-The structural change vs SANTA-Temporal is one move: the day becomes the token
-instead of the cell. There are no coordinate embeddings (no surface geometry) and
-no per-cell sequences — each day's whole surface is flattened to one vector,
-projected to d, and attention runs once over the L day-tokens. The surface is
-reconstructed by a single surface-wide head.
-
-Design notes
-------------
-  - Tokenisation: flatten the centred surface for each day in tau-major order
-    (matching the CSV channel storage) and project Linear(M·T → d) per day. All
-    cross-cell mixing happens implicitly inside this one linear map.
-  - Head: the model has compressed the surface into a single d-vector, so the head
-    expands it back — Linear(d → M·T · n_horizons). Today's level and per-cell
-    window scale are re-injected by projecting each M·T-vector to d and ADDING to
-    today's representation before the head (rather than a literal concat → a
-    (M·T)²-sized matrix that would dominate the budget).
-
-What stays identical to the rest of the family: instance-norm centring on today;
-netDelta target with ẑ_{t+h} = z_today + netDelta_h; surface_loss; the SubBlock.
-"""
+"""VanillaTransformer — day-token encoder baseline (flattened surface per day)."""
 
 from __future__ import annotations
 import os
@@ -39,16 +15,7 @@ from surface_core import Config, SubBlock, MultiHeadSelfAttention, instance_norm
 
 
 class VanillaTransformer(nn.Module):
-    """Day-token encoder transformer.
-
-    Input  : (B, L, M, T) standardised log-IV window — the same contract as the
-             rest of the family, so the trainer-side adapter is the SANTA one.
-    Output : (B, n_horizons, M, T) netDelta.
-
-    Sequence: instance-norm centre → flatten surface to (B, L, M·T) tau-major →
-    day projection → add lag embedding → SubBlock stack over L → today's token →
-    re-inject level + scale → surface-wide head → reshape to (B, Hh, M, T).
-    """
+    """Day-token encoder: project each day's flattened surface to a token, attend over days."""
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -56,25 +23,22 @@ class VanillaTransformer(nn.Module):
         n_cells = cfg.M * cfg.T
         self._n_cells = n_cells
 
-        # Day projection: the flattened centred surface → d. The only place
-        # cross-cell information enters (no spatial attention, no coord embeddings).
+        # day projection
         self.day_proj = nn.Linear(n_cells, cfg.d)
 
-        # Lag (positional) embedding over days, added to (B, L, d).
+        # lag embedding over days
         self.emb_lag = nn.Embedding(cfg.L, cfg.d)
         self.register_buffer("lag_idx", torch.arange(cfg.L))
         self.emb_drop = nn.Dropout(cfg.dropout)
 
-        # Backbone: pre-LN SubBlocks over the L day-tokens (attention runs once,
-        # not M·T times batched).
         self.layers = nn.ModuleList([SubBlock(cfg) for _ in range(cfg.n_layers)])
         self.final_ln = nn.LayerNorm(cfg.d)
 
-        # Level/scale re-injection: project each M·T-vector to d and add (see header).
+        # level/scale re-injection
         self.level_proj = nn.Linear(n_cells, cfg.d)
         self.scale_proj = nn.Linear(n_cells, cfg.d)
 
-        # Surface-wide head: expand the augmented d-vector to the whole surface × H.
+        # surface-wide head
         self.head = nn.Linear(cfg.d, n_cells * cfg.n_horizons)
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
@@ -82,36 +46,33 @@ class VanillaTransformer(nn.Module):
         B, L, M, T = z.shape
         assert (L, M, T) == (cfg.L, cfg.M, cfg.T), "window shape mismatch"
 
-        # Step 1 — centre each cell's window on today.
+        # centre each cell's window on today
         u, L0, s_tilde = instance_norm(z)                          # u: (B,L,M,T)
 
-        # Step 2 — flatten centred surface in TAU-MAJOR order (T outer, M inner) to
-        # match the CSV column storage, so positionally-adjacent inputs are
-        # money-axis neighbours at a fixed τ.
+        # flatten centred surface in tau-major order (T outer, M inner) to match the csv columns
         u_flat = u.permute(0, 1, 3, 2).contiguous().reshape(B, L, M * T)  # (B,L,110)
 
-        # Step 3 — day projection: 110-vector → d per day.
+        # day projection: 110-vector → d per day
         x = self.day_proj(u_flat)                                  # (B, L, d)
 
-        # Step 4 — additive lag embedding (positional over days).
+        # additive lag embedding
         x = x + self.emb_lag(self.lag_idx)[None, :, :]
         x = self.emb_drop(x)
 
-        # Step 5 — temporal attention stack.
+        # temporal attention stack
         for layer in self.layers:
             x = layer(x)
         x = self.final_ln(x)                                       # (B, L, d)
 
-        # Step 6 — today's representation: the last day-token.
+        # today's representation: the last day-token
         r = x[:, -1, :]                                            # (B, d)
 
-        # Step 7 — re-inject flattened level + scale (same tau-major order).
+        # re-inject flattened level + scale
         L0_flat = L0.permute(0, 2, 1).contiguous().reshape(B, M * T)
         s_flat  = s_tilde.permute(0, 2, 1).contiguous().reshape(B, M * T)
         r = r + self.level_proj(L0_flat) + self.scale_proj(s_flat)
 
-        # Step 8 — surface-wide head, reshape to canonical (B, Hh, M, T). Undo the
-        # tau-major flattening the same way it was applied coming in.
+        # surface-wide head, reshape to canonical
         out = self.head(r)                                         # (B, M*T*Hh)
         out = out.reshape(B, T, M, cfg.n_horizons)                 # tau-major flat → (T,M,H)
         netDelta = out.permute(0, 3, 2, 1).contiguous()            # (B, H, M, T)
@@ -124,9 +85,7 @@ class VanillaTransformer(nn.Module):
 
 
 def print_param_breakdown(model: VanillaTransformer):
-    """Show where the parameter budget goes — the surface-wide head dominates at
-    large n_horizons, which is the structural cost of the reduce-then-forecast
-    bottleneck that makes this the family's floor."""
+    """Print where the parameter budget goes (the surface-wide head dominates at large n_horizons)."""
     groups = {
         "day_proj":   model.day_proj,
         "emb_lag":    model.emb_lag,
@@ -143,9 +102,7 @@ def print_param_breakdown(model: VanillaTransformer):
         print(f"  {name:<14s} {n:>9,}  ({n/total*100:5.2f}%)")
 
 
-# ----------------------------------------------------------------------------------
-# Smoke test
-# ----------------------------------------------------------------------------------
+# smoke test
 if __name__ == "__main__":
     from surface_core import build_windows, surface_loss, rw_loss
     torch.manual_seed(0)

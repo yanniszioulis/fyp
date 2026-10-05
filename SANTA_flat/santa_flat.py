@@ -1,25 +1,4 @@
-"""
-santa_flat.py
-===================================================================================
-SANTA-Flat — joint-spatial ablation of SANTA.
-
-Replaces SANTA's factored moneyness (A) + maturity (B) sub-blocks with a single
-JOINT spatial sub-block that attends over all M·T cells of the surface at once. The
-temporal block (C) is unchanged, and everything else — embeddings, instance norm,
-head, forward — is inherited verbatim from SANTA by subclassing. The ablation
-isolates one design choice:
-
-    should the two spatial axes (moneyness × maturity) be mixed SEPARATELY
-    (Kronecker / factored — SANTA) or JOINTLY (full self-attention over the
-    flattened cells — SANTA-Flat)?
-
-Per-layer block layout
-----------------------
-                   SANTA (factored)                 SANTA-Flat (joint)
-    spatial      A: L·T seqs of length M            S: L seqs of length M·T
-                 B: L·M seqs of length T
-    temporal     C: M·T seqs of length L            C: identical to SANTA's C
-"""
+"""SANTA-Flat — joint-spatial ablation: one attention block over all M·T cells, then temporal."""
 
 from __future__ import annotations
 import os
@@ -38,17 +17,9 @@ from surface_core import Config, SubBlock
 from santa import SANTA
 
 
-# ----------------------------------------------------------------------------------
-# Joint-spatial layer: one SubBlock over flattened (M·T), then SANTA's C verbatim
-# ----------------------------------------------------------------------------------
+# joint-spatial layer: one SubBlock over flattened (M·T), then SANTA's C verbatim
 class FlatSpatialLayer(nn.Module):
-    """One layer of the SANTA-Flat backbone: joint-spatial block S, then temporal C.
 
-      S) JOINT spatial attention — sequence axis is the flattened M·T cells, with
-         (B, L) in the batch. Replaces SANTA's factored A→B pair with one block.
-      C) Temporal attention — byte-for-byte the same reshape as SANTA's block_time,
-         because the temporal mechanism is held constant across the family.
-    """
     def __init__(self, cfg: Config):
         super().__init__()
         self.cfg = cfg
@@ -58,29 +29,21 @@ class FlatSpatialLayer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, M, T, d = x.shape
 
-        # ---- Joint spatial block S: attend over ALL M·T cells per (B,L) slice ---
+        # joint spatial block S
         xS = x.reshape(B * L, M * T, d)                       # (B*L, M*T, d)
         xS = self.block_spatial(xS)
         x  = xS.reshape(B, L, M, T, d)
 
-        # ---- Temporal block C (identical to SANTA's FactoredLayer.block_time) ---
+        # temporal block C
         xC = x.permute(0, 2, 3, 1, 4).reshape(B * M * T, L, d)  # (B*M*T, L, d)
         xC = self.block_time(xC)
         x  = xC.reshape(B, M, T, L, d).permute(0, 3, 1, 2, 4)   # -> (B,L,M,T,d)
         return x
 
 
-# ----------------------------------------------------------------------------------
-# Top-level model: SANTA with the factored layer stack swapped for joint-spatial
-# ----------------------------------------------------------------------------------
+# top-level model
 class SANTAFlat(SANTA):
-    """SANTA with the factored-spatial layer stack replaced by joint-spatial.
 
-    Inherits SANTA's __init__ (embeddings, head, buffers, the FactoredLayer stack)
-    then replaces self.layers in place. cfg.n_layers and every per-block hyperparam
-    (d, n_heads, d_ff_mult, dropout) are unchanged; forward / instance norm /
-    attention collection are inherited.
-    """
     def __init__(self, cfg: Config):
         super().__init__(cfg)
         self.layers = nn.ModuleList(
@@ -88,9 +51,8 @@ class SANTAFlat(SANTA):
         )
 
 
-# ----------------------------------------------------------------------------------
-# Smoke test
-# ----------------------------------------------------------------------------------
+
+# smoke test
 if __name__ == "__main__":
     from surface_core import build_windows, surface_loss, rw_loss
     torch.manual_seed(0)

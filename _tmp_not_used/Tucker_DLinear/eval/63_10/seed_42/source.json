@@ -1,9 +1,0 @@
-{
-  "model": "tucker_dlinear",
-  "variant": null,
-  "seed": 42,
-  "winner_combo": "combo_0026",
-  "winner_source": "Tucker_DLinear/tuning_results/63_10/combo_0026/config.json",
-  "pred_len": 10,
-  "data_end": "2023-12-29"
-}

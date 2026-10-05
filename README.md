@@ -16,9 +16,9 @@ depend more on how the surface *moves* than on where it sits today — yet direc
 forecasting of the full surface from its own history is under-addressed. This project forecasts
 the S&P 500 IV surface several horizons ahead and asks whether respecting its structure improves
 forecasts. A smoothed surface dataset is built from two decades of option quotes, and a ladder of
-models is evaluated at matched capacity — from a linear baseline, through plain transformers, to
-the proposed **Surface-Aware Neural Tensor Attention (SANTA)** — benchmarked against a persistence
-null and a polynomial-coefficient vector autoregression. SANTA tokenises each surface cell, adds
+models is evaluated at matched capacity — from a linear baseline [[2]](#references), through plain
+transformers, to the proposed **Surface-Aware Neural Tensor Attention (SANTA)** — benchmarked against
+a persistence null and a polynomial-coefficient vector autoregression [[1]](#references). SANTA tokenises each surface cell, adds
 learned moneyness and maturity coordinate embeddings, and applies factored axial attention across
 moneyness, maturity, and time. Its edge is clearest on cross-sectional shape (rank correlation) at
 the longer horizons, and ablations trace that gain to the surface-aware coordinate embeddings more
@@ -54,8 +54,8 @@ another split.
 | `santa_temporal` | `SANTA_temporal/` | Temporal-only ablation: both spatial blocks removed. |
 | `per_cell_transformer` | `per_cell_transformer/` | SANTA-Temporal backbone without the coordinate embeddings. |
 | `transformer` | `transformer/` | Day-token encoder baseline (flattened surface per day). |
-| `nlinear` | `NLinear/` | One shared linear map on the centred lookback — the simplest floor. |
-| `var` | `VAR/` | Gonçalves–Guidolin two-stage: daily cross-sectional OLS on the basis `[1, M, M², τ, Mτ]`, then a BIC-selected VAR on the 5 coefficients. |
+| `nlinear` | `NLinear/` | One shared linear map on the centred lookback — NLinear [[2]](#references), the simplest floor. |
+| `var` | `VAR/` | Gonçalves–Guidolin two-stage [[1]](#references): daily cross-sectional OLS on the basis `[1, M, M², τ, Mτ]`, then a BIC-selected VAR on the 5 coefficients. |
 
 The six deep models share the same trainer (AdamW, grad-clip 1.0, MSE, early stopping on
 validation) and are sized to a common ~44–51k parameter envelope so comparisons isolate
@@ -148,6 +148,11 @@ Architecture figures live in `_diagrams/`:
 [per-cell transformer](_diagrams/per_cell.pdf) ·
 [vanilla transformer](_diagrams/vanilla.pdf) ·
 [coordinate embeddings](_diagrams/sa_embeddings.pdf).
+
+## References
+
+1. S. Gonçalves and M. Guidolin. "Predictable Dynamics in the S&P 500 Index Options Implied Volatility Surface." *The Journal of Business*, 79(3):1591–1635, 2006. [doi:10.1086/500686](https://doi.org/10.1086/500686)
+2. A. Zeng, M. Chen, L. Zhang, and Q. Xu. "Are Transformers Effective for Time Series Forecasting?" *Proceedings of the AAAI Conference on Artificial Intelligence*, 37(9):11121–11128, 2023. [doi:10.1609/aaai.v37i9.26317](https://doi.org/10.1609/aaai.v37i9.26317)
 
 ## License
 

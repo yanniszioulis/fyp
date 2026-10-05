@@ -5,4 +5,4 @@ seaborn
 scipy
 torch
 einops
-scikit-learn
+scikit-lear

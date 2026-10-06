@@ -4,7 +4,7 @@
 
 Supervisor: Prof. Danilo Mandic
 
-📄 [Thesis](final_year_project.pdf) · 🖥️ [Slides](fyp_pres.pptx)
+📄 [Thesis](final_year_project.pdf) · 🖥️ [Slides](fyp_pres.pdf)
 
 <p align="center">
   <img src="_diagrams/santa.png" alt="SANTA architecture" width="360">
@@ -157,5 +157,4 @@ Architecture figures live in `_diagrams/`:
 
 ## License
 
-No `LICENSE` file is included yet. Add one on GitHub via *Add file → Create new file*,
-name it `LICENSE`, and pick a template (e.g. MIT).
+

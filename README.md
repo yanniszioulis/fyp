@@ -155,6 +155,3 @@ Architecture figures live in `_diagrams/`:
 1. S. Gonçalves and M. Guidolin. "Predictable Dynamics in the S&P 500 Index Options Implied Volatility Surface." *The Journal of Business*, 79(3):1591–1635, 2006. [doi:10.1086/500686](https://doi.org/10.1086/500686)
 2. A. Zeng, M. Chen, L. Zhang, and Q. Xu. "Are Transformers Effective for Time Series Forecasting?" *Proceedings of the AAAI Conference on Artificial Intelligence*, 37(9):11121–11128, 2023. [doi:10.1609/aaai.v37i9.26317](https://doi.org/10.1609/aaai.v37i9.26317)
 
-## License
-
-

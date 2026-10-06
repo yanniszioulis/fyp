@@ -1,7 +1,8 @@
 # High-Dimensional Financial Data Analysis with Tensor Attention-Based Neural Networks
 
 **MEng final-year thesis — Electronic & Information Engineering, Imperial College London (2026)**
-Ioannis P. Zioulis · Supervisor: Prof. Danilo Mandic · Second marker: Prof. Cong Ling
+
+Supervisor: Prof. Danilo Mandic
 
 📄 [Thesis](final_year_project.pdf) · 🖥️ [Slides](fyp_pres.pptx)
 
